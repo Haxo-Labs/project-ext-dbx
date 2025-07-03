@@ -255,7 +255,7 @@ async fn test_batch_string_operations() {
     let res = ctx
         .client
         .post(&format!("{}/redis/string/batch/set", ctx.base_url))
-        .json(&json!({"operations": batch_ops}))
+        .json(&json!({ "operations": batch_ops }))
         .send()
         .await
         .unwrap();
@@ -267,7 +267,7 @@ async fn test_batch_string_operations() {
     let res = ctx
         .client
         .post(&format!("{}/redis/string/batch/get", ctx.base_url))
-        .json(&json!({"keys": keys}))
+        .json(&json!({ "keys": keys }))
         .send()
         .await
         .unwrap();

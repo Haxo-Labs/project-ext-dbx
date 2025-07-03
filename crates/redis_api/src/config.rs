@@ -47,4 +47,19 @@ pub struct Config {
     pub port: u16,
     /// Connection pool size
     pub pool_size: u32,
+    /// JWT configuration
+    pub jwt: JwtConfig,
+}
+
+/// JWT configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JwtConfig {
+    /// JWT secret key
+    pub secret: String,
+    /// JWT access token expiration in seconds (default: 15 minutes)
+    pub access_token_expiration: i64,
+    /// JWT refresh token expiration in seconds (default: 7 days)
+    pub refresh_token_expiration: i64,
+    /// JWT issuer
+    pub issuer: String,
 }

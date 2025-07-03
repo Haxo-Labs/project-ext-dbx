@@ -17,7 +17,7 @@ async fn test_set_add_and_members() {
     // Add member to set
     let res = client
         .post(&format!("{}/redis/set/{}", base_url, key))
-        .json(&json!({"member": member}))
+        .json(&json!({ "member": member }))
         .send()
         .await
         .unwrap();
@@ -50,7 +50,7 @@ async fn test_set_remove() {
     // Add member to set
     let _ = client
         .post(&format!("{}/redis/set/{}", base_url, key))
-        .json(&json!({"member": member}))
+        .json(&json!({ "member": member }))
         .send()
         .await
         .unwrap();

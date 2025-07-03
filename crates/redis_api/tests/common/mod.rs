@@ -56,7 +56,7 @@ pub async fn set_string(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let res = client
         .post(&format!("{}/redis/string/{}", base_url, key))
-        .json(&json!({"value": value}))
+        .json(&json!({ "value": value }))
         .send()
         .await?;
 
@@ -148,7 +148,7 @@ pub async fn batch_set_strings(
 
     let res = client
         .post(&format!("{}/redis/string/batch/set", base_url))
-        .json(&json!({"operations": batch_ops}))
+        .json(&json!({ "operations": batch_ops }))
         .send()
         .await?;
 
@@ -163,7 +163,7 @@ pub async fn batch_get_strings(
 ) -> Result<Vec<Option<String>>, Box<dyn std::error::Error>> {
     let res = client
         .post(&format!("{}/redis/string/batch/get", base_url))
-        .json(&json!({"keys": keys}))
+        .json(&json!({ "keys": keys }))
         .send()
         .await?;
 

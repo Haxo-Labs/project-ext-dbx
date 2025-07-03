@@ -29,6 +29,10 @@ redis = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 dotenv = "0.15"
 async-trait = "0.1"
+jsonwebtoken = "9.3"
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
 # WebSocket dependencies
 axum-extra = { version = "0.9", features = ["typed-header"] }
 futures-util = { version = "0.3", features = ["sink"] }

@@ -3,7 +3,7 @@ pub mod redis;
 pub mod redis_ws;
 
 use dbx_redis_api::{
-    config::{Config, DatabaseType},
+    config::{Config, JwtConfig},
     constants::defaults::Defaults,
     server::Server,
 };
@@ -32,6 +32,20 @@ impl TestServer {
                 .unwrap_or_else(|_| Defaults::POOL_SIZE.to_string())
                 .parse()
                 .unwrap_or(Defaults::POOL_SIZE),
+            jwt: JwtConfig {
+                secret: std::env::var("JWT_SECRET")
+                    .unwrap_or_else(|_| Defaults::JWT_SECRET.to_string()),
+                access_token_expiration: std::env::var("JWT_ACCESS_TOKEN_EXPIRATION")
+                    .unwrap_or_else(|_| Defaults::JWT_ACCESS_TOKEN_EXPIRATION.to_string())
+                    .parse()
+                    .unwrap_or(Defaults::JWT_ACCESS_TOKEN_EXPIRATION),
+                refresh_token_expiration: std::env::var("JWT_REFRESH_TOKEN_EXPIRATION")
+                    .unwrap_or_else(|_| Defaults::JWT_REFRESH_TOKEN_EXPIRATION.to_string())
+                    .parse()
+                    .unwrap_or(Defaults::JWT_REFRESH_TOKEN_EXPIRATION),
+                issuer: std::env::var("JWT_ISSUER")
+                    .unwrap_or_else(|_| Defaults::JWT_ISSUER.to_string()),
+            },
         };
 
         let server = Server::new(config).await?;

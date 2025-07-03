@@ -18,7 +18,7 @@ async fn test_hash_set_and_get() {
     // Set hash field
     let res = client
         .post(&format!("{}/redis/hash/{}/{}", base_url, key, field))
-        .json(&json!({"value": value}))
+        .json(&json!({ "value": value }))
         .send()
         .await
         .unwrap();
@@ -50,7 +50,7 @@ async fn test_hash_delete() {
     // Set hash field
     let _ = client
         .post(&format!("{}/redis/hash/{}/{}", base_url, key, field))
-        .json(&json!({"value": value}))
+        .json(&json!({ "value": value }))
         .send()
         .await
         .unwrap();
