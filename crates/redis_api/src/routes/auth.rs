@@ -33,7 +33,8 @@ pub async fn login(
 ) -> Result<Json<ApiResponse<AuthResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let user = user_store
         .authenticate(&login_request.username, &login_request.password)
-        .ok_or_else(|| {
+        .await
+        .map_err(|_| {
             (
                 StatusCode::UNAUTHORIZED,
                 Json(ApiResponse::<()>::error("Invalid credentials".to_string())),
@@ -47,7 +48,7 @@ pub async fn login(
         ));
     }
 
-    let auth_response = jwt_service.generate_tokens(user).map_err(|_| {
+    let auth_response = jwt_service.generate_tokens(&user).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::<()>::error(
@@ -140,14 +141,16 @@ mod tests {
         Arc::new(JwtService::new(config))
     }
 
-    fn create_test_user_store() -> Arc<UserStore> {
-        Arc::new(UserStore::new())
+    async fn create_test_user_store() -> Arc<UserStore> {
+        use dbx_adapter::redis::client::RedisPool;
+        let pool = RedisPool::new("redis://127.0.0.1:6379", 1).unwrap();
+        Arc::new(UserStore::new(Arc::new(pool)).await.unwrap())
     }
 
     #[tokio::test]
     async fn test_login_success() {
         let jwt_service = create_test_jwt_service();
-        let user_store = create_test_user_store();
+        let user_store = create_test_user_store().await;
         let app = create_auth_routes(jwt_service, user_store);
 
         let login_request = LoginRequest {
@@ -169,7 +172,7 @@ mod tests {
     #[tokio::test]
     async fn test_login_invalid_credentials() {
         let jwt_service = create_test_jwt_service();
-        let user_store = create_test_user_store();
+        let user_store = create_test_user_store().await;
         let app = create_auth_routes(jwt_service, user_store);
 
         let login_request = LoginRequest {

@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::str::FromStr;
+
+use crate::constants::defaults::Defaults;
 
 /// Supported database types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -62,4 +65,86 @@ pub struct JwtConfig {
     pub refresh_token_expiration: i64,
     /// JWT issuer
     pub issuer: String,
+}
+
+impl JwtConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let secret = env::var("JWT_SECRET").map_err(|_| ConfigError::MissingJwtSecret)?;
+
+        if secret.len() < 32 {
+            return Err(ConfigError::WeakJwtSecret);
+        }
+
+        Ok(Self {
+            secret,
+            access_token_expiration: env::var("JWT_ACCESS_TOKEN_EXPIRATION")
+                .unwrap_or_else(|_| Defaults::JWT_ACCESS_TOKEN_EXPIRATION.to_string())
+                .parse()
+                .map_err(|_| ConfigError::InvalidTokenExpiration)?,
+            refresh_token_expiration: env::var("JWT_REFRESH_TOKEN_EXPIRATION")
+                .unwrap_or_else(|_| Defaults::JWT_REFRESH_TOKEN_EXPIRATION.to_string())
+                .parse()
+                .map_err(|_| ConfigError::InvalidTokenExpiration)?,
+            issuer: env::var("JWT_ISSUER").unwrap_or_else(|_| Defaults::JWT_ISSUER.to_string()),
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("JWT_SECRET environment variable is required")]
+    MissingJwtSecret,
+    #[error("JWT_SECRET must be at least 32 characters long")]
+    WeakJwtSecret,
+    #[error("Invalid token expiration time")]
+    InvalidTokenExpiration,
+    #[error(
+        "DEFAULT_ADMIN_PASSWORD environment variable is required when CREATE_DEFAULT_ADMIN=true"
+    )]
+    MissingDefaultAdminPassword,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub redis_url: String,
+    pub pool_size: u32,
+}
+
+impl ServerConfig {
+    pub fn from_env() -> Self {
+        Self {
+            host: env::var("HOST").unwrap_or_else(|_| Defaults::HOST.to_string()),
+            port: env::var("PORT")
+                .unwrap_or_else(|_| Defaults::PORT.to_string())
+                .parse()
+                .expect("PORT must be a valid number"),
+            redis_url: env::var("REDIS_URL").unwrap_or_else(|_| Defaults::REDIS_URL.to_string()),
+            pool_size: env::var("POOL_SIZE")
+                .unwrap_or_else(|_| Defaults::POOL_SIZE.to_string())
+                .parse()
+                .expect("POOL_SIZE must be a valid number"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub jwt: JwtConfig,
+    pub create_default_admin: bool,
+}
+
+impl AppConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            server: ServerConfig::from_env(),
+            jwt: JwtConfig::from_env()?,
+            create_default_admin: env::var("CREATE_DEFAULT_ADMIN")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
+        })
+    }
 }

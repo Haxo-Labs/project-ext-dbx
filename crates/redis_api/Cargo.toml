@@ -33,6 +33,7 @@ jsonwebtoken = "9.3"
 sha2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
+bcrypt = "0.15"
 # WebSocket dependencies
 axum-extra = { version = "0.9", features = ["typed-header"] }
 futures-util = { version = "0.3", features = ["sink"] }

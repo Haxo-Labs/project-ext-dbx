@@ -1,21 +1,25 @@
+use crate::{
+    config::JwtConfig,
+    constants::errors::ErrorMessages,
+    models::{
+        ApiResponse, AuthResponse, Claims, CreateUserRequest, TokenType, User, UserInfo, UserRole,
+    },
+};
+use async_trait::async_trait;
 use axum::{
     extract::{rejection::JsonRejection, Request, State},
-    http::{header, StatusCode, HeaderMap},
+    http::{header, HeaderMap, StatusCode},
     middleware::Next,
     response::IntoResponse,
     response::Json,
 };
+use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation, Algorithm};
+use dbx_adapter::redis::client::RedisPool;
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use redis;
 use std::sync::Arc;
-
 use uuid::Uuid;
-
-use crate::{
-    config::JwtConfig,
-    constants::errors::ErrorMessages,
-    models::{ApiResponse, Claims, TokenType, User, UserRole, AuthResponse, UserInfo},
-};
 
 /// Handle Redis errors and convert them to HTTP responses
 pub fn handle_redis_error(_error: impl std::fmt::Display) -> (StatusCode, Json<ApiResponse<()>>) {
@@ -142,6 +146,7 @@ impl JwtService {
         let user = User {
             id: claims.sub.clone(),
             username: claims.username.clone(),
+            password_hash: String::new(),
             role: claims.role,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -164,6 +169,14 @@ pub enum AuthError {
     InvalidTokenType,
     #[error("Insufficient permissions")]
     InsufficientPermissions,
+    #[error("User not found")]
+    UserNotFound,
+    #[error("User already exists")]
+    UserExists,
+    #[error("Password hashing failed")]
+    PasswordHashingFailed,
+    #[error("Database error: {0}")]
+    DatabaseError(String),
 }
 
 fn extract_token_from_header(headers: &HeaderMap) -> Option<String> {
@@ -184,18 +197,21 @@ pub async fn jwt_auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    let token = extract_token_from_header(request.headers())
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error("Missing authorization token".to_string())),
-            )
-        })?;
+    let token = extract_token_from_header(request.headers()).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::error(
+                "Missing authorization token".to_string(),
+            )),
+        )
+    })?;
 
     let claims = jwt_service.validate_token(&token).map_err(|_| {
         (
             StatusCode::UNAUTHORIZED,
-            Json(ApiResponse::<()>::error("Invalid or expired token".to_string())),
+            Json(ApiResponse::<()>::error(
+                "Invalid or expired token".to_string(),
+            )),
         )
     })?;
 
@@ -215,13 +231,14 @@ pub async fn require_admin_role(
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    let claims = request.extensions().get::<Claims>()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error("Authentication required".to_string())),
-            )
-        })?;
+    let claims = request.extensions().get::<Claims>().ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::error(
+                "Authentication required".to_string(),
+            )),
+        )
+    })?;
 
     if claims.role != UserRole::Admin {
         return Err((
@@ -237,13 +254,14 @@ pub async fn require_user_role(
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    let claims = request.extensions().get::<Claims>()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error("Authentication required".to_string())),
-            )
-        })?;
+    let claims = request.extensions().get::<Claims>().ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::error(
+                "Authentication required".to_string(),
+            )),
+        )
+    })?;
 
     if !matches!(claims.role, UserRole::Admin | UserRole::User) {
         return Err((
@@ -259,73 +277,244 @@ pub async fn require_readonly_role(
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    let _claims = request.extensions().get::<Claims>()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error("Authentication required".to_string())),
-            )
-        })?;
+    let _claims = request.extensions().get::<Claims>().ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::error(
+                "Authentication required".to_string(),
+            )),
+        )
+    })?;
 
     Ok(next.run(request).await)
 }
 
-pub struct UserStore {
-    users: std::collections::HashMap<String, User>,
+#[async_trait]
+pub trait UserStoreOperations {
+    async fn create_user(&self, user: &User) -> Result<(), AuthError>;
+    async fn get_user(&self, username: &str) -> Result<Option<User>, AuthError>;
+    async fn authenticate(&self, username: &str, password: &str) -> Result<User, AuthError>;
+    async fn update_user(&self, user: &User) -> Result<(), AuthError>;
+    async fn delete_user(&self, username: &str) -> Result<bool, AuthError>;
 }
 
-impl UserStore {
-    pub fn new() -> Self {
-        let mut users = std::collections::HashMap::new();
-        let admin_user = User {
-            id: Uuid::new_v4().to_string(),
-            username: "admin".to_string(),
-            role: UserRole::Admin,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            is_active: true,
-        };
+pub enum UserStore {
+    Redis(RedisUserStore),
+    #[cfg(test)]
+    Mock(Box<dyn UserStoreOperations + Send + Sync>),
+}
 
-        let regular_user = User {
-            id: Uuid::new_v4().to_string(),
-            username: "user".to_string(),
-            role: UserRole::User,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            is_active: true,
-        };
-
-        let readonly_user = User {
-            id: Uuid::new_v4().to_string(),
-            username: "readonly".to_string(),
-            role: UserRole::ReadOnly,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            is_active: true,
-        };
-
-        users.insert("admin".to_string(), admin_user);
-        users.insert("user".to_string(), regular_user);
-        users.insert("readonly".to_string(), readonly_user);
-
-        Self { users }
-    }
-
-    pub fn authenticate(&self, username: &str, password: &str) -> Option<&User> {
-        let demo_passwords = [
-            ("admin", "admin123"),
-            ("user", "user123"),
-            ("readonly", "readonly123"),
-        ];
-
-        if demo_passwords.iter().any(|(u, p)| *u == username && *p == password) {
-            self.users.get(username)
-        } else {
-            None
+#[async_trait]
+impl UserStoreOperations for UserStore {
+    async fn create_user(&self, user: &User) -> Result<(), AuthError> {
+        match self {
+            UserStore::Redis(store) => store.create_user(user).await,
+            #[cfg(test)]
+            UserStore::Mock(store) => store.create_user(user).await,
         }
     }
 
-    pub fn get_user(&self, username: &str) -> Option<&User> {
-        self.users.get(username)
+    async fn get_user(&self, username: &str) -> Result<Option<User>, AuthError> {
+        match self {
+            UserStore::Redis(store) => store.get_user(username).await,
+            #[cfg(test)]
+            UserStore::Mock(store) => store.get_user(username).await,
+        }
+    }
+
+    async fn authenticate(&self, username: &str, password: &str) -> Result<User, AuthError> {
+        match self {
+            UserStore::Redis(store) => store.authenticate(username, password).await,
+            #[cfg(test)]
+            UserStore::Mock(store) => store.authenticate(username, password).await,
+        }
+    }
+
+    async fn update_user(&self, user: &User) -> Result<(), AuthError> {
+        match self {
+            UserStore::Redis(store) => store.update_user(user).await,
+            #[cfg(test)]
+            UserStore::Mock(store) => store.update_user(user).await,
+        }
+    }
+
+    async fn delete_user(&self, username: &str) -> Result<bool, AuthError> {
+        match self {
+            UserStore::Redis(store) => store.delete_user(username).await,
+            #[cfg(test)]
+            UserStore::Mock(store) => store.delete_user(username).await,
+        }
+    }
+}
+
+impl UserStore {
+    pub async fn new(redis_pool: Arc<RedisPool>) -> Result<Self, AuthError> {
+        let store = RedisUserStore::new(redis_pool).await?;
+        Ok(UserStore::Redis(store))
+    }
+
+    pub async fn new_with_admin(
+        redis_pool: Arc<RedisPool>,
+        admin_username: &str,
+        admin_password: &str,
+    ) -> Result<Self, AuthError> {
+        let store = RedisUserStore::new(redis_pool).await?;
+        store
+            .create_default_admin(admin_username, admin_password)
+            .await?;
+        Ok(UserStore::Redis(store))
+    }
+}
+
+pub struct RedisUserStore {
+    redis_pool: Arc<RedisPool>,
+}
+
+#[async_trait]
+impl UserStoreOperations for RedisUserStore {
+    async fn create_user(&self, user: &User) -> Result<(), AuthError> {
+        if self.get_user(&user.username).await?.is_some() {
+            return Err(AuthError::UserExists);
+        }
+
+        let conn = self
+            .redis_pool
+            .get_connection()
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+
+        let user_key = format!("user:{}", user.username);
+        let user_json =
+            serde_json::to_string(user).map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
+            .set(&user_key, &user_json)
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_user(&self, username: &str) -> Result<Option<User>, AuthError> {
+        let conn = self
+            .redis_pool
+            .get_connection()
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+
+        let user_key = format!("user:{}", username);
+        let user_json = dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
+            .get(&user_key)
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        match user_json {
+            Some(json) => {
+                let user: User = serde_json::from_str(&json)
+                    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+                Ok(Some(user))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn authenticate(&self, username: &str, password: &str) -> Result<User, AuthError> {
+        let user = self
+            .get_user(username)
+            .await?
+            .ok_or(AuthError::InvalidCredentials)?;
+
+        if !user.is_active {
+            return Err(AuthError::InvalidCredentials);
+        }
+
+        if verify(password, &user.password_hash).map_err(|_| AuthError::InvalidCredentials)? {
+            Ok(user)
+        } else {
+            Err(AuthError::InvalidCredentials)
+        }
+    }
+
+    async fn update_user(&self, user: &User) -> Result<(), AuthError> {
+        let conn = self
+            .redis_pool
+            .get_connection()
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+
+        let user_key = format!("user:{}", user.username);
+        let mut updated_user = user.clone();
+        updated_user.updated_at = Utc::now();
+
+        let user_json = serde_json::to_string(&updated_user)
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
+            .set(&user_key, &user_json)
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn delete_user(&self, username: &str) -> Result<bool, AuthError> {
+        let conn = self
+            .redis_pool
+            .get_connection()
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+
+        let user_key = format!("user:{}", username);
+
+        // Use Redis DEL command directly to get the count of deleted keys
+        let deleted_count: i32 = {
+            let mut conn = conn_arc.lock().unwrap();
+            redis::cmd("DEL")
+                .arg(&user_key)
+                .query(&mut *conn)
+                .map_err(|e| AuthError::DatabaseError(e.to_string()))?
+        };
+
+        Ok(deleted_count > 0)
+    }
+}
+
+impl RedisUserStore {
+    pub async fn new(redis_pool: Arc<RedisPool>) -> Result<Self, AuthError> {
+        Ok(Self { redis_pool })
+    }
+
+    async fn create_default_admin(&self, username: &str, password: &str) -> Result<(), AuthError> {
+        if self.get_user(username).await?.is_none() {
+            let admin_user = CreateUserRequest {
+                username: username.to_string(),
+                password: password.to_string(),
+                role: UserRole::Admin,
+            };
+            self.create_user_from_request(admin_user).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn create_user_from_request(
+        &self,
+        request: CreateUserRequest,
+    ) -> Result<User, AuthError> {
+        if self.get_user(&request.username).await?.is_some() {
+            return Err(AuthError::UserExists);
+        }
+
+        let password_hash =
+            hash(&request.password, DEFAULT_COST).map_err(|_| AuthError::PasswordHashingFailed)?;
+
+        let user = User {
+            id: Uuid::new_v4().to_string(),
+            username: request.username.clone(),
+            password_hash,
+            role: request.role,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            is_active: true,
+        };
+
+        self.create_user(&user).await?;
+        Ok(user)
     }
 }

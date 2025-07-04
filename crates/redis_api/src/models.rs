@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// API response wrapper
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,6 +50,7 @@ impl std::fmt::Display for UserRole {
 pub struct User {
     pub id: String,
     pub username: String,
+    pub password_hash: String,
     pub role: UserRole,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -80,6 +81,14 @@ pub enum TokenType {
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+}
+
+/// User request model
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+    pub role: UserRole,
 }
 
 /// Authentication response model
