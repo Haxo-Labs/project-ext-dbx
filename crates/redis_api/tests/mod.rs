@@ -3,9 +3,8 @@ pub mod redis;
 pub mod redis_ws;
 
 use dbx_redis_api::{
-    config::{Config, JwtConfig},
-    constants::defaults::Defaults,
-    server::Server,
+    config::AppConfig,
+    server::{create_app, AppState},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,58 +13,39 @@ use std::sync::Arc;
 #[ctor::ctor]
 fn init() {
     dotenv::dotenv().ok();
+    // Set a test JWT secret if not provided
+    if std::env::var("JWT_SECRET").is_err() {
+        std::env::set_var("JWT_SECRET", "test-secret-for-integration-tests-32-chars");
+    }
 }
 
 pub struct TestServer {
-    pub server: Server,
+    pub state: AppState,
     pub addr: SocketAddr,
 }
 
 impl TestServer {
     pub async fn new() -> anyhow::Result<Self> {
-        let config = Config {
-            database_url: std::env::var("REDIS_URL")
-                .unwrap_or_else(|_| Defaults::REDIS_URL.to_string()),
-            host: std::env::var("HOST").unwrap_or_else(|_| Defaults::HOST.to_string()),
-            port: 0, // Use port 0 for random available port
-            pool_size: std::env::var("POOL_SIZE")
-                .unwrap_or_else(|_| Defaults::POOL_SIZE.to_string())
-                .parse()
-                .unwrap_or(Defaults::POOL_SIZE),
-            jwt: JwtConfig {
-                secret: std::env::var("JWT_SECRET")
-                    .unwrap_or_else(|_| Defaults::JWT_SECRET.to_string()),
-                access_token_expiration: std::env::var("JWT_ACCESS_TOKEN_EXPIRATION")
-                    .unwrap_or_else(|_| Defaults::JWT_ACCESS_TOKEN_EXPIRATION.to_string())
-                    .parse()
-                    .unwrap_or(Defaults::JWT_ACCESS_TOKEN_EXPIRATION),
-                refresh_token_expiration: std::env::var("JWT_REFRESH_TOKEN_EXPIRATION")
-                    .unwrap_or_else(|_| Defaults::JWT_REFRESH_TOKEN_EXPIRATION.to_string())
-                    .parse()
-                    .unwrap_or(Defaults::JWT_REFRESH_TOKEN_EXPIRATION),
-                issuer: std::env::var("JWT_ISSUER")
-                    .unwrap_or_else(|_| Defaults::JWT_ISSUER.to_string()),
-            },
-        };
-
-        let server = Server::new(config).await?;
+        // Ensure we have the minimum required environment variables for testing
+        if std::env::var("JWT_SECRET").is_err() {
+            std::env::set_var("JWT_SECRET", "test-secret-for-integration-tests-32-chars");
+        }
+        
+        let state = AppState::new().await.map_err(|e| anyhow::anyhow!("Failed to create app state: {}", e))?;
+        
         // Bind to port 0 to get a random available port
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         drop(listener); // Release the port so axum can bind to it
-        Ok(Self { server, addr })
+        
+        Ok(Self { state, addr })
     }
 
     pub async fn start(&self) -> anyhow::Result<()> {
-        let app = self.server.create_router();
+        let app = create_app(self.state.clone());
         let listener = tokio::net::TcpListener::bind(self.addr).await?;
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .await
-            {
+            if let Err(e) = axum::serve(listener, app).await {
                 eprintln!("Server error: {}", e);
             }
         });

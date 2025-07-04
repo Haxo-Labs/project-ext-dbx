@@ -8,7 +8,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::{
-    middleware::{AuthError, JwtService, UserStore},
+    middleware::{AuthError, JwtService, UserStore, UserStoreOperations},
     models::{
         ApiResponse, AuthResponse, Claims, LoginRequest, RefreshRequest, TokenValidationResponse,
         UserInfo,
@@ -125,15 +125,84 @@ pub async fn get_current_user(Extension(claims): Extension<Claims>) -> Json<ApiR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Method, Request};
+    use std::collections::HashMap;
     use tower::ServiceExt;
 
-    use crate::{config::JwtConfig, constants::defaults::Defaults};
+    use crate::{
+        config::JwtConfig,
+        constants::defaults::Defaults,
+        models::{User, UserRole},
+    };
+
+    struct MockUserStore {
+        users: HashMap<String, User>,
+    }
+
+    impl MockUserStore {
+        fn new() -> Self {
+            let mut users = HashMap::new();
+
+            users.insert(
+                "admin".to_string(),
+                User {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    username: "admin".to_string(),
+                    password_hash: "$2b$12$example_hash_for_admin123".to_string(),
+                    role: UserRole::Admin,
+                    is_active: true,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                },
+            );
+
+            Self { users }
+        }
+    }
+
+    #[async_trait]
+    impl crate::middleware::UserStoreOperations for MockUserStore {
+        async fn create_user(&self, _user: &User) -> Result<(), crate::middleware::AuthError> {
+            Ok(())
+        }
+
+        async fn get_user(
+            &self,
+            username: &str,
+        ) -> Result<Option<User>, crate::middleware::AuthError> {
+            Ok(self.users.get(username).cloned())
+        }
+
+        async fn authenticate(
+            &self,
+            username: &str,
+            password: &str,
+        ) -> Result<User, crate::middleware::AuthError> {
+            if let Some(user) = self.users.get(username) {
+                if password == "admin123" {
+                    Ok(user.clone())
+                } else {
+                    Err(crate::middleware::AuthError::InvalidCredentials)
+                }
+            } else {
+                Err(crate::middleware::AuthError::InvalidCredentials)
+            }
+        }
+
+        async fn update_user(&self, _user: &User) -> Result<(), crate::middleware::AuthError> {
+            Ok(())
+        }
+
+        async fn delete_user(&self, _username: &str) -> Result<bool, crate::middleware::AuthError> {
+            Ok(true)
+        }
+    }
 
     fn create_test_jwt_service() -> Arc<JwtService> {
         let config = JwtConfig {
-            secret: Defaults::JWT_SECRET.to_string(),
+            secret: "test-secret-at-least-32-characters-long".to_string(),
             access_token_expiration: Defaults::JWT_ACCESS_TOKEN_EXPIRATION,
             refresh_token_expiration: Defaults::JWT_REFRESH_TOKEN_EXPIRATION,
             issuer: Defaults::JWT_ISSUER.to_string(),
@@ -141,16 +210,14 @@ mod tests {
         Arc::new(JwtService::new(config))
     }
 
-    async fn create_test_user_store() -> Arc<UserStore> {
-        use dbx_adapter::redis::client::RedisPool;
-        let pool = RedisPool::new("redis://127.0.0.1:6379", 1).unwrap();
-        Arc::new(UserStore::new(Arc::new(pool)).await.unwrap())
+    fn create_test_user_store() -> Arc<UserStore> {
+        Arc::new(UserStore::Mock(Box::new(MockUserStore::new())))
     }
 
     #[tokio::test]
     async fn test_login_success() {
         let jwt_service = create_test_jwt_service();
-        let user_store = create_test_user_store().await;
+        let user_store = create_test_user_store();
         let app = create_auth_routes(jwt_service, user_store);
 
         let login_request = LoginRequest {
@@ -172,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn test_login_invalid_credentials() {
         let jwt_service = create_test_jwt_service();
-        let user_store = create_test_user_store().await;
+        let user_store = create_test_user_store();
         let app = create_auth_routes(jwt_service, user_store);
 
         let login_request = LoginRequest {

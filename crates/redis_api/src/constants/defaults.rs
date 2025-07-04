@@ -14,9 +14,6 @@ impl Defaults {
     /// Default connection pool size
     pub const POOL_SIZE: u32 = 10;
 
-    /// Default JWT secret
-    pub const JWT_SECRET: &'static str = "dbx-jwt-secret";
-
     /// Default access token expiration (900 seconds = 15 minutes)
     pub const JWT_ACCESS_TOKEN_EXPIRATION: i64 = 900;
 
