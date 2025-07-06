@@ -1,9 +1,4 @@
-use axum::{
-    middleware::from_fn_with_state,
-    response::Json,
-    routing::get,
-    Router,
-};
+use axum::{middleware::from_fn_with_state, response::Json, routing::get, Router};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
@@ -82,8 +77,8 @@ pub fn create_app(state: AppState) -> Router {
     // Create authentication routes (public)
     let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
 
-    // Create protected Redis routes with authentication middleware
-    let protected_redis_routes = Router::new()
+    // Create protected Redis routes with authentication middleware for users and admins
+    let user_redis_routes = Router::new()
         .merge(string::create_redis_string_routes(state.redis_pool.clone()))
         .merge(hash::create_redis_hash_routes(state.redis_pool.clone()))
         .merge(set::create_redis_set_routes(state.redis_pool.clone()))
@@ -93,18 +88,7 @@ pub fn create_app(state: AppState) -> Router {
         ))
         .layer(from_fn_with_state((), require_user_role));
 
-    // Create protected Redis WebSocket routes with authentication middleware
-    let protected_redis_ws_routes = Router::new()
-        .merge(ws_string::create_redis_ws_string_routes(state.redis_pool.clone()))
-        .merge(ws_hash::create_redis_ws_hash_routes(state.redis_pool.clone()))
-        .merge(ws_set::create_redis_ws_set_routes(state.redis_pool.clone()))
-        .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
-        ))
-        .layer(from_fn_with_state((), require_user_role));
-
-    // Create admin-only routes
+    // Create admin-only routes with separate auth chain
     let admin_redis_routes = Router::new()
         .merge(admin::create_redis_admin_routes(state.redis_pool.clone()))
         .layer(from_fn_with_state(
@@ -113,8 +97,25 @@ pub fn create_app(state: AppState) -> Router {
         ))
         .layer(from_fn_with_state((), require_admin_role));
 
+    // Create protected Redis WebSocket routes with authentication middleware
+    let user_redis_ws_routes = Router::new()
+        .merge(ws_string::create_redis_ws_string_routes(
+            state.redis_pool.clone(),
+        ))
+        .merge(ws_hash::create_redis_ws_hash_routes(
+            state.redis_pool.clone(),
+        ))
+        .merge(ws_set::create_redis_ws_set_routes(state.redis_pool.clone()))
+        .layer(from_fn_with_state(
+            state.jwt_service.clone(),
+            jwt_auth_middleware,
+        ))
+        .layer(from_fn_with_state((), require_user_role));
+
     let admin_redis_ws_routes = Router::new()
-        .merge(ws_admin::create_redis_ws_admin_routes(state.redis_pool.clone()))
+        .merge(ws_admin::create_redis_ws_admin_routes(
+            state.redis_pool.clone(),
+        ))
         .layer(from_fn_with_state(
             state.jwt_service.clone(),
             jwt_auth_middleware,
@@ -124,10 +125,10 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .nest("/auth", auth_routes)
-        .nest("/redis", protected_redis_routes)
-        .nest("/redis", admin_redis_routes)
-        .nest("/redis_ws", protected_redis_ws_routes)
-        .nest("/redis_ws", admin_redis_ws_routes)
+        .nest("/redis", user_redis_routes)
+        .nest("/redis/admin", admin_redis_routes)
+        .nest("/redis_ws", user_redis_ws_routes)
+        .nest("/redis_ws/admin", admin_redis_ws_routes)
         .layer(CorsLayer::permissive())
 }
 

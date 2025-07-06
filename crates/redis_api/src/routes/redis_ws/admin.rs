@@ -354,6 +354,6 @@ async fn handle_redis_ws_admin_socket(socket: WebSocket, pool: Arc<RedisPool>) {
 
 pub fn create_redis_ws_admin_routes(pool: Arc<RedisPool>) -> Router {
     Router::new()
-        .route("/admin/ws", get(redis_ws_admin_handler))
+        .route("/ws", get(redis_ws_admin_handler))
         .with_state(pool)
 }

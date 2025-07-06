@@ -238,30 +238,27 @@ async fn flush_all_databases_handler(
 pub fn create_redis_admin_routes(pool: Arc<RedisPool>) -> Router {
     Router::new()
         // Basic Health & Status routes
-        .route("/admin/ping", get(ping_handler))
-        .route("/admin/info", get(info_handler))
-        .route("/admin/info/:section", get(info_section_handler))
-        .route("/admin/dbsize", get(dbsize_handler))
-        .route("/admin/time", get(time_handler))
-        .route("/admin/version", get(version_handler))
+        .route("/ping", get(ping_handler))
+        .route("/info", get(info_handler))
+        .route("/info/:section", get(info_section_handler))
+        .route("/dbsize", get(dbsize_handler))
+        .route("/time", get(time_handler))
+        .route("/version", get(version_handler))
         // Health Check routes
-        .route("/admin/health", get(health_check_handler))
-        .route("/admin/status", get(server_status_handler))
+        .route("/health", get(health_check_handler))
+        .route("/status", get(server_status_handler))
         // Statistics routes
-        .route("/admin/stats/memory", get(memory_stats_handler))
-        .route("/admin/stats/clients", get(client_stats_handler))
-        .route("/admin/stats/server", get(server_stats_handler))
+        .route("/stats/memory", get(memory_stats_handler))
+        .route("/stats/clients", get(client_stats_handler))
+        .route("/stats/server", get(server_stats_handler))
         // Configuration routes
-        .route("/admin/config/set", post(config_set_handler))
-        .route("/admin/config/get/:parameter", get(config_get_handler))
-        .route("/admin/config/all", get(config_get_all_handler))
-        .route(
-            "/admin/config/resetstat",
-            post(config_reset_statistics_handler),
-        )
-        .route("/admin/config/rewrite", post(config_rewrite_handler))
+        .route("/config/set", post(config_set_handler))
+        .route("/config/get/:parameter", get(config_get_handler))
+        .route("/config/all", get(config_get_all_handler))
+        .route("/config/resetstat", post(config_reset_statistics_handler))
+        .route("/config/rewrite", post(config_rewrite_handler))
         // Database Management routes
-        .route("/admin/flushdb", delete(flush_current_database_handler))
-        .route("/admin/flushall", delete(flush_all_databases_handler))
+        .route("/flushdb", delete(flush_current_database_handler))
+        .route("/flushall", delete(flush_all_databases_handler))
         .with_state(pool)
 }

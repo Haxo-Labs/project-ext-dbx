@@ -1,214 +1,157 @@
-use reqwest::Client;
-use serde_json::json;
-use std::time::Duration;
+use anyhow::Result;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use serde_json::Value;
 
-// Constants
-pub const BASE_URL: &str = "http://localhost:3000/redis";
-pub const WS_BASE_URL: &str = "ws://localhost:3000/redis_ws/string/ws";
-pub const WS_ADMIN_URL: &str = "ws://localhost:3000/redis_ws/admin/ws";
+pub const BASE_URL: &str = "http://localhost:3000";
 
-// Time delays
-pub fn short_delay() -> Duration {
-    Duration::from_millis(200)
+pub async fn get_test_base_url() -> String {
+    BASE_URL.to_string()
 }
 
-pub fn ttl_delay() -> Duration {
-    Duration::from_secs(2)
-}
-
-pub fn websocket_timeout() -> Duration {
-    Duration::from_secs(15)
-}
-
-// Test data generators
-pub fn generate_test_key(prefix: &str, index: Option<usize>) -> String {
-    match index {
-        Some(i) => format!("{}_{}", prefix, i),
-        None => prefix.to_string(),
-    }
-}
-
-pub fn generate_test_value(prefix: &str, index: Option<usize>) -> String {
-    match index {
-        Some(i) => format!("{}_{}", prefix, i),
-        None => prefix.to_string(),
-    }
-}
-
-pub fn generate_large_value(size: usize) -> String {
-    "x".repeat(size)
-}
-
-pub fn generate_special_chars_value() -> String {
-    "!@#$%^&*()_+-=[]{}|;':\",./<>?".to_string()
-}
-
-// HTTP client utilities
-pub fn create_http_client() -> Client {
-    Client::new()
-}
-
-pub async fn set_string(
-    client: &Client,
-    base_url: &str,
-    key: &str,
-    value: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let res = client
-        .post(&format!("{}/redis/string/{}", base_url, key))
-        .json(&json!({ "value": value }))
-        .send()
-        .await?;
-
-    if res.status() == 200 {
-        Ok(())
-    } else {
-        Err(format!("Failed to set string: {}", res.status()).into())
-    }
-}
-
-pub async fn get_string(
-    client: &Client,
-    base_url: &str,
-    key: &str,
-) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    let res = client
-        .get(&format!("{}/redis/string/{}", base_url, key))
-        .send()
-        .await?;
-
-    if res.status() == 200 {
-        let body: Option<String> = res.json().await?;
-        Ok(body)
-    } else {
-        Err(format!("Failed to get string: {}", res.status()).into())
-    }
-}
-
-pub async fn delete_string(
-    client: &Client,
-    base_url: &str,
-    key: &str,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let res = client
-        .delete(&format!("{}/redis/string/{}", base_url, key))
-        .send()
-        .await?;
-
-    if res.status() == 200 {
-        let deleted: bool = res.json().await?;
-        Ok(deleted)
-    } else {
-        Err(format!("Failed to delete string: {}", res.status()).into())
-    }
-}
-
-// Common assertions
-pub fn assert_status_ok(status: u16) {
-    assert_eq!(status, 200, "Expected status 200, got {}", status);
-}
-
-pub fn assert_status_not_found(status: u16) {
-    assert_eq!(status, 404, "Expected status 404, got {}", status);
-}
-
-pub fn assert_status_method_not_allowed(status: u16) {
-    assert_eq!(status, 405, "Expected status 405, got {}", status);
-}
-
-pub fn assert_redis_info_structure(info: &serde_json::Value) {
-    let required_fields = vec![
-        "redis_version",
-        "connected_clients",
-        "used_memory_human",
-        "uptime_in_seconds",
-        "total_commands_processed",
-        "total_connections_received",
-        "keyspace_hits",
-        "keyspace_misses",
-        "expired_keys",
-        "evicted_keys",
-    ];
-
-    for field in required_fields {
-        assert!(info.get(field).is_some(), "Field {} is missing", field);
-    }
-}
-
-// Batch operations
-pub async fn batch_set_strings(
-    client: &Client,
-    base_url: &str,
-    operations: Vec<(&str, &str)>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let batch_ops: Vec<serde_json::Value> = operations
-        .iter()
-        .map(|(key, value)| json!({"key": key, "value": value}))
-        .collect();
-
-    let res = client
-        .post(&format!("{}/redis/string/batch/set", base_url))
-        .json(&json!({ "operations": batch_ops }))
-        .send()
-        .await?;
-
-    assert_status_ok(res.status().as_u16());
-    Ok(())
-}
-
-pub async fn batch_get_strings(
-    client: &Client,
-    base_url: &str,
-    keys: &[String],
-) -> Result<Vec<Option<String>>, Box<dyn std::error::Error>> {
-    let res = client
-        .post(&format!("{}/redis/string/batch/get", base_url))
-        .json(&json!({ "keys": keys }))
-        .send()
-        .await?;
-
-    assert_status_ok(res.status().as_u16());
-    let values: Vec<Option<String>> = res.json().await?;
-    Ok(values)
-}
-
-// Cleanup utilities
-pub async fn cleanup_test_keys(client: &Client, base_url: &str, keys: &[&str]) {
-    for key in keys {
-        let _ = delete_string(client, base_url, key).await;
-    }
-}
-
-// Test setup and teardown
 pub struct TestContext {
-    pub client: Client,
     pub base_url: String,
-    pub test_keys: Vec<String>,
+    pub client: reqwest::Client,
+    pub auth_token: Option<String>,
+    pub admin_token: Option<String>,
 }
 
 impl TestContext {
     pub fn new(base_url: String) -> Self {
         Self {
-            client: create_http_client(),
             base_url,
-            test_keys: Vec::new(),
+            client: reqwest::Client::new(),
+            auth_token: None,
+            admin_token: None,
         }
     }
 
-    pub fn add_test_key(&mut self, key: String) {
-        self.test_keys.push(key);
-    }
+    pub async fn authenticate_admin(&mut self) -> Result<()> {
+        let auth_payload = serde_json::json!({
+            "username": "testadmin",
+            "password": "testpassword123"
+        });
 
-    pub async fn cleanup(&self) {
-        for key in &self.test_keys {
-            let _ = delete_string(&self.client, &self.base_url, key).await;
+        let response = self
+            .client
+            .post(&format!("{}/auth/login", self.base_url))
+            .json(&auth_payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Authentication failed: {}", response.status()));
         }
-    }
-}
 
-impl Drop for TestContext {
-    fn drop(&mut self) {
-        // Note: This won't work in async context, but it's a fallback
-        // In practice, call cleanup() explicitly in tests
+        let auth_response: Value = response.json().await?;
+        let access_token = auth_response["data"]["access_token"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No access token in response"))?;
+
+        self.admin_token = Some(access_token.to_string());
+        Ok(())
+    }
+
+    pub async fn authenticate_user(&mut self) -> Result<()> {
+        let auth_payload = serde_json::json!({
+            "username": "testuser",
+            "password": "testpassword123"
+        });
+
+        let response = self
+            .client
+            .post(&format!("{}/auth/login", self.base_url))
+            .json(&auth_payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Authentication failed: {}", response.status()));
+        }
+
+        let auth_response: Value = response.json().await?;
+        let access_token = auth_response["data"]["access_token"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No access token in response"))?;
+
+        self.auth_token = Some(access_token.to_string());
+        Ok(())
+    }
+
+    pub fn get_auth_header(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(token) = &self.auth_token {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+            );
+        }
+        headers
+    }
+
+    pub fn get_admin_auth_header(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(token) = &self.admin_token {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+            );
+        }
+        headers
+    }
+
+    pub async fn get_with_auth(&self, url: &str) -> Result<reqwest::Response> {
+        Ok(self
+            .client
+            .get(url)
+            .headers(self.get_auth_header())
+            .send()
+            .await?)
+    }
+
+    pub async fn get_with_admin_auth(&self, url: &str) -> Result<reqwest::Response> {
+        Ok(self
+            .client
+            .get(url)
+            .headers(self.get_admin_auth_header())
+            .send()
+            .await?)
+    }
+
+    pub async fn post_with_auth(&self, url: &str, body: &Value) -> Result<reqwest::Response> {
+        Ok(self
+            .client
+            .post(url)
+            .headers(self.get_auth_header())
+            .json(body)
+            .send()
+            .await?)
+    }
+
+    pub async fn post_with_admin_auth(&self, url: &str, body: &Value) -> Result<reqwest::Response> {
+        Ok(self
+            .client
+            .post(url)
+            .headers(self.get_admin_auth_header())
+            .json(body)
+            .send()
+            .await?)
+    }
+
+    pub async fn delete_with_auth(&self, url: &str) -> Result<reqwest::Response> {
+        Ok(self
+            .client
+            .delete(url)
+            .headers(self.get_auth_header())
+            .send()
+            .await?)
+    }
+
+    pub async fn delete_with_admin_auth(&self, url: &str) -> Result<reqwest::Response> {
+        Ok(self
+            .client
+            .delete(url)
+            .headers(self.get_admin_auth_header())
+            .send()
+            .await?)
     }
 }
