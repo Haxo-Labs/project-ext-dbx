@@ -79,8 +79,8 @@ impl JwtService {
     /// Generate access and refresh tokens for a user
     pub fn generate_tokens(&self, user: &User) -> Result<AuthResponse, AuthError> {
         let now = Utc::now();
-        let access_exp = now + Duration::seconds(self.config.access_token_expiration);
-        let refresh_exp = now + Duration::seconds(self.config.refresh_token_expiration);
+        let access_exp = now + Duration::seconds(self.config.access_token_expiration as i64);
+        let refresh_exp = now + Duration::seconds(self.config.refresh_token_expiration as i64);
 
         // Access token claims
         let access_claims = Claims {
@@ -114,7 +114,7 @@ impl JwtService {
             access_token,
             refresh_token,
             token_type: "Bearer".to_string(),
-            expires_in: self.config.access_token_expiration,
+            expires_in: self.config.access_token_expiration as i64,
             user: UserInfo {
                 id: user.id.clone(),
                 username: user.username.clone(),

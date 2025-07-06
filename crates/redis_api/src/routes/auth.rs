@@ -203,9 +203,9 @@ mod tests {
     fn create_test_jwt_service() -> Arc<JwtService> {
         let config = JwtConfig {
             secret: "test-secret-at-least-32-characters-long".to_string(),
-            access_token_expiration: Defaults::JWT_ACCESS_TOKEN_EXPIRATION,
-            refresh_token_expiration: Defaults::JWT_REFRESH_TOKEN_EXPIRATION,
-            issuer: Defaults::JWT_ISSUER.to_string(),
+            access_token_expiration: 900,
+            refresh_token_expiration: 604800,
+            issuer: "dbx-test-api".to_string(),
         };
         Arc::new(JwtService::new(config))
     }

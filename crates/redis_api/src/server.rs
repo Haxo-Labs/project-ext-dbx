@@ -29,9 +29,10 @@ impl AppState {
     pub async fn new() -> Result<Self, ServerError> {
         let config = AppConfig::from_env().map_err(ServerError::Configuration)?;
 
-        // Create Redis pool
+        // Create Redis pool with default pool size
+        let pool_size = 10; // Default pool size since it's not in config anymore
         let redis_pool = Arc::new(
-            RedisPool::new(&config.server.redis_url, config.server.pool_size)
+            RedisPool::new(&config.server.redis_url, pool_size)
                 .map_err(|e| ServerError::DatabaseConnection(e.to_string()))?,
         );
 
@@ -40,17 +41,15 @@ impl AppState {
 
         // Create user store - optionally with default admin
         let user_store = if config.create_default_admin {
-            let admin_username =
-                std::env::var("DEFAULT_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
-            let admin_password = std::env::var("DEFAULT_ADMIN_PASSWORD").map_err(|_| {
-                ServerError::Configuration(ConfigError::MissingDefaultAdminPassword)
-            })?;
-
-            Arc::new(
-                UserStore::new_with_admin(redis_pool.clone(), &admin_username, &admin_password)
-                    .await
-                    .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
-            )
+            if let (Some(username), Some(password)) = (&config.default_admin_username, &config.default_admin_password) {
+                Arc::new(
+                    UserStore::new_with_admin(redis_pool.clone(), username, password)
+                        .await
+                        .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
+                )
+            } else {
+                return Err(ServerError::Configuration(ConfigError::MissingDefaultAdminPassword));
+            }
         } else {
             Arc::new(
                 UserStore::new(redis_pool.clone())
@@ -151,6 +150,14 @@ pub async fn run_server() -> Result<(), ServerError> {
         .map_err(|e| ServerError::ServerRuntime(e.to_string()))?;
 
     Ok(())
+}
+
+/// Public run function for compatibility
+pub async fn run() -> Result<(), ConfigError> {
+    run_server().await.map_err(|e| match e {
+        ServerError::Configuration(config_err) => config_err,
+        _ => ConfigError::MissingEnvironmentVariable("SERVER_ERROR".to_string()),
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
