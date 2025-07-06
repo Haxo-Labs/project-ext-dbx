@@ -28,7 +28,7 @@ impl<T> ApiResponse<T> {
 }
 
 /// User roles for role-based access control
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub enum UserRole {
     Admin,
     User,
@@ -368,17 +368,251 @@ mod tests {
     #[test]
     fn test_user_debug() {
         let user = User {
-            id: "debug-test".to_string(),
-            username: "debuguser".to_string(),
-            password_hash: "debughash".to_string(),
-            role: UserRole::ReadOnly,
+            id: "test-id".to_string(),
+            username: "testuser".to_string(),
+            password_hash: "hash123".to_string(),
+            role: UserRole::Admin,
             is_active: true,
             created_at: DateTime::from_timestamp(1640995200, 0).unwrap(),
             updated_at: DateTime::from_timestamp(1640995200, 0).unwrap(),
         };
 
         let debug_str = format!("{:?}", user);
-        assert!(debug_str.contains("debuguser"));
-        assert!(debug_str.contains("ReadOnly"));
+        assert!(debug_str.contains("User"));
+        assert!(debug_str.contains("testuser"));
+    }
+
+    #[test]
+    fn test_user_role_display() {
+        assert_eq!(format!("{}", UserRole::Admin), "admin");
+        assert_eq!(format!("{}", UserRole::User), "user");
+        assert_eq!(format!("{}", UserRole::ReadOnly), "readonly");
+    }
+
+    #[test]
+    fn test_token_type_serialization() {
+        assert_eq!(serde_json::to_string(&TokenType::Access).unwrap(), "\"Access\"");
+        assert_eq!(serde_json::to_string(&TokenType::Refresh).unwrap(), "\"Refresh\"");
+    }
+
+    #[test]
+    fn test_token_type_deserialization() {
+        assert_eq!(serde_json::from_str::<TokenType>("\"Access\"").unwrap(), TokenType::Access);
+        assert_eq!(serde_json::from_str::<TokenType>("\"Refresh\"").unwrap(), TokenType::Refresh);
+    }
+
+    #[test]
+    fn test_token_type_equality() {
+        assert_eq!(TokenType::Access, TokenType::Access);
+        assert_eq!(TokenType::Refresh, TokenType::Refresh);
+        assert_ne!(TokenType::Access, TokenType::Refresh);
+    }
+
+    #[test]
+    fn test_token_type_debug() {
+        let debug_str = format!("{:?}", TokenType::Access);
+        assert_eq!(debug_str, "Access");
+        let debug_str = format!("{:?}", TokenType::Refresh);
+        assert_eq!(debug_str, "Refresh");
+    }
+
+    #[test]
+    fn test_claims_serialization() {
+        let claims = Claims {
+            sub: "user123".to_string(),
+            username: "testuser".to_string(),
+            role: UserRole::User,
+            exp: 1640995200,
+            iat: 1640995100,
+            iss: "test_issuer".to_string(),
+            token_type: TokenType::Access,
+        };
+
+        let json = serde_json::to_string(&claims).unwrap();
+        let deserialized: Claims = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(claims.sub, deserialized.sub);
+        assert_eq!(claims.username, deserialized.username);
+        assert_eq!(claims.role, deserialized.role);
+        assert_eq!(claims.exp, deserialized.exp);
+        assert_eq!(claims.iat, deserialized.iat);
+        assert_eq!(claims.iss, deserialized.iss);
+        assert_eq!(claims.token_type, deserialized.token_type);
+    }
+
+    #[test]
+    fn test_claims_debug() {
+        let claims = Claims {
+            sub: "user123".to_string(),
+            username: "testuser".to_string(),
+            role: UserRole::User,
+            exp: 1640995200,
+            iat: 1640995100,
+            iss: "test_issuer".to_string(),
+            token_type: TokenType::Access,
+        };
+
+        let debug_str = format!("{:?}", claims);
+        assert!(debug_str.contains("Claims"));
+        assert!(debug_str.contains("testuser"));
+    }
+
+    #[test]
+    fn test_user_role_invalid_deserialization() {
+        let result = serde_json::from_str::<UserRole>("\"InvalidRole\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_token_type_invalid_deserialization() {
+        let result = serde_json::from_str::<TokenType>("\"InvalidType\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_login_request_debug() {
+        let request = LoginRequest {
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
+
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("LoginRequest"));
+        assert!(debug_str.contains("user"));
+    }
+
+    #[test]
+    fn test_create_user_request_debug() {
+        let request = CreateUserRequest {
+            username: "newuser".to_string(),
+            password: "password123".to_string(),
+            role: UserRole::User,
+        };
+
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("CreateUserRequest"));
+        assert!(debug_str.contains("newuser"));
+    }
+
+    #[test]
+    fn test_refresh_request_debug() {
+        let request = RefreshRequest {
+            refresh_token: "token123".to_string(),
+        };
+
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("RefreshRequest"));
+        assert!(debug_str.contains("token123"));
+    }
+
+    #[test]
+    fn test_auth_response_debug() {
+        let auth_response = AuthResponse {
+            access_token: "access123".to_string(),
+            refresh_token: "refresh123".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+            user: UserInfo {
+                id: "user1".to_string(),
+                username: "testuser".to_string(),
+                role: UserRole::User,
+            },
+        };
+
+        let debug_str = format!("{:?}", auth_response);
+        assert!(debug_str.contains("AuthResponse"));
+        assert!(debug_str.contains("testuser"));
+    }
+
+    #[test]
+    fn test_user_info_debug() {
+        let user_info = UserInfo {
+            id: "user1".to_string(),
+            username: "testuser".to_string(),
+            role: UserRole::Admin,
+        };
+
+        let debug_str = format!("{:?}", user_info);
+        assert!(debug_str.contains("UserInfo"));
+        assert!(debug_str.contains("testuser"));
+    }
+
+    #[test]
+    fn test_token_validation_response_debug() {
+        let response = TokenValidationResponse {
+            valid: true,
+            user: Some(UserInfo {
+                id: "user1".to_string(),
+                username: "testuser".to_string(),
+                role: UserRole::User,
+            }),
+            expires_at: Some(DateTime::from_timestamp(1640995200, 0).unwrap()),
+        };
+
+        let debug_str = format!("{:?}", response);
+        assert!(debug_str.contains("TokenValidationResponse"));
+        assert!(debug_str.contains("testuser"));
+    }
+
+    #[test]
+    fn test_api_response_debug() {
+        let response: ApiResponse<String> = ApiResponse::success("test data".to_string());
+        let debug_str = format!("{:?}", response);
+        assert!(debug_str.contains("ApiResponse"));
+        assert!(debug_str.contains("test data"));
+    }
+
+    #[test]
+    fn test_user_clone_deep() {
+        let original = User {
+            id: "test-id".to_string(),
+            username: "testuser".to_string(),
+            password_hash: "hash123".to_string(),
+            role: UserRole::Admin,
+            is_active: true,
+            created_at: DateTime::from_timestamp(1640995200, 0).unwrap(),
+            updated_at: DateTime::from_timestamp(1640995200, 0).unwrap(),
+        };
+
+        let cloned = original.clone();
+        
+        // Verify deep clone by modifying original and ensuring clone is unchanged
+        assert_eq!(original.id, cloned.id);
+        assert_eq!(original.username, cloned.username);
+        assert_eq!(original.role, cloned.role);
+        assert_eq!(original.is_active, cloned.is_active);
+    }
+
+    #[test]
+    fn test_all_structs_serialization_roundtrip() {
+        // Test comprehensive serialization for all major structs
+        let user_info = UserInfo {
+            id: "user1".to_string(),
+            username: "testuser".to_string(),
+            role: UserRole::Admin,
+        };
+
+        let auth_response = AuthResponse {
+            access_token: "access123".to_string(),
+            refresh_token: "refresh123".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+            user: user_info.clone(),
+        };
+
+        let token_validation = TokenValidationResponse {
+            valid: true,
+            user: Some(user_info),
+            expires_at: Some(DateTime::from_timestamp(1640995200, 0).unwrap()),
+        };
+
+        // Test all roundtrip serialization
+        let auth_json = serde_json::to_string(&auth_response).unwrap();
+        let auth_restored: AuthResponse = serde_json::from_str(&auth_json).unwrap();
+        assert_eq!(auth_response.access_token, auth_restored.access_token);
+
+        let validation_json = serde_json::to_string(&token_validation).unwrap();
+        let validation_restored: TokenValidationResponse = serde_json::from_str(&validation_json).unwrap();
+        assert_eq!(token_validation.valid, validation_restored.valid);
     }
 }

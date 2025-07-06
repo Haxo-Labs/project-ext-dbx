@@ -185,6 +185,16 @@ pub enum AuthError {
     PasswordHashingFailed,
     #[error("Database error: {0}")]
     DatabaseError(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+    #[error("User already exists")]
+    UserAlreadyExists,
+}
+
+impl From<bcrypt::BcryptError> for AuthError {
+    fn from(_: bcrypt::BcryptError) -> Self {
+        AuthError::PasswordHashingFailed
+    }
 }
 
 fn extract_token_from_header(headers: &HeaderMap) -> Option<String> {
@@ -532,7 +542,7 @@ mod tests {
     use super::*;
     use crate::config::JwtConfig;
     use crate::models::{Claims, TokenType, User, UserRole};
-    use chrono::{Duration, Utc};
+    use chrono::Utc;
     use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -999,5 +1009,175 @@ mod tests {
 
         assert_eq!(access_claims.token_type, TokenType::Access);
         assert_eq!(refresh_claims.token_type, TokenType::Refresh);
+    }
+
+
+
+    #[test]
+    fn test_validate_role_functions() {
+        // Test role validation logic (Admin < User < ReadOnly)
+        assert!(UserRole::Admin >= UserRole::Admin);
+        assert!(UserRole::Admin <= UserRole::User);
+        assert!(UserRole::Admin <= UserRole::ReadOnly);
+        assert!(UserRole::User <= UserRole::ReadOnly);
+        assert!(!(UserRole::ReadOnly <= UserRole::User));
+        assert!(!(UserRole::ReadOnly <= UserRole::Admin));
+    }
+
+    #[test]
+    fn test_jwt_service_config() {
+        let config = create_test_jwt_config();
+        let jwt_service = JwtService::new(config);
+
+        // Test the service was created with proper config
+        assert_eq!(jwt_service.config.issuer, "test_issuer");
+        assert_eq!(jwt_service.config.access_token_expiration, 3600);
+        assert_eq!(jwt_service.config.refresh_token_expiration, 86400);
+    }
+
+    #[test]
+    fn test_user_role_comparison() {
+        // Test role hierarchy (Admin < User < ReadOnly based on enum position)
+        assert!(UserRole::Admin < UserRole::User);
+        assert!(UserRole::User < UserRole::ReadOnly);
+        assert!(UserRole::Admin < UserRole::ReadOnly);
+        
+        // Test equality
+        assert_eq!(UserRole::Admin, UserRole::Admin);
+        assert_eq!(UserRole::User, UserRole::User);
+        assert_eq!(UserRole::ReadOnly, UserRole::ReadOnly);
+    }
+
+    #[tokio::test]
+    async fn test_user_store_mock_operations() {
+        let mock_store = MockUserStore::new();
+        let user_store = UserStore::Mock(Box::new(mock_store));
+
+        let user = create_test_user();
+        
+        // Test create user
+        let result = user_store.create_user(&user).await;
+        assert!(result.is_ok());
+
+        // Test get user
+        let retrieved = user_store.get_user(&user.username).await;
+        assert!(retrieved.is_ok());
+
+        // Test update user  
+        let mut updated_user = user.clone();
+        updated_user.role = UserRole::Admin;
+        let result = user_store.update_user(&updated_user).await;
+        assert!(result.is_ok());
+
+        // Test delete user
+        let result = user_store.delete_user(&user.username).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_token_expiration_calculation() {
+        let config = create_test_jwt_config();
+        let jwt_service = JwtService::new(config);
+        let user = create_test_user();
+
+        let auth_response = jwt_service.generate_tokens(&user).unwrap();
+        
+        // Verify tokens are different (access vs refresh)
+        assert_ne!(auth_response.access_token, auth_response.refresh_token);
+        
+        // Verify token structure
+        assert!(!auth_response.access_token.is_empty());
+        assert!(!auth_response.refresh_token.is_empty());
+        assert_eq!(auth_response.token_type, "Bearer");
+        assert_eq!(auth_response.expires_in, 3600);
+    }
+
+    #[test]
+    fn test_invalid_jwt_formats() {
+        let config = create_test_jwt_config();
+        let jwt_service = JwtService::new(config);
+
+        // Test various invalid token formats
+        assert!(jwt_service.validate_token("").is_err());
+        assert!(jwt_service.validate_token("invalid").is_err());
+        assert!(jwt_service.validate_token("invalid.token").is_err());
+        assert!(jwt_service.validate_token("invalid.token.format").is_err());
+        assert!(jwt_service.validate_token("eyJhbGciOiJIUzI1NiJ9.invalid.signature").is_err());
+    }
+
+    #[test]
+    fn test_user_store_operations_error_handling() {
+        let mock_store = MockUserStore::new();
+        let user_store = UserStore::Mock(Box::new(mock_store));
+
+        // Test getting non-existent user should return Ok(None), not an error
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(async {
+            user_store.get_user("nonexistent").await
+        });
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_jwt_service_comprehensive() {
+        let config = create_test_jwt_config();
+        let jwt_service = JwtService::new(config);
+        let user = create_test_user();
+
+        // Test full token lifecycle
+        let auth_response = jwt_service.generate_tokens(&user).unwrap();
+        
+        // Validate access token
+        let access_claims = jwt_service.validate_token(&auth_response.access_token).unwrap();
+        assert_eq!(access_claims.username, user.username);
+        assert_eq!(access_claims.role, user.role);
+        assert_eq!(access_claims.token_type, TokenType::Access);
+        
+        // Validate refresh token
+        let refresh_claims = jwt_service.validate_token(&auth_response.refresh_token).unwrap();
+        assert_eq!(refresh_claims.username, user.username);
+        assert_eq!(refresh_claims.role, user.role);
+        assert_eq!(refresh_claims.token_type, TokenType::Refresh);
+        
+        // Test token refresh
+        let new_auth_response = jwt_service.refresh_token(&auth_response.refresh_token).unwrap();
+        assert!(!new_auth_response.access_token.is_empty());
+        assert!(!new_auth_response.refresh_token.is_empty());
+        assert_eq!(new_auth_response.user.username, user.username);
+    }
+
+    #[test]
+    fn test_claims_validation_edge_cases() {
+        let config = create_test_jwt_config();
+        let jwt_service = JwtService::new(config);
+        
+        // Test claims with edge case values
+        let user = User {
+            id: "test-id-with-special-chars-123!@#".to_string(),
+            username: "test.user+name@example.com".to_string(),
+            password_hash: "hash123".to_string(),
+            role: UserRole::Admin,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            is_active: true,
+        };
+
+        let auth_response = jwt_service.generate_tokens(&user).unwrap();
+        let claims = jwt_service.validate_token(&auth_response.access_token).unwrap();
+        
+        assert_eq!(claims.sub, user.id);
+        assert_eq!(claims.username, user.username);
+        assert_eq!(claims.role, user.role);
+    }
+
+    #[test]
+    fn test_auth_error_from_bcrypt() {
+        // Test conversion from bcrypt error
+        let bcrypt_error = bcrypt::BcryptError::CostNotAllowed(50);
+        let auth_error: AuthError = bcrypt_error.into();
+        
+        // Should convert to PasswordHashingFailed error
+        assert_eq!(auth_error.to_string(), "Password hashing failed");
     }
 }
