@@ -1,67 +1,80 @@
-use super::super::get_test_base_url;
-use reqwest::Client;
+use crate::common::TestContext;
+use crate::get_test_base_url;
 use serde_json::json;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[tokio::test]
 async fn test_set_add_and_members() {
-    let base_url = get_test_base_url().await;
-    let client = Client::new();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let key = format!("test_set_key_{}", timestamp);
-    let member = "member1";
-
-    // Add member to set
-    let res = client
-        .post(&format!("{}/redis/set/{}", base_url, key))
-        .json(&json!({ "member": member }))
-        .send()
+    let mut ctx = TestContext::new(get_test_base_url().await);
+    ctx.authenticate_admin()
         .await
-        .unwrap();
-    assert!(res.status().is_success());
-    let added: usize = res.json().await.unwrap();
-    assert!(added >= 1);
+        .expect("Failed to authenticate admin");
 
-    // Get set members
-    let res = client
-        .get(&format!("{}/redis/set/{}/members", base_url, key))
-        .send()
+    let payload = json!({
+        "members": ["member1", "member2", "member3"]
+    });
+    let res = ctx
+        .post_with_admin_auth(&format!("{}/redis/set/test_set", ctx.base_url), &payload)
         .await
-        .unwrap();
+        .expect("Failed to send request");
+
     assert!(res.status().is_success());
-    let members: Vec<String> = res.json().await.unwrap();
-    assert!(members.contains(&member.to_string()));
+    let body: i64 = res.json().await.unwrap();
+    assert_eq!(body, 3);
+
+    let res = ctx
+        .get_with_admin_auth(&format!("{}/redis/set/test_set", ctx.base_url))
+        .await
+        .expect("Failed to send request");
+
+    assert!(res.status().is_success());
+    let body: Vec<String> = res.json().await.unwrap();
+    assert_eq!(body.len(), 3);
+    assert!(body.contains(&"member1".to_string()));
+    assert!(body.contains(&"member2".to_string()));
+    assert!(body.contains(&"member3".to_string()));
 }
 
 #[tokio::test]
 async fn test_set_remove() {
-    let base_url = get_test_base_url().await;
-    let client = Client::new();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let key = format!("test_set_key_del_{}", timestamp);
-    let member = "member1";
-
-    // Add member to set
-    let _ = client
-        .post(&format!("{}/redis/set/{}", base_url, key))
-        .json(&json!({ "member": member }))
-        .send()
+    let mut ctx = TestContext::new(get_test_base_url().await);
+    ctx.authenticate_admin()
         .await
-        .unwrap();
+        .expect("Failed to authenticate admin");
 
-    // Remove member from set
-    let res = client
-        .delete(&format!("{}/redis/set/{}/{}", base_url, key, member))
-        .send()
+    let payload = json!({
+        "members": ["member1", "member2", "member3"]
+    });
+    let res = ctx
+        .post_with_admin_auth(&format!("{}/redis/set/remove_set", ctx.base_url), &payload)
         .await
-        .unwrap();
+        .expect("Failed to send request");
+
     assert!(res.status().is_success());
-    let removed: usize = res.json().await.unwrap();
-    assert!(removed >= 1);
+
+    let res = ctx
+        .get_with_admin_auth(&format!("{}/redis/set/remove_set", ctx.base_url))
+        .await
+        .expect("Failed to send request");
+
+    assert!(res.status().is_success());
+    let body: Vec<String> = res.json().await.unwrap();
+    assert_eq!(body.len(), 3);
+
+    let res = ctx
+        .delete_with_admin_auth(&format!("{}/redis/set/remove_set", ctx.base_url))
+        .await
+        .expect("Failed to send request");
+
+    assert!(res.status().is_success());
+    let body: i64 = res.json().await.unwrap();
+    assert!(body >= 0);
+
+    let res = ctx
+        .get_with_admin_auth(&format!("{}/redis/set/remove_set", ctx.base_url))
+        .await
+        .expect("Failed to send request");
+
+    assert!(res.status().is_success());
+    let body: Vec<String> = res.json().await.unwrap();
+    assert_eq!(body.len(), 0);
 }

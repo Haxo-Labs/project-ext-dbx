@@ -8,6 +8,7 @@ pub async fn get_test_base_url() -> String {
     BASE_URL.to_string()
 }
 
+#[derive(Clone)]
 pub struct TestContext {
     pub base_url: String,
     pub client: reqwest::Client,
@@ -39,7 +40,10 @@ impl TestContext {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("Authentication failed: {}", response.status()));
+            return Err(anyhow::anyhow!(
+                "Authentication failed: {}",
+                response.status()
+            ));
         }
 
         let auth_response: Value = response.json().await?;
@@ -65,7 +69,10 @@ impl TestContext {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("Authentication failed: {}", response.status()));
+            return Err(anyhow::anyhow!(
+                "Authentication failed: {}",
+                response.status()
+            ));
         }
 
         let auth_response: Value = response.json().await?;

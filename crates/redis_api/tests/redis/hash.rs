@@ -1,67 +1,99 @@
-use super::super::get_test_base_url;
-use reqwest::Client;
+use crate::common::TestContext;
+use crate::get_test_base_url;
 use serde_json::json;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[tokio::test]
 async fn test_hash_set_and_get() {
-    let base_url = get_test_base_url().await;
-    let client = Client::new();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let key = format!("test_hash_key_{}", timestamp);
-    let field = "field1";
-    let value = "value1";
-
-    // Set hash field
-    let res = client
-        .post(&format!("{}/redis/hash/{}/{}", base_url, key, field))
-        .json(&json!({ "value": value }))
-        .send()
+    let mut ctx = TestContext::new(get_test_base_url().await);
+    ctx.authenticate_admin()
         .await
-        .unwrap();
+        .expect("Failed to authenticate admin");
+
+    let payload = json!({
+        "field": "test_field",
+        "value": "test_value"
+    });
+    let res = ctx
+        .post_with_admin_auth(&format!("{}/redis/hash/test_hash", ctx.base_url), &payload)
+        .await
+        .expect("Failed to send request");
+
     assert!(res.status().is_success());
 
-    // Get hash field
-    let res = client
-        .get(&format!("{}/redis/hash/{}/{}", base_url, key, field))
-        .send()
+    let res = ctx
+        .get_with_admin_auth(&format!("{}/redis/hash/test_hash/test_field", ctx.base_url))
         .await
-        .unwrap();
+        .expect("Failed to send request");
+
     assert!(res.status().is_success());
-    let got: Option<String> = res.json().await.unwrap();
-    assert_eq!(got, Some(value.to_string()));
+    let body: Option<String> = res.json().await.unwrap();
+    assert_eq!(body, Some("test_value".to_string()));
+
+    let res = ctx
+        .get_with_admin_auth(&format!("{}/redis/hash/test_hash", ctx.base_url))
+        .await
+        .expect("Failed to send request");
+
+    assert!(res.status().is_success());
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert!(body.get("test_field").is_some());
+    assert_eq!(body["test_field"], "test_value");
 }
 
 #[tokio::test]
 async fn test_hash_delete() {
-    let base_url = get_test_base_url().await;
-    let client = Client::new();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let key = format!("test_hash_key_del_{}", timestamp);
-    let field = "field1";
-    let value = "value1";
-
-    // Set hash field
-    let _ = client
-        .post(&format!("{}/redis/hash/{}/{}", base_url, key, field))
-        .json(&json!({ "value": value }))
-        .send()
+    let mut ctx = TestContext::new(get_test_base_url().await);
+    ctx.authenticate_admin()
         .await
-        .unwrap();
+        .expect("Failed to authenticate admin");
 
-    // Delete hash field
-    let res = client
-        .delete(&format!("{}/redis/hash/{}/{}", base_url, key, field))
-        .send()
+    let payload = json!({
+        "field": "delete_field",
+        "value": "delete_value"
+    });
+    let res = ctx
+        .post_with_admin_auth(
+            &format!("{}/redis/hash/delete_hash", ctx.base_url),
+            &payload,
+        )
         .await
-        .unwrap();
+        .expect("Failed to send request");
+
     assert!(res.status().is_success());
-    let deleted: bool = res.json().await.unwrap();
-    assert!(deleted);
+
+    let res = ctx
+        .get_with_admin_auth(&format!(
+            "{}/redis/hash/delete_hash/delete_field",
+            ctx.base_url
+        ))
+        .await
+        .expect("Failed to send request");
+
+    assert!(res.status().is_success());
+    let body: Option<String> = res.json().await.unwrap();
+    assert_eq!(body, Some("delete_value".to_string()));
+
+    let res = ctx
+        .delete_with_admin_auth(&format!(
+            "{}/redis/hash/delete_hash/delete_field",
+            ctx.base_url
+        ))
+        .await
+        .expect("Failed to send request");
+
+    assert!(res.status().is_success());
+    let body: bool = res.json().await.unwrap();
+    assert!(body);
+
+    let res = ctx
+        .get_with_admin_auth(&format!(
+            "{}/redis/hash/delete_hash/delete_field",
+            ctx.base_url
+        ))
+        .await
+        .expect("Failed to send request");
+
+    assert!(res.status().is_success());
+    let body: Option<String> = res.json().await.unwrap();
+    assert_eq!(body, None);
 }

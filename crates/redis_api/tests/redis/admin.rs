@@ -5,7 +5,9 @@ use serde_json::Value;
 #[tokio::test]
 async fn test_admin_ping() {
     let mut ctx = TestContext::new(get_test_base_url().await);
-    ctx.authenticate_admin().await.expect("Failed to authenticate admin");
+    ctx.authenticate_admin()
+        .await
+        .expect("Failed to authenticate admin");
 
     let res = ctx
         .get_with_admin_auth(&format!("{}/redis/admin/ping", ctx.base_url))
@@ -20,7 +22,9 @@ async fn test_admin_ping() {
 #[tokio::test]
 async fn test_admin_info() {
     let mut ctx = TestContext::new(get_test_base_url().await);
-    ctx.authenticate_admin().await.expect("Failed to authenticate admin");
+    ctx.authenticate_admin()
+        .await
+        .expect("Failed to authenticate admin");
 
     let res = ctx
         .get_with_admin_auth(&format!("{}/redis/admin/info", ctx.base_url))
@@ -35,7 +39,9 @@ async fn test_admin_info() {
 #[tokio::test]
 async fn test_admin_dbsize() {
     let mut ctx = TestContext::new(get_test_base_url().await);
-    ctx.authenticate_admin().await.expect("Failed to authenticate admin");
+    ctx.authenticate_admin()
+        .await
+        .expect("Failed to authenticate admin");
 
     let res = ctx
         .get_with_admin_auth(&format!("{}/redis/admin/dbsize", ctx.base_url))
@@ -50,7 +56,9 @@ async fn test_admin_dbsize() {
 #[tokio::test]
 async fn test_admin_health() {
     let mut ctx = TestContext::new(get_test_base_url().await);
-    ctx.authenticate_admin().await.expect("Failed to authenticate admin");
+    ctx.authenticate_admin()
+        .await
+        .expect("Failed to authenticate admin");
 
     let res = ctx
         .get_with_admin_auth(&format!("{}/redis/admin/health", ctx.base_url))
@@ -66,7 +74,9 @@ async fn test_admin_health() {
 #[tokio::test]
 async fn test_admin_status() {
     let mut ctx = TestContext::new(get_test_base_url().await);
-    ctx.authenticate_admin().await.expect("Failed to authenticate admin");
+    ctx.authenticate_admin()
+        .await
+        .expect("Failed to authenticate admin");
 
     let res = ctx
         .get_with_admin_auth(&format!("{}/redis/admin/status", ctx.base_url))
@@ -82,7 +92,9 @@ async fn test_admin_status() {
 #[tokio::test]
 async fn test_admin_memory_stats() {
     let mut ctx = TestContext::new(get_test_base_url().await);
-    ctx.authenticate_admin().await.expect("Failed to authenticate admin");
+    ctx.authenticate_admin()
+        .await
+        .expect("Failed to authenticate admin");
 
     let res = ctx
         .get_with_admin_auth(&format!("{}/redis/admin/stats/memory", ctx.base_url))
@@ -97,7 +109,9 @@ async fn test_admin_memory_stats() {
 #[tokio::test]
 async fn test_admin_config_all() {
     let mut ctx = TestContext::new(get_test_base_url().await);
-    ctx.authenticate_admin().await.expect("Failed to authenticate admin");
+    ctx.authenticate_admin()
+        .await
+        .expect("Failed to authenticate admin");
 
     let res = ctx
         .get_with_admin_auth(&format!("{}/redis/admin/config/all", ctx.base_url))
@@ -112,7 +126,9 @@ async fn test_admin_config_all() {
 #[tokio::test]
 async fn test_admin_flushdb() {
     let mut ctx = TestContext::new(get_test_base_url().await);
-    ctx.authenticate_admin().await.expect("Failed to authenticate admin");
+    ctx.authenticate_admin()
+        .await
+        .expect("Failed to authenticate admin");
 
     let res = ctx
         .delete_with_admin_auth(&format!("{}/redis/admin/flushdb", ctx.base_url))
