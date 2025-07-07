@@ -107,7 +107,7 @@ pub struct KeyRoutingRule {
 }
 
 /// Pattern matching types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum PatternType {
     Exact,
@@ -440,6 +440,17 @@ impl Default for ServerConfig {
             max_body_size: 10485760, // 10MB
             cors_enabled: true,
             cors_origins: vec!["*".to_string()],
+        }
+    }
+}
+
+impl Default for LoadBalancingConfig {
+    fn default() -> Self {
+        Self {
+            strategy: dbx_core::LoadBalancingStrategy::RoundRobin,
+            backends: Vec::new(),
+            health_check_interval_ms: 30000,
+            weights: Some(HashMap::new()),
         }
     }
 }

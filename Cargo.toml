@@ -5,6 +5,7 @@ members = [
     "crates/redis_client",
     "crates/dbx-core",
     "crates/dbx-config",
+    "crates/dbx-router",
     "bindings/redis_ts",
 ]
 resolver = "2"
