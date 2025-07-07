@@ -2,7 +2,6 @@
 members = [
     "crates/adapter",
     "crates/dbx-api",
-    "crates/redis_client",
     "crates/dbx-core",
     "crates/dbx-config",
     "crates/dbx-router",

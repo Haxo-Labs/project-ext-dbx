@@ -1,8 +1,8 @@
 use std::env;
 use tracing::{error, info};
 
-use dbx_redis_api::config::ConfigError;
-use dbx_redis_api::server::{run_server, ServerError};
+use dbx_api::config::ConfigError;
+use dbx_api::server::{run_server, ServerError};
 
 #[tokio::main]
 async fn main() {

@@ -11,13 +11,12 @@ description = "NAPI bindings for DBX Redis SDK"
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "2.15", default-features = false, features = ["napi4"] }
-napi-derive = "2.15"
-tokio = { version = "1.0", features = ["full"] }
+napi = { version = "2.14.1", default-features = false, features = ["napi8"] }
+napi-derive = "2.14.0"
+tokio = { version = "1.40.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
-dbx-redis-client = { path = "../../crates/redis_client", features = ["websocket"] }
 
 [build-dependencies]
 napi-build = "2.2"

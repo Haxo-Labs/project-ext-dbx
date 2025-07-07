@@ -2,32 +2,34 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{DataOperation, DataResult, DbxError, QueryOperation, QueryResult, StreamOperation, StreamResult};
+use crate::{
+    DataOperation, DataResult, DbxError, QueryOperation, QueryResult, StreamOperation, StreamResult,
+};
 
 /// Universal backend trait that all database implementations must implement
 #[async_trait]
 pub trait UniversalBackend: Send + Sync {
     /// Get the name of this backend
     fn name(&self) -> &str;
-    
+
     /// Get the capabilities of this backend
     fn capabilities(&self) -> BackendCapabilities;
-    
+
     /// Execute a data operation
     async fn execute_data(&self, operation: DataOperation) -> Result<DataResult, DbxError>;
-    
+
     /// Execute a query operation
     async fn execute_query(&self, operation: QueryOperation) -> Result<QueryResult, DbxError>;
-    
+
     /// Execute a stream operation
     async fn execute_stream(&self, operation: StreamOperation) -> Result<StreamResult, DbxError>;
-    
+
     /// Health check for this backend
     async fn health_check(&self) -> Result<BackendHealth, DbxError>;
-    
+
     /// Get backend statistics
     async fn get_stats(&self) -> Result<BackendStats, DbxError>;
-    
+
     /// Test the connection to the backend
     async fn test_connection(&self) -> Result<(), DbxError>;
 }
@@ -121,7 +123,7 @@ pub struct BackendHealth {
 }
 
 /// Health status levels
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum HealthStatus {
     Healthy,
@@ -229,4 +231,4 @@ impl Default for StreamCapabilities {
             stream_groups: false,
         }
     }
-} 
+}

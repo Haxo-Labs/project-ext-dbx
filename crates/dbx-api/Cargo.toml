@@ -1,16 +1,17 @@
 [package]
-name = "dbx-redis-api"
+name = "dbx-api"
 version = "0.1.6"
 edition = "2021"
 
 [[bin]]
-name = "dbx-redis-api"
+name = "dbx"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-async-trait = { workspace = true }
-axum = { workspace = true, features = ["ws"] }
+async-trait = "0.1"
+axum = { version = "0.7", features = ["multipart"] }
+base64 = "0.22"
 bcrypt = "0.16.0"
 chrono = { workspace = true }
 dbx-adapter = { path = "../adapter", features = ["async", "connection-pool"] }
