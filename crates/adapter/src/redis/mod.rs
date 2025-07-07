@@ -6,7 +6,13 @@
 //! transactions, and Lua scripts.
 
 pub mod client;
+pub mod factory;
 pub mod primitives;
+pub mod universal;
+
+// Re-export key types for convenience
+pub use factory::{create_redis_factory, RedisBackendFactory};
+pub use universal::UniversalRedisBackend;
 
 use redis::{Connection, RedisError, RedisResult, Script};
 

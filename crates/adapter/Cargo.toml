@@ -1,32 +1,36 @@
 [package]
 name = "dbx-adapter"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Database adapters and utilities for DBX"
+version = "0.1.6"
+edition = "2021"
+description = "Database adapters for DBX"
+license = "MIT"
+repository = "https://github.com/effortlesslabs/dbx"
 
 [lib]
 name = "dbx_adapter"
 path = "src/lib.rs"
 
 [dependencies]
-redis = { workspace = true }
-thiserror = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true, optional = true }
-async-trait = { workspace = true }
-mockall = { workspace = true, optional = true }
+dbx-core = { path = "../dbx-core" }
+dbx-config = { path = "../dbx-config" }
+dbx-router = { path = "../dbx-router" }
+redis = { version = "0.23", features = ["tokio-comp", "aio"] }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.21"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+uuid = { version = "1.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
-mockall = { workspace = true }
-tokio.workspace = true
+tokio-test = "0.4"
 dotenv = "0.15"
 ctor = "0.2"
 
 [features]
 default = []
-async = ["tokio", "redis/tokio-comp"]
-connection-pool = ["async"]
+connection-pool = []
+async = ["redis/aio"]
