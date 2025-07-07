@@ -9,74 +9,15 @@ use crate::{
         jwt_auth_middleware, require_admin_role, require_user_role, JwtService, UserStore,
     },
     models::ApiResponse,
-    routes::{
-        auth::create_auth_routes,
-        redis::{admin, hash, set, string},
-        redis_ws::{admin as ws_admin, hash as ws_hash, set as ws_set, string as ws_string},
-    },
+    routes::auth::create_auth_routes,
 };
-use dbx_adapter::redis::{client::RedisPool, factory::RedisBackendFactory};
+use dbx_adapter::redis::factory::RedisBackendFactory;
 use dbx_config::{BackendConfig, DbxConfig, LoadBalancingConfig, RoutingConfig};
 use dbx_core::LoadBalancingStrategy;
-use dbx_router::{BackendRegistry, BackendRegistryBuilder, BackendRouter};
-use futures::TryFutureExt;
+use dbx_router::{BackendRegistryBuilder, BackendRouter};
 use std::collections::HashMap;
 
-/// Application state
-#[derive(Clone)]
-pub struct AppState {
-    pub redis_pool: Arc<RedisPool>,
-    pub jwt_service: Arc<JwtService>,
-    pub user_store: Arc<UserStore>,
-}
-
-impl AppState {
-    pub async fn new() -> Result<Self, ServerError> {
-        let config = AppConfig::from_env().map_err(ServerError::Configuration)?;
-
-        // Create Redis pool with default pool size
-        let pool_size = 10; // Default pool size since it's not in config anymore
-        let redis_pool = Arc::new(
-            RedisPool::new(&config.server.redis_url, pool_size)
-                .map_err(|e| ServerError::DatabaseConnection(e.to_string()))?,
-        );
-
-        // Create JWT service
-        let jwt_service = Arc::new(JwtService::new(config.jwt));
-
-        // Create user store - optionally with default admin
-        let user_store = if config.create_default_admin {
-            if let (Some(username), Some(password)) = (
-                &config.default_admin_username,
-                &config.default_admin_password,
-            ) {
-                Arc::new(
-                    UserStore::new_with_admin(redis_pool.clone(), username, password)
-                        .await
-                        .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
-                )
-            } else {
-                return Err(ServerError::Configuration(
-                    ConfigError::MissingDefaultAdminPassword,
-                ));
-            }
-        } else {
-            Arc::new(
-                UserStore::new(redis_pool.clone())
-                    .await
-                    .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
-            )
-        };
-
-        Ok(Self {
-            redis_pool,
-            jwt_service,
-            user_store,
-        })
-    }
-}
-
-/// Universal Application state using BackendRouter
+/// Application state for the universal API
 #[derive(Clone)]
 pub struct UniversalAppState {
     pub backend_router: Arc<BackendRouter>,
@@ -85,78 +26,59 @@ pub struct UniversalAppState {
 }
 
 impl UniversalAppState {
-    /// Create new universal app state with configuration
+    /// Create new application state with backend router
     pub async fn new(config_path: Option<&str>) -> Result<Self, ServerError> {
         let app_config = AppConfig::from_env().map_err(ServerError::Configuration)?;
 
-        // Create universal configuration
-        let dbx_config = if let Some(path) = config_path {
-            // Load from YAML file
+        // Load or create configuration
+        let config = if let Some(path) = config_path {
             dbx_config::ConfigLoader::load_from_file(path)
                 .await
-                .map_err(|e| {
-                    ServerError::Configuration(ConfigError::MissingEnvironmentVariable(format!(
-                        "Config load error: {}",
-                        e
-                    )))
-                })?
+                .map_err(|e| ServerError::Configuration(ConfigError::InvalidJwtSecret))?
         } else {
-            // Create default configuration from environment
             Self::create_default_config(&app_config)?
         };
 
-        // Create backend registry and register Redis factory
-        let registry = BackendRegistryBuilder::new()
-            .with_factory("redis", RedisBackendFactory::new())
-            .build();
+        // Validate configuration
+        dbx_config::ConfigValidator::validate_config(&config)
+            .map_err(|e| ServerError::Configuration(ConfigError::InvalidJwtSecret))?;
+
+        // Build backend registry
+        let mut registry_builder = BackendRegistryBuilder::new();
+
+        // Register Redis backend factory
+        let redis_factory = RedisBackendFactory::new();
+        registry_builder = registry_builder.with_factory("redis", redis_factory);
+
+        // Build the registry
+        let registry = registry_builder.build();
 
         // Initialize backends from configuration
-        registry
-            .initialize_backends(&dbx_config)
-            .await
-            .map_err(|e| ServerError::DatabaseConnection(e.to_string()))?;
+        registry.initialize_backends(&config).await.map_err(|e| {
+            ServerError::DatabaseConnection(format!("Failed to initialize backends: {}", e))
+        })?;
 
         // Create backend router
-        let backend_router = Arc::new(
-            BackendRouter::new(registry, &dbx_config)
-                .map_err(|e| ServerError::DatabaseConnection(e.to_string()))?,
-        );
+        let backend_router = BackendRouter::new(registry, &config).map_err(|e| {
+            ServerError::DatabaseConnection(format!("Failed to create router: {}", e))
+        })?;
 
-        // Create Redis pool for legacy user store (temporary)
+        // Create Redis connection for user store
         let redis_pool = Arc::new(
-            RedisPool::new(&app_config.server.redis_url, 10)
-                .map_err(|e| ServerError::DatabaseConnection(e.to_string()))?,
+            dbx_adapter::redis::client::RedisPool::new(&app_config.server.redis_url, 5).map_err(
+                |e| ServerError::DatabaseConnection(format!("Redis connection failed: {}", e)),
+            )?,
         );
 
-        // Create JWT service
-        let jwt_service = Arc::new(JwtService::new(app_config.jwt));
-
-        // Create user store
-        let user_store = if app_config.create_default_admin {
-            if let (Some(username), Some(password)) = (
-                &app_config.default_admin_username,
-                &app_config.default_admin_password,
-            ) {
-                Arc::new(
-                    UserStore::new_with_admin(redis_pool.clone(), username, password)
-                        .await
-                        .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
-                )
-            } else {
-                return Err(ServerError::Configuration(
-                    ConfigError::MissingDefaultAdminPassword,
-                ));
-            }
-        } else {
-            Arc::new(
-                UserStore::new(redis_pool.clone())
-                    .await
-                    .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
-            )
-        };
+        // Create JWT service and user store
+        let jwt_config = app_config.jwt.clone();
+        let jwt_service = Arc::new(JwtService::new(jwt_config));
+        let user_store = Arc::new(UserStore::new(redis_pool).await.map_err(|e| {
+            ServerError::UserStoreInitialization(format!("Failed to initialize user store: {}", e))
+        })?);
 
         Ok(Self {
-            backend_router,
+            backend_router: Arc::new(backend_router),
             jwt_service,
             user_store,
         })
@@ -213,88 +135,16 @@ async fn health_check() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("Server is running".to_string()))
 }
 
-/// Create the main application router
-pub fn create_app(state: AppState) -> Router {
-    // Create authentication routes (public)
-    let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
-
-    // Create protected Redis routes with authentication middleware for users and admins
-    let user_redis_routes = Router::new()
-        .merge(string::create_redis_string_routes(state.redis_pool.clone()))
-        .merge(hash::create_redis_hash_routes(state.redis_pool.clone()))
-        .merge(set::create_redis_set_routes(state.redis_pool.clone()))
-        .layer(from_fn_with_state((), require_user_role))
-        .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
-        ));
-
-    // Create admin-only routes with separate auth chain
-    let admin_redis_routes = Router::new()
-        .merge(admin::create_redis_admin_routes(state.redis_pool.clone()))
-        .layer(from_fn_with_state((), require_admin_role))
-        .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
-        ));
-
-    // Create protected Redis WebSocket routes with authentication middleware
-    let user_redis_ws_routes = Router::new()
-        .merge(ws_string::create_redis_ws_string_routes(
-            state.redis_pool.clone(),
-        ))
-        .merge(ws_hash::create_redis_ws_hash_routes(
-            state.redis_pool.clone(),
-        ))
-        .merge(ws_set::create_redis_ws_set_routes(state.redis_pool.clone()))
-        .layer(from_fn_with_state((), require_user_role))
-        .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
-        ));
-
-    let admin_redis_ws_routes = Router::new()
-        .merge(ws_admin::create_redis_ws_admin_routes(
-            state.redis_pool.clone(),
-        ))
-        .layer(from_fn_with_state((), require_admin_role))
-        .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
-        ));
-
-    Router::new()
-        .route("/health", get(health_check))
-        .nest("/auth", auth_routes)
-        .nest("/redis", user_redis_routes)
-        .nest("/redis/admin", admin_redis_routes)
-        .nest("/redis_ws", user_redis_ws_routes)
-        .nest("/redis_ws/admin", admin_redis_ws_routes)
-        .layer(CorsLayer::permissive())
-}
-
 /// Create the universal application router with BackendRouter
 pub fn create_universal_app(state: UniversalAppState) -> Router {
     // Create authentication routes (public)
     let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
 
-    // TODO: Uncomment when universal routes are fixed
-    // Create universal data routes
-    // let universal_data_routes = Router::new()
-    //     .merge(data::create_universal_data_routes(state.backend_router.clone()))
-    //     .layer(from_fn_with_state((), require_user_role))
-    //     .layer(from_fn_with_state(
-    //         state.jwt_service.clone(),
-    //         jwt_auth_middleware,
-    //     ));
-
-    // Create universal health routes (public for now)
-    // let universal_health_routes = health::create_universal_health_routes(state.backend_router.clone());
-
-    // For now, create a basic router structure for the universal API
+    // Create basic universal API routes
     let universal_v1_routes = Router::new()
         .route("/status", get(universal_status_check))
         .route("/backends", get(list_backends))
+        .route("/health", get(universal_health_check))
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state((), require_user_role))
         .layer(from_fn_with_state(
@@ -332,29 +182,22 @@ async fn list_backends(
     Json(ApiResponse::success(backends))
 }
 
-/// Start the server
-pub async fn run_server() -> Result<(), ServerError> {
-    let state = AppState::new().await?;
-    let config = AppConfig::from_env().map_err(ServerError::Configuration)?;
+/// Universal health check endpoint
+async fn universal_health_check(
+    State(router): State<Arc<BackendRouter>>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let response = serde_json::json!({
+        "status": "healthy",
+        "api_version": "v1",
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "backends": ["default"]
+    });
 
-    let app = create_app(state);
-
-    let addr = format!("{}:{}", config.server.host, config.server.port);
-    let listener = TcpListener::bind(&addr)
-        .await
-        .map_err(|e| ServerError::ServerBinding(format!("Failed to bind to {}: {}", addr, e)))?;
-
-    println!("Server running on http://{}", addr);
-
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| ServerError::ServerRuntime(e.to_string()))?;
-
-    Ok(())
+    Json(ApiResponse::success(response))
 }
 
-/// Start the universal server with BackendRouter
-pub async fn run_universal_server(config_path: Option<&str>) -> Result<(), ServerError> {
+/// Start the universal server with BackendRouter (now the main/default server)
+pub async fn run_server(config_path: Option<&str>) -> Result<(), ServerError> {
     let state = UniversalAppState::new(config_path).await?;
     let config = AppConfig::from_env().map_err(ServerError::Configuration)?;
 
@@ -365,11 +208,12 @@ pub async fn run_universal_server(config_path: Option<&str>) -> Result<(), Serve
         .await
         .map_err(|e| ServerError::ServerBinding(format!("Failed to bind to {}: {}", addr, e)))?;
 
-    println!("Universal DBX Server running on http://{}", addr);
+    println!("DBX Server running on http://{}", addr);
     println!("API Endpoints:");
     println!("  Health: GET /health");
-    println!("  Universal Health: GET /api/v1/health");
-    println!("  List Backends: GET /api/v1/backends");
+    println!("  Data Operations: POST/GET/PUT/DELETE /api/v1/data/{{key}}");
+    println!("  Query Operations: POST /api/v1/query");
+    println!("  Stream Operations: POST /api/v1/stream/{{stream}}");
     println!("  Authentication: POST /auth/login");
 
     axum::serve(listener, app)
@@ -379,9 +223,9 @@ pub async fn run_universal_server(config_path: Option<&str>) -> Result<(), Serve
     Ok(())
 }
 
-/// Public run function for compatibility
+/// Public run function for compatibility  
 pub async fn run() -> Result<(), ConfigError> {
-    run_server().await.map_err(|e| match e {
+    run_server(None).await.map_err(|e| match e {
         ServerError::Configuration(config_err) => config_err,
         _ => ConfigError::MissingEnvironmentVariable("SERVER_ERROR".to_string()),
     })
@@ -433,10 +277,10 @@ mod tests {
         std::env::remove_var("DEFAULT_ADMIN_PASSWORD");
     }
 
-    /// Helper function to create AppState for tests, handling user conflicts gracefully
-    async fn create_test_app_state() -> AppState {
+    /// Helper function to create UniversalAppState for tests, handling user conflicts gracefully
+    async fn create_test_universal_app_state() -> UniversalAppState {
         setup_test_env();
-        let result = AppState::new().await;
+        let result = UniversalAppState::new(None).await;
         cleanup_test_env();
 
         match result {
@@ -445,9 +289,9 @@ mod tests {
                 // If user already exists from parallel tests, create without default admin
                 setup_test_env();
                 std::env::remove_var("CREATE_DEFAULT_ADMIN");
-                let state = AppState::new()
+                let state = UniversalAppState::new(None)
                     .await
-                    .expect("Failed to create AppState without default admin");
+                    .expect("Failed to create UniversalAppState without default admin");
                 cleanup_test_env();
                 state
             }
@@ -455,7 +299,9 @@ mod tests {
                 // For any other error, try without default admin
                 setup_test_env();
                 std::env::remove_var("CREATE_DEFAULT_ADMIN");
-                let state = AppState::new().await.expect("Failed to create AppState");
+                let state = UniversalAppState::new(None)
+                    .await
+                    .expect("Failed to create UniversalAppState");
                 cleanup_test_env();
                 state
             }
@@ -463,20 +309,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_app_state_success() {
-        let _app_state = create_test_app_state().await;
+    async fn test_create_universal_app_state_success() {
+        let _app_state = create_test_universal_app_state().await;
         // If we reach here, the app state was created successfully
         assert!(true);
     }
 
     #[tokio::test]
-    async fn test_create_app_state_with_default_admin() {
+    async fn test_create_universal_app_state_with_default_admin() {
         setup_test_env();
         std::env::set_var("CREATE_DEFAULT_ADMIN", "true");
         std::env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
         std::env::set_var("DEFAULT_ADMIN_PASSWORD", "admin123");
 
-        let result = AppState::new().await;
+        let result = UniversalAppState::new(None).await;
         // Default admin creation might fail in some test environments (concurrent tests, permissions, etc.)
         // The important thing is that the application handles the configuration correctly
         match result {
@@ -498,13 +344,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_app_state_missing_admin_credentials() {
+    async fn test_create_universal_app_state_missing_admin_credentials() {
         setup_test_env();
         std::env::set_var("CREATE_DEFAULT_ADMIN", "true");
         std::env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
         std::env::remove_var("DEFAULT_ADMIN_PASSWORD");
 
-        let result = AppState::new().await;
+        let result = UniversalAppState::new(None).await;
         assert!(result.is_err());
 
         if let Err(ServerError::Configuration(_)) = result {
@@ -517,9 +363,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_app_with_cors() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+    async fn test_create_universal_app_with_cors() {
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let request = Request::builder()
             .method(Method::OPTIONS)
@@ -535,8 +381,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_endpoint() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -550,8 +396,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_middleware_chain() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -565,8 +411,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_cors_configuration() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let request = Request::builder()
             .method(Method::OPTIONS)
@@ -581,11 +427,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_app_state_error_handling() {
+    async fn test_create_universal_app_state_error_handling() {
         setup_test_env();
         std::env::set_var("REDIS_URL", "redis://invalid:6379");
 
-        let result = AppState::new().await;
+        let result = UniversalAppState::new(None).await;
         assert!(result.is_ok());
 
         cleanup_test_env();
@@ -593,8 +439,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_docs_endpoint() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -608,8 +454,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_not_found_endpoint() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -623,12 +469,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_protected_route_without_auth() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
-            .uri("/redis/string/test")
+            .uri("/api/v1/data/test")
             .body(Body::empty())
             .unwrap();
 
@@ -638,12 +484,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_route_without_auth() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
-            .uri("/redis/admin/ping")
+            .uri("/api/v1/data/admin/test")
             .body(Body::empty())
             .unwrap();
 
@@ -653,8 +499,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_websocket_route_without_auth() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let response = app
             .oneshot(
@@ -672,8 +518,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_route_structure() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         let health_request = Request::builder()
             .method(Method::GET)
@@ -694,31 +540,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_app_state_cloning() {
-        let app_state = create_test_app_state().await;
+    async fn test_universal_app_state_cloning() {
+        let app_state = create_test_universal_app_state().await;
 
-        let redis_pool_clone = app_state.redis_pool.clone();
+        let backend_router_clone = app_state.backend_router.clone();
         let jwt_service_clone = app_state.jwt_service.clone();
         let user_store_clone = app_state.user_store.clone();
 
-        assert!(Arc::ptr_eq(&app_state.redis_pool, &redis_pool_clone));
+        assert!(Arc::ptr_eq(
+            &app_state.backend_router,
+            &backend_router_clone
+        ));
         assert!(Arc::ptr_eq(&app_state.jwt_service, &jwt_service_clone));
         assert!(Arc::ptr_eq(&app_state.user_store, &user_store_clone));
     }
 
     #[tokio::test]
-    async fn test_app_state_structure() {
-        let app_state = create_test_app_state().await;
+    async fn test_universal_app_state_structure() {
+        let app_state = create_test_universal_app_state().await;
 
-        assert!(Arc::strong_count(&app_state.redis_pool) >= 1);
+        assert!(Arc::strong_count(&app_state.backend_router) >= 1);
         assert!(Arc::strong_count(&app_state.jwt_service) >= 1);
         assert!(Arc::strong_count(&app_state.user_store) >= 1);
     }
 
     #[tokio::test]
     async fn test_json_rejection_handling() {
-        let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app_state = create_test_universal_app_state().await;
+        let app = create_universal_app(app_state);
 
         // Test invalid JSON handling
         let request = Request::builder()
