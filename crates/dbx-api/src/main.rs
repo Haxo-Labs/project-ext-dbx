@@ -1,8 +1,8 @@
 use std::env;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-use dbx_redis_api::server::{run_server, ServerError};
 use dbx_redis_api::config::ConfigError;
+use dbx_redis_api::server::{run_server, run_universal_server, ServerError};
 
 #[tokio::main]
 async fn main() {
@@ -18,23 +18,61 @@ async fn main() {
         std::process::exit(1);
     }
 
-    info!("Starting DBX");
+    // Check which server mode to run
+    let args: Vec<String> = env::args().collect();
+    let use_universal =
+        args.contains(&"--universal".to_string()) || env::var("DBX_UNIVERSAL_MODE").is_ok();
 
-    if let Err(e) = run_server().await {
-        match e {
-            ServerError::Configuration(config_err) => {
-                error!("Configuration error: {}", config_err);
-                error!("Make sure all required environment variables are set");
-            }
-            ServerError::DatabaseConnection(db_err) => {
-                error!("Database connection error: {}", db_err);
-                error!("Make sure Redis is running and REDIS_URL is correct");
-            }
-            _ => {
-                error!("Server error: {}", e);
-            }
+    let config_path = args
+        .iter()
+        .position(|arg| arg == "--config")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str());
+
+    if use_universal {
+        info!("Starting DBX Universal Server");
+        if let Some(path) = config_path {
+            info!("Using configuration file: {}", path);
+        } else {
+            info!("Using default configuration from environment variables");
         }
-        std::process::exit(1);
+
+        if let Err(e) = run_universal_server(config_path).await {
+            match e {
+                ServerError::Configuration(config_err) => {
+                    error!("Configuration error: {}", config_err);
+                    error!("Make sure all required environment variables are set or provide a valid config file");
+                }
+                ServerError::DatabaseConnection(db_err) => {
+                    error!("Database connection error: {}", db_err);
+                    error!("Make sure all configured backends are accessible");
+                }
+                _ => {
+                    error!("Server error: {}", e);
+                }
+            }
+            std::process::exit(1);
+        }
+    } else {
+        info!("Starting DBX Legacy Redis Server");
+        warn!("Running in legacy mode. Use --universal flag for the new universal API");
+
+        if let Err(e) = run_server().await {
+            match e {
+                ServerError::Configuration(config_err) => {
+                    error!("Configuration error: {}", config_err);
+                    error!("Make sure all required environment variables are set");
+                }
+                ServerError::DatabaseConnection(db_err) => {
+                    error!("Database connection error: {}", db_err);
+                    error!("Make sure Redis is running and REDIS_URL is correct");
+                }
+                _ => {
+                    error!("Server error: {}", e);
+                }
+            }
+            std::process::exit(1);
+        }
     }
 }
 

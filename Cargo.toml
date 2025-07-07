@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "crates/adapter",
-    "crates/redis_api",
+    "crates/dbx-api",
     "crates/redis_client",
     "crates/dbx-core",
     "crates/dbx-config",

@@ -1,4 +1,4 @@
-use axum::{middleware::from_fn_with_state, response::Json, routing::get, Router};
+use axum::{extract::State, middleware::from_fn_with_state, response::Json, routing::get, Router};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
@@ -19,6 +19,7 @@ use dbx_adapter::redis::{client::RedisPool, factory::RedisBackendFactory};
 use dbx_config::{BackendConfig, DbxConfig, LoadBalancingConfig, RoutingConfig};
 use dbx_core::LoadBalancingStrategy;
 use dbx_router::{BackendRegistry, BackendRegistryBuilder, BackendRouter};
+use futures::TryFutureExt;
 use std::collections::HashMap;
 
 /// Application state
@@ -91,12 +92,14 @@ impl UniversalAppState {
         // Create universal configuration
         let dbx_config = if let Some(path) = config_path {
             // Load from YAML file
-            dbx_config::ConfigLoader::from_file(path).map_err(|e| {
-                ServerError::Configuration(ConfigError::MissingEnvironmentVariable(format!(
-                    "Config load error: {}",
-                    e
-                )))
-            })?
+            dbx_config::ConfigLoader::load_from_file(path)
+                .await
+                .map_err(|e| {
+                    ServerError::Configuration(ConfigError::MissingEnvironmentVariable(format!(
+                        "Config load error: {}",
+                        e
+                    )))
+                })?
         } else {
             // Create default configuration from environment
             Self::create_default_config(&app_config)?
@@ -270,6 +273,65 @@ pub fn create_app(state: AppState) -> Router {
         .layer(CorsLayer::permissive())
 }
 
+/// Create the universal application router with BackendRouter
+pub fn create_universal_app(state: UniversalAppState) -> Router {
+    // Create authentication routes (public)
+    let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
+
+    // TODO: Uncomment when universal routes are fixed
+    // Create universal data routes
+    // let universal_data_routes = Router::new()
+    //     .merge(data::create_universal_data_routes(state.backend_router.clone()))
+    //     .layer(from_fn_with_state((), require_user_role))
+    //     .layer(from_fn_with_state(
+    //         state.jwt_service.clone(),
+    //         jwt_auth_middleware,
+    //     ));
+
+    // Create universal health routes (public for now)
+    // let universal_health_routes = health::create_universal_health_routes(state.backend_router.clone());
+
+    // For now, create a basic router structure for the universal API
+    let universal_v1_routes = Router::new()
+        .route("/status", get(universal_status_check))
+        .route("/backends", get(list_backends))
+        .with_state(state.backend_router.clone())
+        .layer(from_fn_with_state((), require_user_role))
+        .layer(from_fn_with_state(
+            state.jwt_service.clone(),
+            jwt_auth_middleware,
+        ));
+
+    Router::new()
+        .route("/health", get(health_check))
+        .nest("/auth", auth_routes)
+        .nest("/api/v1", universal_v1_routes)
+        .layer(CorsLayer::permissive())
+}
+
+/// Universal status check endpoint (simplified)
+async fn universal_status_check(
+    State(router): State<Arc<BackendRouter>>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let response = serde_json::json!({
+        "status": "running",
+        "mode": "universal",
+        "timestamp": chrono::Utc::now().timestamp_millis(),
+        "version": env!("CARGO_PKG_VERSION")
+    });
+
+    Json(ApiResponse::success(response))
+}
+
+/// List available backends endpoint (simplified)
+async fn list_backends(
+    State(_router): State<Arc<BackendRouter>>,
+) -> Json<ApiResponse<Vec<String>>> {
+    // For now, return a static list - will be improved later
+    let backends = vec!["default".to_string()];
+    Json(ApiResponse::success(backends))
+}
+
 /// Start the server
 pub async fn run_server() -> Result<(), ServerError> {
     let state = AppState::new().await?;
@@ -283,6 +345,32 @@ pub async fn run_server() -> Result<(), ServerError> {
         .map_err(|e| ServerError::ServerBinding(format!("Failed to bind to {}: {}", addr, e)))?;
 
     println!("Server running on http://{}", addr);
+
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| ServerError::ServerRuntime(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Start the universal server with BackendRouter
+pub async fn run_universal_server(config_path: Option<&str>) -> Result<(), ServerError> {
+    let state = UniversalAppState::new(config_path).await?;
+    let config = AppConfig::from_env().map_err(ServerError::Configuration)?;
+
+    let app = create_universal_app(state);
+
+    let addr = format!("{}:{}", config.server.host, config.server.port);
+    let listener = TcpListener::bind(&addr)
+        .await
+        .map_err(|e| ServerError::ServerBinding(format!("Failed to bind to {}: {}", addr, e)))?;
+
+    println!("Universal DBX Server running on http://{}", addr);
+    println!("API Endpoints:");
+    println!("  Health: GET /health");
+    println!("  Universal Health: GET /api/v1/health");
+    println!("  List Backends: GET /api/v1/backends");
+    println!("  Authentication: POST /auth/login");
 
     axum::serve(listener, app)
         .await
