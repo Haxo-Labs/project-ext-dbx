@@ -28,7 +28,7 @@ impl<T> ApiResponse<T> {
 }
 
 /// User roles for role-based access control
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserRole {
     Admin,
     User,
