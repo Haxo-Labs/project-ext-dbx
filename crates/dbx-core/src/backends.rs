@@ -6,7 +6,8 @@ use crate::{
     DataOperation, DataResult, DbxError, QueryOperation, QueryResult, StreamOperation, StreamResult,
 };
 
-/// Universal backend trait that all database implementations must implement
+/// Backend trait that all database implementations must implement
+/// This provides a database-agnostic interface for all operations
 #[async_trait]
 pub trait UniversalBackend: Send + Sync {
     /// Get the name of this backend

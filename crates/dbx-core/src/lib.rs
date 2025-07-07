@@ -1,7 +1,5 @@
-//! # DBX Core
-//!
-//! Core types and traits for DBX universal database API.
-//! This crate provides the foundational abstractions for database-agnostic operations.
+//! DBX Core
+//! Core types and traits for database-agnostic operations.
 
 pub mod backends;
 pub mod error;

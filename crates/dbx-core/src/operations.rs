@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Universal data operation that can be executed on any backend
+/// Data operation that can be executed on any backend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum DataOperation {
@@ -41,7 +41,7 @@ pub enum DataOperation {
     Batch { operations: Vec<DataOperation> },
 }
 
-/// Universal query operation for complex data retrieval
+/// Query operation for complex data retrieval
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryOperation {
     pub id: Uuid,
@@ -52,7 +52,7 @@ pub struct QueryOperation {
     pub offset: Option<usize>,
 }
 
-/// Query filter for universal queries
+/// Query filter for database queries
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum QueryFilter {
@@ -121,7 +121,7 @@ pub enum SortDirection {
     Desc,
 }
 
-/// Universal stream operation for pub/sub and event streaming
+/// Stream operation for pub/sub and event streaming
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum StreamOperation {
@@ -161,8 +161,8 @@ pub enum TrimStrategy {
     MinId,
 }
 
-/// Universal data value that can represent any data type
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Data value that can represent any data type
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum DataValue {
     Null,
