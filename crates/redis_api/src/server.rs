@@ -41,14 +41,19 @@ impl AppState {
 
         // Create user store - optionally with default admin
         let user_store = if config.create_default_admin {
-            if let (Some(username), Some(password)) = (&config.default_admin_username, &config.default_admin_password) {
+            if let (Some(username), Some(password)) = (
+                &config.default_admin_username,
+                &config.default_admin_password,
+            ) {
                 Arc::new(
                     UserStore::new_with_admin(redis_pool.clone(), username, password)
                         .await
                         .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
                 )
             } else {
-                return Err(ServerError::Configuration(ConfigError::MissingDefaultAdminPassword));
+                return Err(ServerError::Configuration(
+                    ConfigError::MissingDefaultAdminPassword,
+                ));
             }
         } else {
             Arc::new(
@@ -143,7 +148,7 @@ pub async fn run_server() -> Result<(), ServerError> {
         .await
         .map_err(|e| ServerError::ServerBinding(format!("Failed to bind to {}: {}", addr, e)))?;
 
-    println!("🚀 Server running on http://{}", addr);
+    println!("Server running on http://{}", addr);
 
     axum::serve(listener, app)
         .await
@@ -187,7 +192,10 @@ mod tests {
 
     /// Helper function to set up required environment variables for tests
     fn setup_test_env() {
-        std::env::set_var("JWT_SECRET", "test-jwt-secret-that-is-at-least-32-characters-long-for-security");
+        std::env::set_var(
+            "JWT_SECRET",
+            "test-jwt-secret-that-is-at-least-32-characters-long-for-security",
+        );
         std::env::set_var("REDIS_URL", "redis://localhost:6379");
         std::env::set_var("HOST", "127.0.0.1");
         std::env::set_var("PORT", "3000");
