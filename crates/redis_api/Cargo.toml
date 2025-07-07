@@ -14,6 +14,9 @@ axum = { workspace = true, features = ["ws"] }
 bcrypt = "0.16.0"
 chrono = { workspace = true }
 dbx-adapter = { path = "../adapter", features = ["async", "connection-pool"] }
+dbx-core = { path = "../dbx-core" }
+dbx-config = { path = "../dbx-config" }
+dbx-router = { path = "../dbx-router" }
 futures = { workspace = true }
 jsonwebtoken = "9.3.0"
 redis = { workspace = true }

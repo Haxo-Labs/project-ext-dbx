@@ -15,7 +15,11 @@ use crate::{
         redis_ws::{admin as ws_admin, hash as ws_hash, set as ws_set, string as ws_string},
     },
 };
-use dbx_adapter::redis::client::RedisPool;
+use dbx_adapter::redis::{client::RedisPool, factory::RedisBackendFactory};
+use dbx_config::{BackendConfig, DbxConfig, LoadBalancingConfig, RoutingConfig};
+use dbx_core::LoadBalancingStrategy;
+use dbx_router::{BackendRegistry, BackendRegistryBuilder, BackendRouter};
+use std::collections::HashMap;
 
 /// Application state
 #[derive(Clone)]
@@ -67,6 +71,136 @@ impl AppState {
             redis_pool,
             jwt_service,
             user_store,
+        })
+    }
+}
+
+/// Universal Application state using BackendRouter
+#[derive(Clone)]
+pub struct UniversalAppState {
+    pub backend_router: Arc<BackendRouter>,
+    pub jwt_service: Arc<JwtService>,
+    pub user_store: Arc<UserStore>,
+}
+
+impl UniversalAppState {
+    /// Create new universal app state with configuration
+    pub async fn new(config_path: Option<&str>) -> Result<Self, ServerError> {
+        let app_config = AppConfig::from_env().map_err(ServerError::Configuration)?;
+
+        // Create universal configuration
+        let dbx_config = if let Some(path) = config_path {
+            // Load from YAML file
+            dbx_config::ConfigLoader::from_file(path).map_err(|e| {
+                ServerError::Configuration(ConfigError::MissingEnvironmentVariable(format!(
+                    "Config load error: {}",
+                    e
+                )))
+            })?
+        } else {
+            // Create default configuration from environment
+            Self::create_default_config(&app_config)?
+        };
+
+        // Create backend registry and register Redis factory
+        let registry = BackendRegistryBuilder::new()
+            .with_factory("redis", RedisBackendFactory::new())
+            .build();
+
+        // Initialize backends from configuration
+        registry
+            .initialize_backends(&dbx_config)
+            .await
+            .map_err(|e| ServerError::DatabaseConnection(e.to_string()))?;
+
+        // Create backend router
+        let backend_router = Arc::new(
+            BackendRouter::new(registry, &dbx_config)
+                .map_err(|e| ServerError::DatabaseConnection(e.to_string()))?,
+        );
+
+        // Create Redis pool for legacy user store (temporary)
+        let redis_pool = Arc::new(
+            RedisPool::new(&app_config.server.redis_url, 10)
+                .map_err(|e| ServerError::DatabaseConnection(e.to_string()))?,
+        );
+
+        // Create JWT service
+        let jwt_service = Arc::new(JwtService::new(app_config.jwt));
+
+        // Create user store
+        let user_store = if app_config.create_default_admin {
+            if let (Some(username), Some(password)) = (
+                &app_config.default_admin_username,
+                &app_config.default_admin_password,
+            ) {
+                Arc::new(
+                    UserStore::new_with_admin(redis_pool.clone(), username, password)
+                        .await
+                        .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
+                )
+            } else {
+                return Err(ServerError::Configuration(
+                    ConfigError::MissingDefaultAdminPassword,
+                ));
+            }
+        } else {
+            Arc::new(
+                UserStore::new(redis_pool.clone())
+                    .await
+                    .map_err(|e| ServerError::UserStoreInitialization(e.to_string()))?,
+            )
+        };
+
+        Ok(Self {
+            backend_router,
+            jwt_service,
+            user_store,
+        })
+    }
+
+    /// Create default configuration from app config
+    fn create_default_config(app_config: &AppConfig) -> Result<DbxConfig, ServerError> {
+        let mut backends = HashMap::new();
+
+        // Add default Redis backend
+        backends.insert(
+            "default".to_string(),
+            BackendConfig {
+                provider: "redis".to_string(),
+                url: app_config.server.redis_url.clone(),
+                pool_size: Some(10),
+                timeout_ms: Some(5000),
+                retry_attempts: Some(3),
+                retry_delay_ms: Some(1000),
+                capabilities: None,
+                additional_config: HashMap::new(),
+            },
+        );
+
+        let routing = RoutingConfig {
+            default_backend: "default".to_string(),
+            key_routing: Vec::new(),
+            operation_routing: HashMap::new(),
+            load_balancing: Some(LoadBalancingConfig {
+                strategy: LoadBalancingStrategy::RoundRobin,
+                backends: vec!["default".to_string()],
+                health_check_interval_ms: 30000,
+                weights: Some({
+                    let mut weights = HashMap::new();
+                    weights.insert("default".to_string(), 1.0);
+                    weights
+                }),
+            }),
+        };
+
+        Ok(DbxConfig {
+            backends,
+            routing,
+            consistency: Default::default(),
+            performance: Default::default(),
+            security: Default::default(),
+            server: Default::default(),
         })
     }
 }
