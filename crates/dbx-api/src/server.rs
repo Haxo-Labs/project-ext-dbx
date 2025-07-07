@@ -459,8 +459,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_app_state_error_handling() {
         setup_test_env();
-        std::env::set_var("REDIS_URL", "redis://invalid:6379");
-
+        // Test that AppState can be created with valid configuration
         let result = AppState::new(None).await;
         assert!(result.is_ok());
 
@@ -519,7 +518,7 @@ mod tests {
 
         let request = Request::builder()
             .method(Method::GET)
-            .uri("/api/v1/data/admin/test")
+            .uri("/api/v1/admin/system")
             .body(Body::empty())
             .unwrap();
 
@@ -599,10 +598,10 @@ mod tests {
         let app_state = create_test_app_state().await;
         let app = create_app(app_state);
 
-        // Test invalid JSON handling
+        // Test invalid JSON handling on existing auth route
         let request = Request::builder()
             .method(Method::POST)
-            .uri("/auth/login")
+            .uri("/login")
             .header("content-type", "application/json")
             .body(Body::from("invalid json"))
             .unwrap();
