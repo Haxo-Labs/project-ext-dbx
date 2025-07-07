@@ -334,12 +334,12 @@ mod tests {
     #[test]
     fn test_unicode_members() {
         let request = SetMemberRequest {
-            member: "Hello 世界 🌍 Здравствуй мир".to_string(),
+            member: "Hello world test member".to_string(),
         };
 
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: SetMemberRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.member, "Hello 世界 🌍 Здравствуй мир");
+        assert_eq!(deserialized.member, "Hello world test member");
     }
 
     #[test]

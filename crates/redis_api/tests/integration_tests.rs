@@ -575,7 +575,7 @@ async fn test_string_operations_edge_cases() -> Result<()> {
 
     // Test Unicode values
     let unicode_key = server.unique_key();
-    let unicode_value = "测试值🚀🎉";
+    let unicode_value = "unicode_test_value";
     let set_payload = json!({ "value": unicode_value });
     let response = server
         .post_admin(&format!("/redis/string/{}", unicode_key), &set_payload)

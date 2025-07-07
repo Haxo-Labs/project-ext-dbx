@@ -545,7 +545,7 @@ mod tests {
     use axum::{
         body::Body,
         extract::Request,
-        http::{header, HeaderMap, HeaderValue, StatusCode},
+        http::{header, HeaderMap, StatusCode},
         middleware::Next,
         response::Response,
     };

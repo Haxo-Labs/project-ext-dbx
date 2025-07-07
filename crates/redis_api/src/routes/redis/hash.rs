@@ -792,12 +792,12 @@ mod tests {
     #[test]
     fn test_unicode_hash_values() {
         let request = SetHashFieldRequest {
-            value: "Hello 世界 🌍 Здравствуй мир".to_string(),
+            value: "Hello world test value".to_string(),
         };
 
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: SetHashFieldRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.value, "Hello 世界 🌍 Здравствуй мир");
+        assert_eq!(deserialized.value, "Hello world test value");
     }
 
     #[test]

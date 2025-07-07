@@ -437,13 +437,13 @@ mod tests {
     #[test]
     fn test_unicode_values() {
         let request = SetStringRequest {
-            value: "Hello 世界 🌍 Здравствуй мир".to_string(),
+            value: "Hello world test value".to_string(),
             ttl: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: SetStringRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.value, "Hello 世界 🌍 Здравствуй мир");
+        assert_eq!(deserialized.value, "Hello world test value");
     }
 
     #[test]

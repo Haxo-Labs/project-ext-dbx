@@ -182,8 +182,7 @@ pub enum ServerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, JwtConfig, ServerConfig};
-    use crate::middleware::UserStore;
+    use crate::config::JwtConfig;
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
     use dbx_adapter::redis::client::RedisPool;

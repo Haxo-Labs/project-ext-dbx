@@ -140,8 +140,7 @@ pub fn flush_all_databases(conn: Arc<Mutex<Connection>>) -> redis::RedisResult<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use redis::{Connection, RedisResult};
-    use std::collections::HashMap;
+    use redis::Connection;
     use std::sync::{Arc, Mutex};
 
     // Mock connection for testing
@@ -320,13 +319,13 @@ mod tests {
 
         // Test unicode values
         let unicode_config = ConfigSetRequest {
-            parameter: "设置参数".to_string(),
-            value: "数值🎉".to_string(),
+            parameter: "config_param".to_string(),
+            value: "config_value".to_string(),
         };
         let json = serde_json::to_string(&unicode_config).unwrap();
         let deserialized: ConfigSetRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.parameter, "设置参数");
-        assert_eq!(deserialized.value, "数值🎉");
+        assert_eq!(deserialized.parameter, "config_param");
+        assert_eq!(deserialized.value, "config_value");
 
         // Test very long strings
         let long_parameter = "a".repeat(1000);

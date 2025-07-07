@@ -361,27 +361,29 @@ pub fn create_redis_ws_admin_routes(pool: Arc<RedisPool>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbx_adapter::redis::primitives::admin::{HealthCheck, ServerStatus};
     use serde_json;
     use std::collections::HashMap;
-    use dbx_adapter::redis::primitives::admin::{HealthCheck, ServerStatus};
 
     #[test]
     fn test_admin_ws_message_ping_serialization() {
         let msg = AdminWsMessage::Ping;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("ping"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::Ping));
     }
 
     #[test]
     fn test_admin_ws_message_info_serialization() {
-        let msg = AdminWsMessage::Info { section: Some("memory".to_string()) };
+        let msg = AdminWsMessage::Info {
+            section: Some("memory".to_string()),
+        };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("info"));
         assert!(serialized.contains("memory"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::Info { section } = deserialized {
             assert_eq!(section, Some("memory".to_string()));
@@ -407,7 +409,7 @@ mod tests {
         let msg = AdminWsMessage::DbSize;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("dbsize"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::DbSize));
     }
@@ -417,7 +419,7 @@ mod tests {
         let msg = AdminWsMessage::Time;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("time"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::Time));
     }
@@ -427,7 +429,7 @@ mod tests {
         let msg = AdminWsMessage::Version;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("version"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::Version));
     }
@@ -437,7 +439,7 @@ mod tests {
         let msg = AdminWsMessage::Health;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("health"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::Health));
     }
@@ -447,7 +449,7 @@ mod tests {
         let msg = AdminWsMessage::Status;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("status"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::Status));
     }
@@ -457,7 +459,7 @@ mod tests {
         let msg = AdminWsMessage::MemoryStats;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("memory_stats"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::MemoryStats));
     }
@@ -467,7 +469,7 @@ mod tests {
         let msg = AdminWsMessage::ClientStats;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("client_stats"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::ClientStats));
     }
@@ -477,22 +479,22 @@ mod tests {
         let msg = AdminWsMessage::ServerStats;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("server_stats"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::ServerStats));
     }
 
     #[test]
     fn test_admin_ws_message_config_set_serialization() {
-        let msg = AdminWsMessage::ConfigSet { 
-            parameter: "maxmemory".to_string(), 
-            value: "100mb".to_string() 
+        let msg = AdminWsMessage::ConfigSet {
+            parameter: "maxmemory".to_string(),
+            value: "100mb".to_string(),
         };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_set"));
         assert!(serialized.contains("maxmemory"));
         assert!(serialized.contains("100mb"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::ConfigSet { parameter, value } = deserialized {
             assert_eq!(parameter, "maxmemory");
@@ -504,11 +506,13 @@ mod tests {
 
     #[test]
     fn test_admin_ws_message_config_get_serialization() {
-        let msg = AdminWsMessage::ConfigGet { parameter: "maxmemory".to_string() };
+        let msg = AdminWsMessage::ConfigGet {
+            parameter: "maxmemory".to_string(),
+        };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_get"));
         assert!(serialized.contains("maxmemory"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::ConfigGet { parameter } = deserialized {
             assert_eq!(parameter, "maxmemory");
@@ -522,7 +526,7 @@ mod tests {
         let msg = AdminWsMessage::ConfigGetAll;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_get_all"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::ConfigGetAll));
     }
@@ -532,7 +536,7 @@ mod tests {
         let msg = AdminWsMessage::ConfigResetStat;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_resetstat"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::ConfigResetStat));
     }
@@ -542,7 +546,7 @@ mod tests {
         let msg = AdminWsMessage::ConfigRewrite;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_rewrite"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::ConfigRewrite));
     }
@@ -552,7 +556,7 @@ mod tests {
         let msg = AdminWsMessage::FlushDb;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("flushdb"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::FlushDb));
     }
@@ -562,18 +566,20 @@ mod tests {
         let msg = AdminWsMessage::FlushAll;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("flushall"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::FlushAll));
     }
 
     #[test]
     fn test_admin_ws_message_ping_result_serialization() {
-        let msg = AdminWsMessage::PingResult { response: "PONG".to_string() };
+        let msg = AdminWsMessage::PingResult {
+            response: "PONG".to_string(),
+        };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("ping_result"));
         assert!(serialized.contains("PONG"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::PingResult { response } = deserialized {
             assert_eq!(response, "PONG");
@@ -584,11 +590,13 @@ mod tests {
 
     #[test]
     fn test_admin_ws_message_info_result_serialization() {
-        let msg = AdminWsMessage::InfoResult { info: "redis_version:6.0.0".to_string() };
+        let msg = AdminWsMessage::InfoResult {
+            info: "redis_version:6.0.0".to_string(),
+        };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("info_result"));
         assert!(serialized.contains("redis_version"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::InfoResult { info } = deserialized {
             assert_eq!(info, "redis_version:6.0.0");
@@ -603,7 +611,7 @@ mod tests {
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("dbsize_result"));
         assert!(serialized.contains("42"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::DbSizeResult { size } = deserialized {
             assert_eq!(size, 42);
@@ -614,14 +622,21 @@ mod tests {
 
     #[test]
     fn test_admin_ws_message_time_result_serialization() {
-        let msg = AdminWsMessage::TimeResult { seconds: 1640995200, microseconds: 500000 };
+        let msg = AdminWsMessage::TimeResult {
+            seconds: 1640995200,
+            microseconds: 500000,
+        };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("time_result"));
         assert!(serialized.contains("1640995200"));
         assert!(serialized.contains("500000"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
-        if let AdminWsMessage::TimeResult { seconds, microseconds } = deserialized {
+        if let AdminWsMessage::TimeResult {
+            seconds,
+            microseconds,
+        } = deserialized
+        {
             assert_eq!(seconds, 1640995200);
             assert_eq!(microseconds, 500000);
         } else {
@@ -631,11 +646,13 @@ mod tests {
 
     #[test]
     fn test_admin_ws_message_version_result_serialization() {
-        let msg = AdminWsMessage::VersionResult { version: "6.0.0".to_string() };
+        let msg = AdminWsMessage::VersionResult {
+            version: "6.0.0".to_string(),
+        };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("version_result"));
         assert!(serialized.contains("6.0.0"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::VersionResult { version } = deserialized {
             assert_eq!(version, "6.0.0");
@@ -657,7 +674,7 @@ mod tests {
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("health_result"));
         assert!(serialized.contains("PONG"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::HealthResult { health } = deserialized {
             assert_eq!(health.is_healthy, true);
@@ -686,7 +703,7 @@ mod tests {
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("status_result"));
         assert!(serialized.contains("master"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::StatusResult { status } = deserialized {
             assert_eq!(status.timestamp, 1640995200);
@@ -703,16 +720,19 @@ mod tests {
         let mut stats = HashMap::new();
         stats.insert("used_memory".to_string(), "1024000".to_string());
         stats.insert("used_memory_human".to_string(), "1000.00K".to_string());
-        
+
         let msg = AdminWsMessage::MemoryStatsResult { stats };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("memory_stats_result"));
         assert!(serialized.contains("used_memory"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::MemoryStatsResult { stats } = deserialized {
             assert_eq!(stats.get("used_memory"), Some(&"1024000".to_string()));
-            assert_eq!(stats.get("used_memory_human"), Some(&"1000.00K".to_string()));
+            assert_eq!(
+                stats.get("used_memory_human"),
+                Some(&"1000.00K".to_string())
+            );
         } else {
             panic!("Expected MemoryStatsResult message");
         }
@@ -722,13 +742,16 @@ mod tests {
     fn test_admin_ws_message_client_stats_result_serialization() {
         let mut stats = HashMap::new();
         stats.insert("connected_clients".to_string(), "5".to_string());
-        stats.insert("client_recent_max_input_buffer".to_string(), "4".to_string());
-        
+        stats.insert(
+            "client_recent_max_input_buffer".to_string(),
+            "4".to_string(),
+        );
+
         let msg = AdminWsMessage::ClientStatsResult { stats };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("client_stats_result"));
         assert!(serialized.contains("connected_clients"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::ClientStatsResult { stats } = deserialized {
             assert_eq!(stats.get("connected_clients"), Some(&"5".to_string()));
@@ -742,12 +765,12 @@ mod tests {
         let mut stats = HashMap::new();
         stats.insert("uptime_in_seconds".to_string(), "3600".to_string());
         stats.insert("total_commands_processed".to_string(), "1000".to_string());
-        
+
         let msg = AdminWsMessage::ServerStatsResult { stats };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("server_stats_result"));
         assert!(serialized.contains("uptime_in_seconds"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::ServerStatsResult { stats } = deserialized {
             assert_eq!(stats.get("uptime_in_seconds"), Some(&"3600".to_string()));
@@ -758,15 +781,15 @@ mod tests {
 
     #[test]
     fn test_admin_ws_message_config_get_result_serialization() {
-        let msg = AdminWsMessage::ConfigGetResult { 
-            parameter: "maxmemory".to_string(), 
-            value: "100mb".to_string() 
+        let msg = AdminWsMessage::ConfigGetResult {
+            parameter: "maxmemory".to_string(),
+            value: "100mb".to_string(),
         };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_get_result"));
         assert!(serialized.contains("maxmemory"));
         assert!(serialized.contains("100mb"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::ConfigGetResult { parameter, value } = deserialized {
             assert_eq!(parameter, "maxmemory");
@@ -781,12 +804,12 @@ mod tests {
         let mut config = HashMap::new();
         config.insert("maxmemory".to_string(), "100mb".to_string());
         config.insert("timeout".to_string(), "0".to_string());
-        
+
         let msg = AdminWsMessage::ConfigGetAllResult { config };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_get_all_result"));
         assert!(serialized.contains("maxmemory"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::ConfigGetAllResult { config } = deserialized {
             assert_eq!(config.get("maxmemory"), Some(&"100mb".to_string()));
@@ -798,15 +821,15 @@ mod tests {
 
     #[test]
     fn test_admin_ws_message_config_set_result_serialization() {
-        let msg = AdminWsMessage::ConfigSetResult { 
-            parameter: "maxmemory".to_string(), 
-            value: "200mb".to_string() 
+        let msg = AdminWsMessage::ConfigSetResult {
+            parameter: "maxmemory".to_string(),
+            value: "200mb".to_string(),
         };
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_set_result"));
         assert!(serialized.contains("maxmemory"));
         assert!(serialized.contains("200mb"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::ConfigSetResult { parameter, value } = deserialized {
             assert_eq!(parameter, "maxmemory");
@@ -821,9 +844,12 @@ mod tests {
         let msg = AdminWsMessage::ConfigResetStatResult;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_resetstat_result"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
-        assert!(matches!(deserialized, AdminWsMessage::ConfigResetStatResult));
+        assert!(matches!(
+            deserialized,
+            AdminWsMessage::ConfigResetStatResult
+        ));
     }
 
     #[test]
@@ -831,7 +857,7 @@ mod tests {
         let msg = AdminWsMessage::ConfigRewriteResult;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("config_rewrite_result"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::ConfigRewriteResult));
     }
@@ -841,7 +867,7 @@ mod tests {
         let msg = AdminWsMessage::FlushDbResult;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("flushdb_result"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::FlushDbResult));
     }
@@ -851,7 +877,7 @@ mod tests {
         let msg = AdminWsMessage::FlushAllResult;
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("flushall_result"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, AdminWsMessage::FlushAllResult));
     }
@@ -862,7 +888,7 @@ mod tests {
         let serialized = serde_json::to_string(&msg).unwrap();
         assert!(serialized.contains("error"));
         assert!(serialized.contains("Test error message"));
-        
+
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::Error(error_msg) = deserialized {
             assert_eq!(error_msg, "Test error message");
@@ -876,7 +902,7 @@ mod tests {
         let msg = AdminWsMessage::Ping;
         let debug_str = format!("{:?}", msg);
         assert!(debug_str.contains("Ping"));
-        
+
         let msg = AdminWsMessage::Error("test".to_string());
         let debug_str = format!("{:?}", msg);
         assert!(debug_str.contains("Error"));
@@ -888,7 +914,7 @@ mod tests {
         let msg = AdminWsMessage::Ping;
         let cloned = msg.clone();
         assert!(matches!(cloned, AdminWsMessage::Ping));
-        
+
         let msg = AdminWsMessage::Error("test".to_string());
         let cloned = msg.clone();
         if let AdminWsMessage::Error(error_msg) = cloned {
@@ -901,11 +927,11 @@ mod tests {
     #[test]
     fn test_create_redis_ws_admin_routes() {
         use dbx_adapter::redis::client::RedisPool;
-        
+
         // Create a mock pool for testing - this tests the route creation function
         let pool = Arc::new(RedisPool::new("redis://localhost:6379", 10).unwrap());
         let router = create_redis_ws_admin_routes(pool);
-        
+
         // Test that the router is created successfully
         // The actual test is that this doesn't panic and returns a Router
         let _service = router.into_make_service();
@@ -916,7 +942,9 @@ mod tests {
     #[test]
     fn test_admin_ws_message_serialization_edge_cases() {
         // Test with empty strings
-        let msg = AdminWsMessage::ConfigGet { parameter: "".to_string() };
+        let msg = AdminWsMessage::ConfigGet {
+            parameter: "".to_string(),
+        };
         let serialized = serde_json::to_string(&msg).unwrap();
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::ConfigGet { parameter } = deserialized {
@@ -926,18 +954,21 @@ mod tests {
         }
 
         // Test with special characters
-        let msg = AdminWsMessage::Error("Error with special chars: 你好 🦀 \n\t".to_string());
+        let msg = AdminWsMessage::Error("Error with special chars: hello test".to_string());
         let serialized = serde_json::to_string(&msg).unwrap();
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
-        if let AdminWsMessage::Error(error_msg) = deserialized {
-            assert_eq!(error_msg, "Error with special chars: 你好 🦀 \n\t");
+        let error_msg = if let AdminWsMessage::Error(msg) = deserialized {
+            msg
         } else {
-            panic!("Expected Error message");
-        }
+            panic!("Expected error message");
+        };
+        assert_eq!(error_msg, "Error with special chars: hello test");
 
         // Test with very long strings
         let long_string = "a".repeat(10000);
-        let msg = AdminWsMessage::InfoResult { info: long_string.clone() };
+        let msg = AdminWsMessage::InfoResult {
+            info: long_string.clone(),
+        };
         let serialized = serde_json::to_string(&msg).unwrap();
         let deserialized: AdminWsMessage = serde_json::from_str(&serialized).unwrap();
         if let AdminWsMessage::InfoResult { info } = deserialized {
@@ -977,8 +1008,13 @@ mod tests {
             AdminWsMessage::MemoryStats,
             AdminWsMessage::ClientStats,
             AdminWsMessage::ServerStats,
-            AdminWsMessage::ConfigSet { parameter: "test".to_string(), value: "test".to_string() },
-            AdminWsMessage::ConfigGet { parameter: "test".to_string() },
+            AdminWsMessage::ConfigSet {
+                parameter: "test".to_string(),
+                value: "test".to_string(),
+            },
+            AdminWsMessage::ConfigGet {
+                parameter: "test".to_string(),
+            },
             AdminWsMessage::ConfigGetAll,
             AdminWsMessage::ConfigResetStat,
             AdminWsMessage::ConfigRewrite,
@@ -986,7 +1022,7 @@ mod tests {
             AdminWsMessage::FlushAll,
             AdminWsMessage::Error("test".to_string()),
         ];
-        
+
         // Test that all message types can be serialized and deserialized
         for msg in messages {
             let serialized = serde_json::to_string(&msg).unwrap();

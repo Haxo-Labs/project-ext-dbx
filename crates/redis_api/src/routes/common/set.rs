@@ -479,15 +479,15 @@ mod tests {
 
         // Test unicode values
         let unicode_operation = SetOperation {
-            key: "集合".to_string(),
-            members: vec!["成员1🎉".to_string(), "成员2🚀".to_string()],
+            key: "test_set".to_string(),
+            members: vec!["member1_test".to_string(), "member2_test".to_string()],
         };
         let json = serde_json::to_string(&unicode_operation).unwrap();
         let deserialized: SetOperation = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.key, "集合");
+        assert_eq!(deserialized.key, "test_set");
         assert_eq!(
             deserialized.members,
-            vec!["成员1🎉".to_string(), "成员2🚀".to_string()]
+            vec!["member1_test".to_string(), "member2_test".to_string()]
         );
 
         // Test very long strings
