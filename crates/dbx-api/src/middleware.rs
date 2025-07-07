@@ -131,11 +131,9 @@ impl JwtService {
 
         decode::<Claims>(token, &self.decoding_key, &validation)
             .map(|token_data| token_data.claims)
-            .map_err(|e| {
-                match e.kind() {
-                    jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::InvalidToken,
-                    _ => AuthError::InvalidToken,
-                }
+            .map_err(|e| match e.kind() {
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::InvalidToken,
+                _ => AuthError::InvalidToken,
             })
     }
 
@@ -569,7 +567,8 @@ mod tests {
         User {
             id: "test_user_id".to_string(),
             username: "testuser".to_string(),
-            password_hash: "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewRgWgHZfb2aQ4He".to_string(),
+            password_hash: "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewRgWgHZfb2aQ4He"
+                .to_string(),
             role: UserRole::User,
             is_active: true,
             created_at: Utc::now(),
@@ -667,7 +666,9 @@ mod tests {
         let user = create_test_user();
 
         let auth_response = jwt_service.generate_tokens(&user).unwrap();
-        let claims = jwt_service.validate_token(&auth_response.access_token).unwrap();
+        let claims = jwt_service
+            .validate_token(&auth_response.access_token)
+            .unwrap();
 
         assert_eq!(claims.sub, user.id);
         assert_eq!(claims.username, user.username);
@@ -708,7 +709,9 @@ mod tests {
         let user = create_test_user();
 
         let auth_response = jwt_service.generate_tokens(&user).unwrap();
-        let refresh_claims = jwt_service.validate_token(&auth_response.refresh_token).unwrap();
+        let refresh_claims = jwt_service
+            .validate_token(&auth_response.refresh_token)
+            .unwrap();
 
         assert_eq!(refresh_claims.token_type, TokenType::Refresh);
         assert_eq!(refresh_claims.sub, user.id);
@@ -721,16 +724,22 @@ mod tests {
         let user = create_test_user();
 
         let auth_response = jwt_service.generate_tokens(&user).unwrap();
-        let new_auth_response = jwt_service.refresh_token(&auth_response.refresh_token).unwrap();
+        let new_auth_response = jwt_service
+            .refresh_token(&auth_response.refresh_token)
+            .unwrap();
 
         assert!(!new_auth_response.access_token.is_empty());
         assert!(!new_auth_response.refresh_token.is_empty());
         assert_eq!(new_auth_response.user.id, user.id);
 
         // Verify tokens are valid JWT tokens with correct claims
-        let access_claims = jwt_service.validate_token(&new_auth_response.access_token).unwrap();
-        let refresh_claims = jwt_service.validate_token(&new_auth_response.refresh_token).unwrap();
-        
+        let access_claims = jwt_service
+            .validate_token(&new_auth_response.access_token)
+            .unwrap();
+        let refresh_claims = jwt_service
+            .validate_token(&new_auth_response.refresh_token)
+            .unwrap();
+
         assert_eq!(access_claims.token_type, TokenType::Access);
         assert_eq!(refresh_claims.token_type, TokenType::Refresh);
         assert_eq!(access_claims.username, user.username);
@@ -768,7 +777,10 @@ mod tests {
     #[test]
     fn test_extract_token_from_header_invalid_format() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, "InvalidFormat token123".parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            "InvalidFormat token123".parse().unwrap(),
+        );
 
         let token = extract_token_from_header(&headers);
         assert!(token.is_none());
@@ -785,15 +797,33 @@ mod tests {
 
     #[test]
     fn test_auth_error_display() {
-        assert_eq!(AuthError::InvalidCredentials.to_string(), "Invalid credentials");
+        assert_eq!(
+            AuthError::InvalidCredentials.to_string(),
+            "Invalid credentials"
+        );
         assert_eq!(AuthError::InvalidToken.to_string(), "Invalid token");
-        assert_eq!(AuthError::TokenGeneration.to_string(), "Token generation failed");
-        assert_eq!(AuthError::InvalidTokenType.to_string(), "Invalid token type");
-        assert_eq!(AuthError::InsufficientPermissions.to_string(), "Insufficient permissions");
+        assert_eq!(
+            AuthError::TokenGeneration.to_string(),
+            "Token generation failed"
+        );
+        assert_eq!(
+            AuthError::InvalidTokenType.to_string(),
+            "Invalid token type"
+        );
+        assert_eq!(
+            AuthError::InsufficientPermissions.to_string(),
+            "Insufficient permissions"
+        );
         assert_eq!(AuthError::UserNotFound.to_string(), "User not found");
         assert_eq!(AuthError::UserExists.to_string(), "User already exists");
-        assert_eq!(AuthError::PasswordHashingFailed.to_string(), "Password hashing failed");
-        assert_eq!(AuthError::DatabaseError("test".to_string()).to_string(), "Database error: test");
+        assert_eq!(
+            AuthError::PasswordHashingFailed.to_string(),
+            "Password hashing failed"
+        );
+        assert_eq!(
+            AuthError::DatabaseError("test".to_string()).to_string(),
+            "Database error: test"
+        );
     }
 
     #[test]
@@ -922,7 +952,8 @@ mod tests {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(&["test_issuer"]);
 
-        let token_data = decode::<Claims>(&auth_response.access_token, &decoding_key, &validation).unwrap();
+        let token_data =
+            decode::<Claims>(&auth_response.access_token, &decoding_key, &validation).unwrap();
         let claims = token_data.claims;
 
         assert!(claims.exp > Utc::now().timestamp());
@@ -934,7 +965,7 @@ mod tests {
     fn test_expired_token_validation() {
         let config = create_test_jwt_config();
         let jwt_service = JwtService::new(config);
-        
+
         // Create a simple expired token by using jsonwebtoken directly
         let expired_claims = Claims {
             sub: "test_user_id".to_string(),
@@ -946,7 +977,12 @@ mod tests {
             token_type: TokenType::Access,
         };
 
-        let expired_token = encode(&Header::default(), &expired_claims, &jwt_service.encoding_key).unwrap();
+        let expired_token = encode(
+            &Header::default(),
+            &expired_claims,
+            &jwt_service.encoding_key,
+        )
+        .unwrap();
 
         // The token should be expired
         let result = jwt_service.validate_token(&expired_token);
@@ -960,7 +996,10 @@ mod tests {
 
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!response.0.success);
-        assert_eq!(response.0.error, Some(ErrorMessages::INTERNAL_SERVER_ERROR.to_string()));
+        assert_eq!(
+            response.0.error,
+            Some(ErrorMessages::INTERNAL_SERVER_ERROR.to_string())
+        );
     }
 
     #[test]
@@ -982,13 +1021,16 @@ mod tests {
 
         let auth_response = jwt_service.generate_tokens(&user).unwrap();
 
-        let access_claims = jwt_service.validate_token(&auth_response.access_token).unwrap();
-        let refresh_claims = jwt_service.validate_token(&auth_response.refresh_token).unwrap();
+        let access_claims = jwt_service
+            .validate_token(&auth_response.access_token)
+            .unwrap();
+        let refresh_claims = jwt_service
+            .validate_token(&auth_response.refresh_token)
+            .unwrap();
 
         assert_eq!(access_claims.token_type, TokenType::Access);
         assert_eq!(refresh_claims.token_type, TokenType::Refresh);
     }
-
 
     #[test]
     fn test_validate_role_functions() {
@@ -1018,7 +1060,7 @@ mod tests {
         assert!(UserRole::Admin < UserRole::User);
         assert!(UserRole::User < UserRole::ReadOnly);
         assert!(UserRole::Admin < UserRole::ReadOnly);
-        
+
         // Test equality
         assert_eq!(UserRole::Admin, UserRole::Admin);
         assert_eq!(UserRole::User, UserRole::User);
@@ -1031,7 +1073,7 @@ mod tests {
         let user_store = UserStore::Mock(Box::new(mock_store));
 
         let user = create_test_user();
-        
+
         // Test create user
         let result = user_store.create_user(&user).await;
         assert!(result.is_ok());
@@ -1040,7 +1082,7 @@ mod tests {
         let retrieved = user_store.get_user(&user.username).await;
         assert!(retrieved.is_ok());
 
-        // Test update user  
+        // Test update user
         let mut updated_user = user.clone();
         updated_user.role = UserRole::Admin;
         let result = user_store.update_user(&updated_user).await;
@@ -1055,7 +1097,7 @@ mod tests {
     fn test_token_generation_with_different_users() {
         let config = create_test_jwt_config();
         let jwt_service = JwtService::new(config);
-        
+
         // Test with admin user
         let admin_user = User {
             id: "admin_id".to_string(),
@@ -1066,11 +1108,13 @@ mod tests {
             updated_at: Utc::now(),
             is_active: true,
         };
-        
+
         let admin_response = jwt_service.generate_tokens(&admin_user).unwrap();
-        let admin_claims = jwt_service.validate_token(&admin_response.access_token).unwrap();
+        let admin_claims = jwt_service
+            .validate_token(&admin_response.access_token)
+            .unwrap();
         assert_eq!(admin_claims.role, UserRole::Admin);
-        
+
         // Test with readonly user
         let readonly_user = User {
             id: "readonly_id".to_string(),
@@ -1081,9 +1125,11 @@ mod tests {
             updated_at: Utc::now(),
             is_active: true,
         };
-        
+
         let readonly_response = jwt_service.generate_tokens(&readonly_user).unwrap();
-        let readonly_claims = jwt_service.validate_token(&readonly_response.access_token).unwrap();
+        let readonly_claims = jwt_service
+            .validate_token(&readonly_response.access_token)
+            .unwrap();
         assert_eq!(readonly_claims.role, UserRole::ReadOnly);
     }
 
@@ -1096,14 +1142,14 @@ mod tests {
             access_token_expiration: 1,
             refresh_token_expiration: 2,
         };
-        
+
         let jwt_service = JwtService::new(config);
         let user = create_test_user();
-        
+
         // Should still work with minimum values
         let result = jwt_service.generate_tokens(&user);
         assert!(result.is_ok());
-        
+
         // Test with very long issuer
         let config = JwtConfig {
             secret: "long_secret_key_with_32_characters".to_string(),
@@ -1111,7 +1157,7 @@ mod tests {
             access_token_expiration: 3600,
             refresh_token_expiration: 86400,
         };
-        
+
         let jwt_service = JwtService::new(config);
         let result = jwt_service.generate_tokens(&user);
         assert!(result.is_ok());
@@ -1121,7 +1167,7 @@ mod tests {
     fn test_claims_with_edge_case_data() {
         let config = create_test_jwt_config();
         let jwt_service = JwtService::new(config);
-        
+
         // Test with user containing special characters
         let special_user = User {
             id: "test!@#$%^&*()".to_string(),
@@ -1132,13 +1178,15 @@ mod tests {
             updated_at: Utc::now(),
             is_active: true,
         };
-        
+
         let result = jwt_service.generate_tokens(&special_user);
         assert!(result.is_ok());
-        
+
         let auth_response = result.unwrap();
-        let claims = jwt_service.validate_token(&auth_response.access_token).unwrap();
-        
+        let claims = jwt_service
+            .validate_token(&auth_response.access_token)
+            .unwrap();
+
         assert_eq!(claims.sub, special_user.id);
         assert_eq!(claims.username, special_user.username);
         assert_eq!(claims.role, special_user.role);
@@ -1148,18 +1196,18 @@ mod tests {
     fn test_token_validation_comprehensive() {
         let config = create_test_jwt_config();
         let jwt_service = JwtService::new(config);
-        
+
         // Test various malformed tokens
         let malformed_tokens = vec![
             "",
             "not_a_token",
-            "header.payload", // Missing signature
-            "header.payload.signature.extra", // Too many parts
+            "header.payload",                       // Missing signature
+            "header.payload.signature.extra",       // Too many parts
             "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9", // Only header
             "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0", // Only header+payload
-            "not_base64.not_base64.not_base64", // Invalid base64
+            "not_base64.not_base64.not_base64",                                 // Invalid base64
         ];
-        
+
         for token in malformed_tokens {
             let result = jwt_service.validate_token(token);
             assert!(result.is_err(), "Token should be invalid: {}", token);
@@ -1169,37 +1217,40 @@ mod tests {
     #[test]
     fn test_extract_token_comprehensive_edge_cases() {
         let mut headers = HeaderMap::new();
-        
+
         // Test normal case
         headers.insert(header::AUTHORIZATION, "Bearer valid_token".parse().unwrap());
         let token = extract_token_from_header(&headers);
         assert_eq!(token, Some("valid_token".to_string()));
-        
+
         // Test with extra spaces
-        headers.insert(header::AUTHORIZATION, "Bearer   token_with_spaces   ".parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer   token_with_spaces   ".parse().unwrap(),
+        );
         let token = extract_token_from_header(&headers);
         assert_eq!(token, Some("  token_with_spaces   ".to_string()));
-        
+
         // Test empty token
         headers.insert(header::AUTHORIZATION, "Bearer ".parse().unwrap());
         let token = extract_token_from_header(&headers);
         assert_eq!(token, Some("".to_string()));
-        
+
         // Test no authorization header
         headers.clear();
         let token = extract_token_from_header(&headers);
         assert!(token.is_none());
-        
+
         // Test invalid format
         headers.insert(header::AUTHORIZATION, "Basic user:pass".parse().unwrap());
         let token = extract_token_from_header(&headers);
         assert!(token.is_none());
-        
+
         // Test case sensitivity
         headers.insert(header::AUTHORIZATION, "bearer token".parse().unwrap());
         let token = extract_token_from_header(&headers);
         assert!(token.is_none());
-        
+
         // Test just "Bearer" without space
         headers.insert(header::AUTHORIZATION, "Bearer".parse().unwrap());
         let token = extract_token_from_header(&headers);
@@ -1222,12 +1273,12 @@ mod tests {
             AuthError::ValidationError("validation failed".to_string()),
             AuthError::UserAlreadyExists,
         ];
-        
+
         for error in errors {
             // Test that each error has a non-empty display string
             let display_str = error.to_string();
             assert!(!display_str.is_empty());
-            
+
             // Test that each error has a debug representation
             let debug_str = format!("{:?}", error);
             assert!(!debug_str.is_empty());
@@ -1239,11 +1290,14 @@ mod tests {
         // Test that the role ordering is correct for permissions
         assert!(UserRole::Admin < UserRole::User);
         assert!(UserRole::User < UserRole::ReadOnly);
-        
+
         // Test that we can use roles in collections requiring ordering
         let mut roles = vec![UserRole::ReadOnly, UserRole::Admin, UserRole::User];
         roles.sort();
-        assert_eq!(roles, vec![UserRole::Admin, UserRole::User, UserRole::ReadOnly]);
+        assert_eq!(
+            roles,
+            vec![UserRole::Admin, UserRole::User, UserRole::ReadOnly]
+        );
     }
 
     #[test]
@@ -1254,15 +1308,24 @@ mod tests {
             (AuthError::InvalidToken, "Invalid token"),
             (AuthError::TokenGeneration, "Token generation failed"),
             (AuthError::InvalidTokenType, "Invalid token type"),
-            (AuthError::InsufficientPermissions, "Insufficient permissions"),
+            (
+                AuthError::InsufficientPermissions,
+                "Insufficient permissions",
+            ),
             (AuthError::UserNotFound, "User not found"),
             (AuthError::UserExists, "User already exists"),
             (AuthError::PasswordHashingFailed, "Password hashing failed"),
-            (AuthError::DatabaseError("test".to_string()), "Database error: test"),
-            (AuthError::ValidationError("test".to_string()), "Validation error: test"),
+            (
+                AuthError::DatabaseError("test".to_string()),
+                "Database error: test",
+            ),
+            (
+                AuthError::ValidationError("test".to_string()),
+                "Validation error: test",
+            ),
             (AuthError::UserAlreadyExists, "User already exists"),
         ];
-        
+
         for (error, expected) in errors {
             assert_eq!(error.to_string(), expected);
         }
@@ -1276,20 +1339,24 @@ mod tests {
             access_token_expiration: 1,
             refresh_token_expiration: 1,
         };
-        
+
         let jwt_service = JwtService::new(config);
         let user = create_test_user();
-        
+
         // Should work with minimal configuration
         let result = jwt_service.generate_tokens(&user);
         assert!(result.is_ok());
-        
+
         let auth_response = result.unwrap();
         assert_eq!(auth_response.expires_in, 1);
-        
+
         // Tokens should be valid
-        assert!(jwt_service.validate_token(&auth_response.access_token).is_ok());
-        assert!(jwt_service.validate_token(&auth_response.refresh_token).is_ok());
+        assert!(jwt_service
+            .validate_token(&auth_response.access_token)
+            .is_ok());
+        assert!(jwt_service
+            .validate_token(&auth_response.refresh_token)
+            .is_ok());
     }
 
     #[test]
@@ -1303,11 +1370,11 @@ mod tests {
             iss: "test_issuer".to_string(),
             token_type: TokenType::Access,
         };
-        
+
         // Test that claims can be serialized and deserialized
         let serialized = serde_json::to_string(&claims).unwrap();
         let deserialized: Claims = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(claims.sub, deserialized.sub);
         assert_eq!(claims.username, deserialized.username);
         assert_eq!(claims.role, deserialized.role);
@@ -1318,7 +1385,7 @@ mod tests {
     fn test_user_role_serialization() {
         // Test that UserRole can be serialized and deserialized
         let roles = vec![UserRole::Admin, UserRole::User, UserRole::ReadOnly];
-        
+
         for role in roles {
             let serialized = serde_json::to_string(&role).unwrap();
             let deserialized: UserRole = serde_json::from_str(&serialized).unwrap();
@@ -1330,7 +1397,7 @@ mod tests {
     fn test_token_type_serialization() {
         // Test that TokenType can be serialized and deserialized
         let types = vec![TokenType::Access, TokenType::Refresh];
-        
+
         for token_type in types {
             let serialized = serde_json::to_string(&token_type).unwrap();
             let deserialized: TokenType = serde_json::from_str(&serialized).unwrap();
@@ -1342,14 +1409,14 @@ mod tests {
     async fn test_user_store_error_scenarios() {
         let mock_store = MockUserStore::new();
         let user_store = UserStore::Mock(Box::new(mock_store));
-        
+
         // Test creating user with existing username
         let user = create_test_user();
         assert!(user_store.create_user(&user).await.is_ok());
-        
+
         let duplicate_result = user_store.create_user(&user).await;
         assert!(matches!(duplicate_result, Err(AuthError::UserExists)));
-        
+
         // Test authentication with non-existent user
         let auth_result = user_store.authenticate("nonexistent", "password").await;
         assert!(matches!(auth_result, Err(AuthError::UserNotFound)));
@@ -1360,20 +1427,20 @@ mod tests {
         let config = create_test_jwt_config();
         let jwt_service = JwtService::new(config);
         let user = create_test_user();
-        
+
         // Generate tokens multiple times
         let auth1 = jwt_service.generate_tokens(&user).unwrap();
         let auth2 = jwt_service.generate_tokens(&user).unwrap();
-        
+
         // Both should be valid independently
         assert!(jwt_service.validate_token(&auth1.access_token).is_ok());
         assert!(jwt_service.validate_token(&auth2.access_token).is_ok());
         assert!(jwt_service.validate_token(&auth1.refresh_token).is_ok());
         assert!(jwt_service.validate_token(&auth2.refresh_token).is_ok());
-        
+
         // Both should have same expiry since they're generated in same second
         assert_eq!(auth1.expires_in, auth2.expires_in);
-        
+
         // Both should be for the same user
         let claims1 = jwt_service.validate_token(&auth1.access_token).unwrap();
         let claims2 = jwt_service.validate_token(&auth2.access_token).unwrap();
@@ -1386,18 +1453,24 @@ mod tests {
     fn test_handle_redis_error_function() {
         let error_message = "Redis connection timeout";
         let (status, response) = handle_redis_error(error_message);
-        
+
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!response.0.success);
-        assert_eq!(response.0.error, Some(ErrorMessages::INTERNAL_SERVER_ERROR.to_string()));
-        
+        assert_eq!(
+            response.0.error,
+            Some(ErrorMessages::INTERNAL_SERVER_ERROR.to_string())
+        );
+
         // Test with different error message
         let error_message2 = "Redis authentication failed";
         let (status2, response2) = handle_redis_error(error_message2);
-        
+
         assert_eq!(status2, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!response2.0.success);
-        assert_eq!(response2.0.error, Some(ErrorMessages::INTERNAL_SERVER_ERROR.to_string()));
+        assert_eq!(
+            response2.0.error,
+            Some(ErrorMessages::INTERNAL_SERVER_ERROR.to_string())
+        );
     }
 
     #[test]
@@ -1409,7 +1482,7 @@ mod tests {
             AuthError::DatabaseError("test".to_string()),
             AuthError::DatabaseError("test".to_string())
         );
-        
+
         // Test inequality
         assert_ne!(AuthError::InvalidCredentials, AuthError::UserNotFound);
         assert_ne!(
@@ -1430,9 +1503,8 @@ mod tests {
         // Test that bcrypt errors are properly converted to AuthError
         let bcrypt_error = bcrypt::BcryptError::CostNotAllowed(50);
         let auth_error: AuthError = bcrypt_error.into();
-        
+
         assert!(matches!(auth_error, AuthError::PasswordHashingFailed));
         assert_eq!(auth_error.to_string(), "Password hashing failed");
     }
-
 }

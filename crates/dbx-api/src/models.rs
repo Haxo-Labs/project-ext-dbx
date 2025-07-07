@@ -128,16 +128,31 @@ mod tests {
 
     #[test]
     fn test_user_role_serialization() {
-        assert_eq!(serde_json::to_string(&UserRole::Admin).unwrap(), "\"Admin\"");
+        assert_eq!(
+            serde_json::to_string(&UserRole::Admin).unwrap(),
+            "\"Admin\""
+        );
         assert_eq!(serde_json::to_string(&UserRole::User).unwrap(), "\"User\"");
-        assert_eq!(serde_json::to_string(&UserRole::ReadOnly).unwrap(), "\"ReadOnly\"");
+        assert_eq!(
+            serde_json::to_string(&UserRole::ReadOnly).unwrap(),
+            "\"ReadOnly\""
+        );
     }
 
     #[test]
     fn test_user_role_deserialization() {
-        assert_eq!(serde_json::from_str::<UserRole>("\"Admin\"").unwrap(), UserRole::Admin);
-        assert_eq!(serde_json::from_str::<UserRole>("\"User\"").unwrap(), UserRole::User);
-        assert_eq!(serde_json::from_str::<UserRole>("\"ReadOnly\"").unwrap(), UserRole::ReadOnly);
+        assert_eq!(
+            serde_json::from_str::<UserRole>("\"Admin\"").unwrap(),
+            UserRole::Admin
+        );
+        assert_eq!(
+            serde_json::from_str::<UserRole>("\"User\"").unwrap(),
+            UserRole::User
+        );
+        assert_eq!(
+            serde_json::from_str::<UserRole>("\"ReadOnly\"").unwrap(),
+            UserRole::ReadOnly
+        );
     }
 
     #[test]
@@ -391,14 +406,26 @@ mod tests {
 
     #[test]
     fn test_token_type_serialization() {
-        assert_eq!(serde_json::to_string(&TokenType::Access).unwrap(), "\"Access\"");
-        assert_eq!(serde_json::to_string(&TokenType::Refresh).unwrap(), "\"Refresh\"");
+        assert_eq!(
+            serde_json::to_string(&TokenType::Access).unwrap(),
+            "\"Access\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TokenType::Refresh).unwrap(),
+            "\"Refresh\""
+        );
     }
 
     #[test]
     fn test_token_type_deserialization() {
-        assert_eq!(serde_json::from_str::<TokenType>("\"Access\"").unwrap(), TokenType::Access);
-        assert_eq!(serde_json::from_str::<TokenType>("\"Refresh\"").unwrap(), TokenType::Refresh);
+        assert_eq!(
+            serde_json::from_str::<TokenType>("\"Access\"").unwrap(),
+            TokenType::Access
+        );
+        assert_eq!(
+            serde_json::from_str::<TokenType>("\"Refresh\"").unwrap(),
+            TokenType::Refresh
+        );
     }
 
     #[test]
@@ -575,7 +602,7 @@ mod tests {
         };
 
         let cloned = original.clone();
-        
+
         // Verify deep clone by modifying original and ensuring clone is unchanged
         assert_eq!(original.id, cloned.id);
         assert_eq!(original.username, cloned.username);
@@ -612,7 +639,8 @@ mod tests {
         assert_eq!(auth_response.access_token, auth_restored.access_token);
 
         let validation_json = serde_json::to_string(&token_validation).unwrap();
-        let validation_restored: TokenValidationResponse = serde_json::from_str(&validation_json).unwrap();
+        let validation_restored: TokenValidationResponse =
+            serde_json::from_str(&validation_json).unwrap();
         assert_eq!(token_validation.valid, validation_restored.valid);
     }
 }

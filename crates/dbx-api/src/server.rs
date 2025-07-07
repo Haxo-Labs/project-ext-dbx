@@ -140,22 +140,11 @@ pub fn create_universal_app(state: UniversalAppState) -> Router {
     // Create authentication routes (public)
     let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
 
-    // Import universal route modules
-    use crate::routes::universal::{data, health, query, stream};
+    // Import route modules
+    use crate::routes::{data, health, query, stream};
 
-    // Create universal data routes
-    let universal_data_routes = Router::new()
-        .merge(data::create_universal_data_routes(
-            state.backend_router.clone(),
-        ))
-        .layer(from_fn_with_state((), require_user_role))
-        .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
-        ));
-
-    // Create universal query routes
-    let universal_query_routes = query::create_query_routes()
+    // Create data routes
+    let data_routes = data::create_data_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state((), require_user_role))
         .layer(from_fn_with_state(
@@ -163,8 +152,8 @@ pub fn create_universal_app(state: UniversalAppState) -> Router {
             jwt_auth_middleware,
         ));
 
-    // Create universal stream routes
-    let universal_stream_routes = stream::create_stream_routes()
+    // Create query routes
+    let query_routes = query::create_query_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state((), require_user_role))
         .layer(from_fn_with_state(
@@ -172,8 +161,17 @@ pub fn create_universal_app(state: UniversalAppState) -> Router {
             jwt_auth_middleware,
         ));
 
-    // Create universal health routes (admin only)
-    let universal_health_routes = health::create_health_routes()
+    // Create stream routes
+    let stream_routes = stream::create_stream_routes()
+        .with_state(state.backend_router.clone())
+        .layer(from_fn_with_state((), require_user_role))
+        .layer(from_fn_with_state(
+            state.jwt_service.clone(),
+            jwt_auth_middleware,
+        ));
+
+    // Create health routes (admin only)
+    let health_routes = health::create_health_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state((), require_admin_role))
         .layer(from_fn_with_state(
@@ -184,10 +182,10 @@ pub fn create_universal_app(state: UniversalAppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .merge(auth_routes)
-        .nest("/api/v1/data", universal_data_routes)
-        .nest("/api/v1/query", universal_query_routes)
-        .nest("/api/v1/stream", universal_stream_routes)
-        .nest("/api/v1/admin", universal_health_routes)
+        .nest("/api/v1/data", data_routes)
+        .nest("/api/v1/query", query_routes)
+        .nest("/api/v1/stream", stream_routes)
+        .nest("/api/v1/admin", health_routes)
         .layer(CorsLayer::permissive())
 }
 

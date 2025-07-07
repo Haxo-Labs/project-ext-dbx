@@ -373,8 +373,8 @@ fn json_to_data_value(value: serde_json::Value) -> DataValue {
     }
 }
 
-/// Create routes for universal data operations
-pub fn create_universal_data_routes(router: Arc<BackendRouter>) -> Router {
+/// Create routes for data operations
+pub fn create_data_routes() -> Router<Arc<BackendRouter>> {
     Router::new()
         .route("/:key", get(get_data))
         .route("/:key", post(set_data))
@@ -382,5 +382,4 @@ pub fn create_universal_data_routes(router: Arc<BackendRouter>) -> Router {
         .route("/:key", delete(delete_data))
         .route("/:key/exists", get(check_exists))
         .route("/batch", post(batch_operations))
-        .with_state(router)
 }

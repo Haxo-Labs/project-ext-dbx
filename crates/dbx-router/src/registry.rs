@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use dbx_core::{DbxError, DbxResult, UniversalBackend};
 use dbx_config::{BackendConfig, DbxConfig};
+use dbx_core::{DbxError, DbxResult, UniversalBackend};
 
 use crate::{RouterError, RouterResult};
 
@@ -29,7 +29,8 @@ impl BackendRegistry {
     where
         F: BackendFactory + 'static,
     {
-        self.factories.insert(provider.to_string(), Box::new(factory));
+        self.factories
+            .insert(provider.to_string(), Box::new(factory));
         info!(provider = %provider, "Registered backend factory");
     }
 
@@ -45,7 +46,7 @@ impl BackendRegistry {
                 }
                 Err(e) => {
                     error!(
-                        backend = %name, 
+                        backend = %name,
                         provider = %backend_config.provider,
                         error = %e,
                         "Failed to initialize backend"
@@ -56,7 +57,10 @@ impl BackendRegistry {
         }
 
         let backend_count = self.backends.len();
-        info!(backend_count = backend_count, "All backends initialized successfully");
+        info!(
+            backend_count = backend_count,
+            "All backends initialized successfully"
+        );
 
         Ok(())
     }
@@ -77,10 +81,7 @@ impl BackendRegistry {
         })?;
 
         let backend = factory.create_backend(name, config).await.map_err(|e| {
-            DbxError::backend(
-                name.to_string(),
-                format!("Failed to create backend: {}", e),
-            )
+            DbxError::backend(name.to_string(), format!("Failed to create backend: {}", e))
         })?;
 
         // Test the connection
@@ -108,7 +109,10 @@ impl BackendRegistry {
 
     /// List all backend names
     pub async fn list_backends(&self) -> Vec<String> {
-        self.backends.iter().map(|entry| entry.key().clone()).collect()
+        self.backends
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     /// Remove a backend
@@ -128,7 +132,7 @@ impl BackendRegistry {
         for entry in self.backends.iter() {
             let name = entry.key().clone();
             let backend = entry.value().clone();
-            
+
             let result = backend.health_check().await;
             results.insert(name, result);
         }
@@ -143,7 +147,7 @@ impl BackendRegistry {
         for entry in self.backends.iter() {
             let name = entry.key().clone();
             let backend = entry.value().clone();
-            
+
             let result = backend.get_stats().await;
             results.insert(name, result);
         }
@@ -152,11 +156,7 @@ impl BackendRegistry {
     }
 
     /// Reload a specific backend with new configuration
-    pub async fn reload_backend(
-        &self,
-        name: &str,
-        config: &BackendConfig,
-    ) -> DbxResult<()> {
+    pub async fn reload_backend(&self, name: &str, config: &BackendConfig) -> DbxResult<()> {
         info!(backend = %name, "Reloading backend with new configuration");
 
         // Create new backend instance
@@ -172,7 +172,8 @@ impl BackendRegistry {
     /// Get registry statistics
     pub async fn get_registry_stats(&self) -> RegistryStats {
         let total_backends = self.backends.len();
-        let registered_providers: Vec<String> = self.factories
+        let registered_providers: Vec<String> = self
+            .factories
             .iter()
             .map(|entry| entry.key().clone())
             .collect();
@@ -196,7 +197,8 @@ impl BackendRegistry {
     pub async fn shutdown(&self) -> DbxResult<()> {
         info!("Shutting down all backends");
 
-        let backend_names: Vec<String> = self.backends
+        let backend_names: Vec<String> = self
+            .backends
             .iter()
             .map(|entry| entry.key().clone())
             .collect();
@@ -286,4 +288,4 @@ macro_rules! register_backend_factories {
             $registry.register_factory($provider, $factory);
         )*
     };
-} 
+}

@@ -88,7 +88,8 @@ impl AppConfig {
                 var: "PORT".to_string(),
                 source: e,
             })?;
-        let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+        let redis_url =
+            env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
 
         let jwt_secret = env::var("JWT_SECRET")
             .map_err(|_| ConfigError::MissingEnvironmentVariable("JWT_SECRET".to_string()))?;
@@ -167,7 +168,10 @@ mod tests {
     }
 
     fn setup_basic_env() {
-        env::set_var("JWT_SECRET", "test-jwt-secret-that-is-at-least-32-characters-long");
+        env::set_var(
+            "JWT_SECRET",
+            "test-jwt-secret-that-is-at-least-32-characters-long",
+        );
     }
 
     #[test]
@@ -189,12 +193,18 @@ mod tests {
             refresh_token_expiration: 604800,
             issuer: "test".to_string(),
         };
-        assert!(matches!(config.validate(), Err(ConfigError::InvalidJwtSecret)));
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidJwtSecret)
+        ));
     }
 
     #[test]
     fn test_database_type_from_str() {
-        assert_eq!(DatabaseType::from_str("redis").unwrap(), DatabaseType::Redis);
+        assert_eq!(
+            DatabaseType::from_str("redis").unwrap(),
+            DatabaseType::Redis
+        );
         assert!(DatabaseType::from_str("invalid").is_err());
     }
 
@@ -228,7 +238,10 @@ mod tests {
         env::set_var("HOST", "127.0.0.1");
         env::set_var("PORT", "8080");
         env::set_var("REDIS_URL", "redis://127.0.0.1:6380");
-        env::set_var("JWT_SECRET", "custom-jwt-secret-that-is-at-least-32-characters-long");
+        env::set_var(
+            "JWT_SECRET",
+            "custom-jwt-secret-that-is-at-least-32-characters-long",
+        );
         env::set_var("ACCESS_TOKEN_EXPIRATION", "1800");
         env::set_var("REFRESH_TOKEN_EXPIRATION", "86400");
         env::set_var("JWT_ISSUER", "custom-api");
@@ -245,7 +258,10 @@ mod tests {
         assert_eq!(config.jwt.issuer, "custom-api");
         assert!(config.create_default_admin);
         assert_eq!(config.default_admin_username, Some("admin".to_string()));
-        assert_eq!(config.default_admin_password, Some("password123".to_string()));
+        assert_eq!(
+            config.default_admin_password,
+            Some("password123".to_string())
+        );
 
         clear_env_vars();
     }
@@ -256,7 +272,10 @@ mod tests {
         clear_env_vars();
 
         let result = AppConfig::from_env();
-        assert!(matches!(result, Err(ConfigError::MissingEnvironmentVariable(_))));
+        assert!(matches!(
+            result,
+            Err(ConfigError::MissingEnvironmentVariable(_))
+        ));
 
         clear_env_vars();
     }
@@ -283,7 +302,10 @@ mod tests {
         env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
 
         let result = AppConfig::from_env();
-        assert!(matches!(result, Err(ConfigError::MissingDefaultAdminPassword)));
+        assert!(matches!(
+            result,
+            Err(ConfigError::MissingDefaultAdminPassword)
+        ));
 
         clear_env_vars();
     }
