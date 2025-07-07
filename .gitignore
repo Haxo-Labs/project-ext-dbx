@@ -53,6 +53,11 @@ build/
 coverage/
 *.lcov
 
+# Tarpaulin coverage reports (contains local file paths)
+coverage_report/
+coverage-report/
+tarpaulin-report.html
+
 # nyc test coverage
 .nyc_output
 
