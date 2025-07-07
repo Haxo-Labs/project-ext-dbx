@@ -20,7 +20,7 @@ pub struct BackendRouter {
 impl BackendRouter {
     /// Create a new backend router
     pub fn new(registry: BackendRegistry, config: &DbxConfig) -> DbxResult<Self> {
-        let key_matcher = KeyMatcher::new(&config.routing.key_routing.rules)?;
+        let key_matcher = KeyMatcher::new(config.routing.key_routing.clone())?;
         let load_balancer =
             LoadBalancer::new(config.routing.load_balancing.clone().unwrap_or_default())?;
 
@@ -128,11 +128,19 @@ impl BackendRouter {
                     }
                 }
             }
-            StreamOperation::CreateStream { name, .. }
-            | StreamOperation::StreamAdd { name, .. }
-            | StreamOperation::StreamRead { name, .. } => {
+            StreamOperation::CreateStream { name, .. } => {
                 if let Some(backend_name) = self.key_matcher.match_key(name) {
                     debug!(stream = %name, backend = %backend_name, "Using key-based routing for stream");
+
+                    if let Some(backend) = self.registry.get_backend(&backend_name).await {
+                        return Ok(backend);
+                    }
+                }
+            }
+            StreamOperation::StreamAdd { stream, .. }
+            | StreamOperation::StreamRead { stream, .. } => {
+                if let Some(backend_name) = self.key_matcher.match_key(stream) {
+                    debug!(stream = %stream, backend = %backend_name, "Using key-based routing for stream");
 
                     if let Some(backend) = self.registry.get_backend(&backend_name).await {
                         return Ok(backend);
@@ -190,6 +198,13 @@ impl BackendRouter {
             DataOperation::Delete { key, .. } => Some(key),
             DataOperation::Exists { key, .. } => Some(key),
             DataOperation::SetTtl { key, .. } => Some(key),
+            DataOperation::GetTtl { key } => Some(key),
+            DataOperation::Batch { operations } => {
+                // For batch operations, try to extract key from the first operation
+                operations
+                    .first()
+                    .and_then(|op| self.extract_key_from_data_operation(op))
+            }
         }
     }
 
