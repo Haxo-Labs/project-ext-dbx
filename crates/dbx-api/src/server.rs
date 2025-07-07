@@ -17,15 +17,15 @@ use dbx_core::LoadBalancingStrategy;
 use dbx_router::{BackendRegistryBuilder, BackendRouter};
 use std::collections::HashMap;
 
-/// Application state for the universal API
+/// Application state for the DBX API
 #[derive(Clone)]
-pub struct UniversalAppState {
+pub struct AppState {
     pub backend_router: Arc<BackendRouter>,
     pub jwt_service: Arc<JwtService>,
     pub user_store: Arc<UserStore>,
 }
 
-impl UniversalAppState {
+impl AppState {
     /// Create new application state with backend router
     pub async fn new(config_path: Option<&str>) -> Result<Self, ServerError> {
         let app_config = AppConfig::from_env().map_err(ServerError::Configuration)?;
@@ -135,8 +135,8 @@ async fn health_check() -> Json<ApiResponse<String>> {
     Json(ApiResponse::success("Server is running".to_string()))
 }
 
-/// Create the universal application router with BackendRouter
-pub fn create_universal_app(state: UniversalAppState) -> Router {
+/// Create the application router with BackendRouter
+pub fn create_app(state: AppState) -> Router {
     // Create authentication routes (public)
     let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
 
@@ -189,13 +189,13 @@ pub fn create_universal_app(state: UniversalAppState) -> Router {
         .layer(CorsLayer::permissive())
 }
 
-/// Universal status check endpoint (simplified)
-async fn universal_status_check(
+/// Status check endpoint
+async fn status_check(
     State(router): State<Arc<BackendRouter>>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let response = serde_json::json!({
         "status": "running",
-        "mode": "universal",
+        "mode": "dbx",
         "timestamp": chrono::Utc::now().timestamp_millis(),
         "version": env!("CARGO_PKG_VERSION")
     });
@@ -212,8 +212,8 @@ async fn list_backends(
     Json(ApiResponse::success(backends))
 }
 
-/// Universal health check endpoint
-async fn universal_health_check(
+/// Health check endpoint
+async fn health_check_endpoint(
     State(router): State<Arc<BackendRouter>>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let response = serde_json::json!({
@@ -226,12 +226,12 @@ async fn universal_health_check(
     Json(ApiResponse::success(response))
 }
 
-/// Start the universal server with BackendRouter (now the main/default server)
+/// Start the server with BackendRouter (now the main/default server)
 pub async fn run_server(config_path: Option<&str>) -> Result<(), ServerError> {
-    let state = UniversalAppState::new(config_path).await?;
+    let state = AppState::new(config_path).await?;
     let config = AppConfig::from_env().map_err(ServerError::Configuration)?;
 
-    let app = create_universal_app(state);
+    let app = create_app(state);
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = TcpListener::bind(&addr)
@@ -307,10 +307,10 @@ mod tests {
         std::env::remove_var("DEFAULT_ADMIN_PASSWORD");
     }
 
-    /// Helper function to create UniversalAppState for tests, handling user conflicts gracefully
-    async fn create_test_universal_app_state() -> UniversalAppState {
+    /// Helper function to create AppState for tests, handling user conflicts gracefully
+    async fn create_test_app_state() -> AppState {
         setup_test_env();
-        let result = UniversalAppState::new(None).await;
+        let result = AppState::new(None).await;
         cleanup_test_env();
 
         match result {
@@ -319,9 +319,9 @@ mod tests {
                 // If user already exists from parallel tests, create without default admin
                 setup_test_env();
                 std::env::remove_var("CREATE_DEFAULT_ADMIN");
-                let state = UniversalAppState::new(None)
+                let state = AppState::new(None)
                     .await
-                    .expect("Failed to create UniversalAppState without default admin");
+                    .expect("Failed to create AppState without default admin");
                 cleanup_test_env();
                 state
             }
@@ -329,9 +329,9 @@ mod tests {
                 // For any other error, try without default admin
                 setup_test_env();
                 std::env::remove_var("CREATE_DEFAULT_ADMIN");
-                let state = UniversalAppState::new(None)
+                let state = AppState::new(None)
                     .await
-                    .expect("Failed to create UniversalAppState");
+                    .expect("Failed to create AppState");
                 cleanup_test_env();
                 state
             }
@@ -339,20 +339,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_universal_app_state_success() {
-        let _app_state = create_test_universal_app_state().await;
+    async fn test_create_app_state_success() {
+        let _app_state = create_test_app_state().await;
         // If we reach here, the app state was created successfully
         assert!(true);
     }
 
     #[tokio::test]
-    async fn test_create_universal_app_state_with_default_admin() {
+    async fn test_create_app_state_with_default_admin() {
         setup_test_env();
         std::env::set_var("CREATE_DEFAULT_ADMIN", "true");
         std::env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
         std::env::set_var("DEFAULT_ADMIN_PASSWORD", "admin123");
 
-        let result = UniversalAppState::new(None).await;
+        let result = AppState::new(None).await;
         // Default admin creation might fail in some test environments (concurrent tests, permissions, etc.)
         // The important thing is that the application handles the configuration correctly
         match result {
@@ -374,13 +374,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_universal_app_state_missing_admin_credentials() {
+    async fn test_create_app_state_missing_admin_credentials() {
         setup_test_env();
         std::env::set_var("CREATE_DEFAULT_ADMIN", "true");
         std::env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
         std::env::remove_var("DEFAULT_ADMIN_PASSWORD");
 
-        let result = UniversalAppState::new(None).await;
+        let result = AppState::new(None).await;
         assert!(result.is_err());
 
         if let Err(ServerError::Configuration(_)) = result {
@@ -393,9 +393,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_universal_app_with_cors() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+    async fn test_create_app_with_cors() {
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let request = Request::builder()
             .method(Method::OPTIONS)
@@ -411,8 +411,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_endpoint() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -426,8 +426,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_middleware_chain() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -441,8 +441,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_cors_configuration() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let request = Request::builder()
             .method(Method::OPTIONS)
@@ -457,11 +457,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_universal_app_state_error_handling() {
+    async fn test_create_app_state_error_handling() {
         setup_test_env();
         std::env::set_var("REDIS_URL", "redis://invalid:6379");
 
-        let result = UniversalAppState::new(None).await;
+        let result = AppState::new(None).await;
         assert!(result.is_ok());
 
         cleanup_test_env();
@@ -469,8 +469,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_docs_endpoint() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -484,8 +484,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_not_found_endpoint() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -499,8 +499,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_protected_route_without_auth() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -514,8 +514,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_route_without_auth() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -529,8 +529,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_websocket_route_without_auth() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let response = app
             .oneshot(
@@ -548,8 +548,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_route_structure() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         let health_request = Request::builder()
             .method(Method::GET)
@@ -570,8 +570,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_universal_app_state_cloning() {
-        let app_state = create_test_universal_app_state().await;
+    async fn test_app_state_cloning() {
+        let app_state = create_test_app_state().await;
 
         let backend_router_clone = app_state.backend_router.clone();
         let jwt_service_clone = app_state.jwt_service.clone();
@@ -586,8 +586,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_universal_app_state_structure() {
-        let app_state = create_test_universal_app_state().await;
+    async fn test_app_state_structure() {
+        let app_state = create_test_app_state().await;
 
         assert!(Arc::strong_count(&app_state.backend_router) >= 1);
         assert!(Arc::strong_count(&app_state.jwt_service) >= 1);
@@ -596,8 +596,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_json_rejection_handling() {
-        let app_state = create_test_universal_app_state().await;
-        let app = create_universal_app(app_state);
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
 
         // Test invalid JSON handling
         let request = Request::builder()
