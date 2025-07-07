@@ -190,7 +190,7 @@ docker run -p 3000:3000 effortlesslabs/0dbx_redis:latest
 
 ## Links
 
-- **📖 Documentation**: [https://dbx.effortlesslabs.com](https://dbx.effortlesslabs.com)
+- **📖 Documentation**: [https://dbx.effortlesslabs.com](https://0dbx.vercel.app/)
 - **🐳 Docker Hub**: [https://hub.docker.com/r/effortlesslabs/0dbx_redis](https://hub.docker.com/r/effortlesslabs/0dbx_redis)
 - **📦 NPM Package**: [https://www.npmjs.com/package/@0dbx/redis](https://www.npmjs.com/package/@0dbx/redis)
 - **🐙 GitHub**: [https://github.com/effortlesslabs/dbx](https://github.com/effortlesslabs/dbx)
