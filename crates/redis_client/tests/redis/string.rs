@@ -4,6 +4,7 @@ use crate::utils;
 use dbx_redis_client::{error::Result, HttpClient, StringOperations};
 
 #[tokio::test]
+#[ignore = "Requires running server - use 'cargo test --ignored' to run"]
 async fn test_string_operations() -> Result<()> {
     let client = HttpClient::new(&utils::http_test_url())?;
     let mut string_client = client.string();
