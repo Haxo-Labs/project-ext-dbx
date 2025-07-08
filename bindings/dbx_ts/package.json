@@ -1,11 +1,11 @@
 {
-  "name": "@0dbx/redis",
+  "name": "@0dbx/sdk",
   "version": "0.1.6",
-  "description": "NAPI bindings for DBX Redis SDK",
+  "description": "NAPI bindings for DBX Universal Database SDK",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
-    "name": "@0dbx/redis",
+    "name": "@0dbx/sdk",
     "triples": {
       "defaults": true,
       "additional": [
@@ -37,8 +37,9 @@
     "NAPI",
     "napi",
     "node-api",
-    "redis",
+    "dbx",
     "database",
+    "universal",
     "api",
     "bindings"
   ],
@@ -64,15 +65,15 @@
     "@0dbx/*.node"
   ],
   "optionalDependencies": {
-    "@0dbx/redis-win32-x64-msvc": "0.1.6",
-    "@0dbx/redis-darwin-x64": "0.1.6",
-    "@0dbx/redis-linux-x64-gnu": "0.1.6",
-    "@0dbx/redis-win32-ia32-msvc": "0.1.6",
-    "@0dbx/redis-darwin-arm64": "0.1.6",
-    "@0dbx/redis-linux-x64-musl": "0.1.6",
-    "@0dbx/redis-linux-arm64-gnu": "0.1.6",
-    "@0dbx/redis-linux-arm-gnueabihf": "0.1.6",
-    "@0dbx/redis-linux-arm64-musl": "0.1.6",
-    "@0dbx/redis-freebsd-x64": "0.1.6"
+    "@0dbx/sdk-win32-x64-msvc": "0.1.6",
+    "@0dbx/sdk-darwin-x64": "0.1.6",
+    "@0dbx/sdk-linux-x64-gnu": "0.1.6",
+    "@0dbx/sdk-win32-ia32-msvc": "0.1.6",
+    "@0dbx/sdk-darwin-arm64": "0.1.6",
+    "@0dbx/sdk-linux-x64-musl": "0.1.6",
+    "@0dbx/sdk-linux-arm64-gnu": "0.1.6",
+    "@0dbx/sdk-linux-arm-gnueabihf": "0.1.6",
+    "@0dbx/sdk-linux-arm64-musl": "0.1.6",
+    "@0dbx/sdk-freebsd-x64": "0.1.6"
   }
 }
