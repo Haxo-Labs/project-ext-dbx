@@ -1,14 +1,10 @@
 use axum::{
-    extract::State,
-    http::{self, Method},
-    middleware::from_fn_with_state,
-    response::Json,
-    routing::get,
+    extract::State, http::Method, middleware::from_fn_with_state, response::Json, routing::get,
     Router,
 };
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     config::{AppConfig, ConfigError},
@@ -193,43 +189,12 @@ pub fn create_app(state: AppState) -> Router {
         .nest("/api/v1/query", query_routes)
         .nest("/api/v1/stream", stream_routes)
         .nest("/api/v1/admin", health_routes)
-}
-
-/// Status check endpoint
-async fn status_check(
-    State(router): State<Arc<BackendRouter>>,
-) -> Json<ApiResponse<serde_json::Value>> {
-    let response = serde_json::json!({
-        "status": "running",
-        "mode": "dbx",
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "version": env!("CARGO_PKG_VERSION")
-    });
-
-    Json(ApiResponse::success(response))
-}
-
-/// List available backends endpoint (simplified)
-async fn list_backends(
-    State(_router): State<Arc<BackendRouter>>,
-) -> Json<ApiResponse<Vec<String>>> {
-    // For now, return a static list - will be improved later
-    let backends = vec!["default".to_string()];
-    Json(ApiResponse::success(backends))
-}
-
-/// Health check endpoint
-async fn health_check_endpoint(
-    State(router): State<Arc<BackendRouter>>,
-) -> Json<ApiResponse<serde_json::Value>> {
-    let response = serde_json::json!({
-        "status": "healthy",
-        "api_version": "v1",
-        "timestamp": chrono::Utc::now().timestamp_millis(),
-        "backends": ["default"]
-    });
-
-    Json(ApiResponse::success(response))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                .allow_headers(Any),
+        )
 }
 
 /// Start the server with BackendRouter (now the main/default server)
@@ -287,7 +252,6 @@ mod tests {
     use crate::config::JwtConfig;
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
-    use dbx_adapter::redis::client::RedisPool;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -607,22 +571,12 @@ mod tests {
         // Test invalid JSON handling on existing auth route
         let request = Request::builder()
             .method(Method::POST)
-            .uri("/login")
+            .uri("/auth/login")
             .header("content-type", "application/json")
             .body(Body::from("invalid json"))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    // Helper function to create test JWT config for comparisons
-    fn create_test_jwt_config() -> JwtConfig {
-        JwtConfig {
-            secret: "test-jwt-secret-that-is-at-least-32-characters-long-for-security".to_string(),
-            issuer: "test_issuer".to_string(),
-            access_token_expiration: 3600,
-            refresh_token_expiration: 86400,
-        }
     }
 }
