@@ -93,7 +93,7 @@ async fn test_admin_health() -> Result<()> {
 
     let body: Value = response.json().await?;
     assert!(body["success"].as_bool().unwrap_or(false));
-    assert!(body["data"]["status"].as_str().unwrap_or("") == "Healthy");
+    assert!(body["data"]["status"].as_str().unwrap_or("") == "healthy");
 
     Ok(())
 }
@@ -188,16 +188,20 @@ async fn test_large_string() -> Result<()> {
     // Set large string
     let set_payload = json!({ "value": large_value });
     let response = server
-        .post_admin(&format!("/redis/string/{}", key), &set_payload)
+        .post_admin(&format!("/api/v1/data/{}", key), &set_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+
     // Get large string
-    let response = server.get_admin(&format!("/redis/string/{}", key)).await?;
+    let response = server.get_admin(&format!("/api/v1/data/{}", key)).await?;
     assert_eq!(response.status(), 200);
 
-    let body: Option<String> = response.json().await?;
-    assert_eq!(body, Some(large_value));
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert_eq!(body["data"]["data"].as_str(), Some(large_value.as_str()));
 
     Ok(())
 }
@@ -225,13 +229,13 @@ async fn test_user_access_restrictions() -> Result<()> {
     let mut server = TestServer::new().await?;
     server.authenticate_user().await?;
 
-    // User should be able to access string endpoints
+    // User should be able to access data endpoints
     let key = server.unique_key();
-    let response = server.get_user(&format!("/redis/string/{}", key)).await?;
+    let response = server.get_user(&format!("/api/v1/data/{}", key)).await?;
     assert_eq!(response.status(), 200);
 
     // User should NOT be able to access admin endpoints (403 Forbidden)
-    let response = server.get_user("/redis/admin/ping").await?;
+    let response = server.get_user("/api/v1/admin/system").await?;
     assert_eq!(response.status(), 403); // Forbidden - route exists but access denied
 
     Ok(())
@@ -248,21 +252,26 @@ async fn test_hash_operations() -> Result<()> {
     let field = "test_field";
     let value = "test_value";
 
-    // Set hash field
-    let set_payload = json!({ "value": value });
+    // Set hash field using update operation
+    let update_payload = json!({ "fields": { field: value } });
     let response = server
-        .post_admin(&format!("/redis/hash/{}/{}", key, field), &set_payload)
+        .put_admin(&format!("/api/v1/data/{}", key), &update_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
-    // Get hash field
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+
+    // Get hash field using field parameter
     let response = server
-        .get_admin(&format!("/redis/hash/{}/{}", key, field))
+        .get_admin(&format!("/api/v1/data/{}?fields={}", key, field))
         .await?;
     assert_eq!(response.status(), 200);
 
-    let body: Option<String> = response.json().await?;
-    assert_eq!(body, Some(value.to_string()));
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+    // Hash field should be in the returned object
+    assert_eq!(body["data"]["data"][field].as_str(), Some(value));
 
     Ok(())
 }
@@ -277,21 +286,25 @@ async fn test_set_operations() -> Result<()> {
     let key = server.unique_key();
     let member = "test_member";
 
-    // Add to set
-    let add_payload = json!({ "member": member });
+    // Add to set by creating an array value
+    let set_payload = json!({ "value": [member] });
     let response = server
-        .post_admin(&format!("/redis/set/{}", key), &add_payload)
+        .post_admin(&format!("/api/v1/data/{}", key), &set_payload)
         .await?;
     assert_eq!(response.status(), 200);
+
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
 
     // Get set members
-    let response = server
-        .get_admin(&format!("/redis/set/{}/members", key))
-        .await?;
+    let response = server.get_admin(&format!("/api/v1/data/{}", key)).await?;
     assert_eq!(response.status(), 200);
 
-    let body: Vec<String> = response.json().await?;
-    assert!(body.contains(&member.to_string()));
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+    let members = body["data"]["data"].as_array().unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].as_str(), Some(member));
 
     Ok(())
 }
@@ -357,30 +370,36 @@ async fn test_string_batch_get_operations() -> Result<()> {
     let key2 = server.unique_key();
     let key3 = server.unique_key();
 
-    // Set multiple strings
+    // Set multiple strings using new API
     let set_payload1 = json!({ "value": "value1" });
     let set_payload2 = json!({ "value": "value2" });
 
     server
-        .post_admin(&format!("/redis/string/{}", key1), &set_payload1)
+        .post_admin(&format!("/api/v1/data/{}", key1), &set_payload1)
         .await?;
     server
-        .post_admin(&format!("/redis/string/{}", key2), &set_payload2)
+        .post_admin(&format!("/api/v1/data/{}", key2), &set_payload2)
         .await?;
     // key3 is not set intentionally
 
-    // Batch get operation
-    let batch_payload = json!({ "keys": [key1, key2, key3] });
-    let response = server
-        .post_admin("/redis/string/batch/get", &batch_payload)
-        .await?;
-    assert_eq!(response.status(), 200);
+    // Individual get operations (new API doesn't have specific batch get endpoint)
+    let response1 = server.get_admin(&format!("/api/v1/data/{}", key1)).await?;
+    assert_eq!(response1.status(), 200);
+    let body1: Value = response1.json().await?;
+    assert!(body1["success"].as_bool().unwrap_or(false));
+    assert_eq!(body1["data"]["data"].as_str(), Some("value1"));
 
-    let body: Vec<Option<String>> = response.json().await?;
-    assert_eq!(body.len(), 3);
-    assert_eq!(body[0], Some("value1".to_string()));
-    assert_eq!(body[1], Some("value2".to_string()));
-    assert_eq!(body[2], None);
+    let response2 = server.get_admin(&format!("/api/v1/data/{}", key2)).await?;
+    assert_eq!(response2.status(), 200);
+    let body2: Value = response2.json().await?;
+    assert!(body2["success"].as_bool().unwrap_or(false));
+    assert_eq!(body2["data"]["data"].as_str(), Some("value2"));
+
+    let response3 = server.get_admin(&format!("/api/v1/data/{}", key3)).await?;
+    assert_eq!(response3.status(), 200);
+    let body3: Value = response3.json().await?;
+    assert!(body3["success"].as_bool().unwrap_or(false));
+    assert!(body3["data"]["data"].is_null()); // key3 was not set
 
     Ok(())
 }
@@ -393,29 +412,42 @@ async fn test_string_batch_set_operations() -> Result<()> {
 
     let key1 = server.unique_key();
     let key2 = server.unique_key();
-    let key3 = server.unique_key();
 
-    // Batch set operations - using valid operations only (no null values)
+    // Batch set operations using new batch data endpoint
     let batch_payload = json!({
         "operations": [
-            { "key": key1, "value": "batch_value1" },
-            { "key": key2, "value": "batch_value2", "ttl": 300 }
+            {
+                "operation_type": "set",
+                "key": key1,
+                "value": "batch_value1"
+            },
+            {
+                "operation_type": "set",
+                "key": key2,
+                "value": "batch_value2",
+                "ttl": 300
+            }
         ]
     });
 
     let response = server
-        .post_admin("/redis/string/batch/set", &batch_payload)
+        .post_admin("/api/v1/data/batch", &batch_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
-    // Verify values were set correctly
-    let response = server.get_admin(&format!("/redis/string/{}", key1)).await?;
-    let body: Option<String> = response.json().await?;
-    assert_eq!(body, Some("batch_value1".to_string()));
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
 
-    let response = server.get_admin(&format!("/redis/string/{}", key2)).await?;
-    let body: Option<String> = response.json().await?;
-    assert_eq!(body, Some("batch_value2".to_string()));
+    // Verify values were set correctly
+    let response = server.get_admin(&format!("/api/v1/data/{}", key1)).await?;
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert_eq!(body["data"]["data"].as_str(), Some("batch_value1"));
+
+    let response = server.get_admin(&format!("/api/v1/data/{}", key2)).await?;
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert_eq!(body["data"]["data"].as_str(), Some("batch_value2"));
 
     Ok(())
 }
@@ -428,50 +460,54 @@ async fn test_string_pattern_operations() -> Result<()> {
 
     let base_key = server.unique_key();
 
-    // Set multiple strings with pattern
+    // Set multiple strings with pattern using new API
     let set_payload = json!({ "value": "pattern_value" });
     server
-        .post_admin(&format!("/redis/string/{}:user:1", base_key), &set_payload)
+        .post_admin(&format!("/api/v1/data/{}:user:1", base_key), &set_payload)
         .await?;
     server
-        .post_admin(&format!("/redis/string/{}:user:2", base_key), &set_payload)
+        .post_admin(&format!("/api/v1/data/{}:user:2", base_key), &set_payload)
         .await?;
     server
         .post_admin(
-            &format!("/redis/string/{}:session:1", base_key),
+            &format!("/api/v1/data/{}:session:1", base_key),
             &set_payload,
         )
         .await?;
 
-    // Test pattern matching (ungrouped)
+    // Test pattern matching using query pattern endpoint
     let pattern_payload = json!({
-        "patterns": [format!("{}:user:*", base_key)],
-        "grouped": false
+        "pattern": format!("{}:user:*", base_key),
+        "limit": 10
     });
 
     let response = server
-        .post_admin("/redis/string/batch/patterns", &pattern_payload)
+        .post_admin("/api/v1/query/pattern", &pattern_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
     let body: Value = response.json().await?;
-    assert_eq!(body["grouped"], false);
-    assert!(body["results"].is_object());
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert!(body["data"]["results"].is_array());
+    let results = body["data"]["results"].as_array().unwrap();
+    assert!(results.len() >= 2); // Should find at least the 2 user keys
 
-    // Test pattern matching (grouped)
+    // Test another pattern search for session keys
     let pattern_payload = json!({
-        "patterns": [format!("{}:user:*", base_key), format!("{}:session:*", base_key)],
-        "grouped": true
+        "pattern": format!("{}:session:*", base_key),
+        "limit": 10
     });
 
     let response = server
-        .post_admin("/redis/string/batch/patterns", &pattern_payload)
+        .post_admin("/api/v1/query/pattern", &pattern_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
     let body: Value = response.json().await?;
-    assert_eq!(body["grouped"], true);
-    assert!(body["results"].is_array());
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert!(body["data"]["results"].is_array());
+    let results = body["data"]["results"].as_array().unwrap();
+    assert!(results.len() >= 1); // Should find at least the 1 session key
 
     Ok(())
 }
@@ -482,35 +518,37 @@ async fn test_string_pattern_operations_empty_patterns() -> Result<()> {
     let mut server = TestServer::new().await?;
     server.authenticate_admin().await?;
 
-    // Test empty patterns ungrouped
+    // Test empty/wildcard pattern using query pattern endpoint
     let pattern_payload = json!({
-        "patterns": [],
-        "grouped": false
+        "pattern": "*",
+        "limit": 1
     });
 
     let response = server
-        .post_admin("/redis/string/batch/patterns", &pattern_payload)
+        .post_admin("/api/v1/query/pattern", &pattern_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
     let body: Value = response.json().await?;
-    assert_eq!(body["grouped"], false);
-    assert!(body["results"].is_array());
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert!(body["data"]["results"].is_array());
 
-    // Test empty patterns grouped
+    // Test very specific pattern that matches nothing
     let pattern_payload = json!({
-        "patterns": [],
-        "grouped": true
+        "pattern": "nonexistent_key_pattern_*",
+        "limit": 10
     });
 
     let response = server
-        .post_admin("/redis/string/batch/patterns", &pattern_payload)
+        .post_admin("/api/v1/query/pattern", &pattern_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
     let body: Value = response.json().await?;
-    assert_eq!(body["grouped"], true);
-    assert!(body["results"].is_array());
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert!(body["data"]["results"].is_array());
+    let results = body["data"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 0); // Should find no keys
 
     Ok(())
 }
@@ -622,35 +660,35 @@ async fn test_string_batch_operations_edge_cases() -> Result<()> {
     let mut server = TestServer::new().await?;
     server.authenticate_admin().await?;
 
-    // Test batch get with empty keys
-    let batch_payload = json!({ "keys": [] });
-    let response = server
-        .post_admin("/redis/string/batch/get", &batch_payload)
-        .await?;
-    assert_eq!(response.status(), 200);
-
-    let body: Vec<Option<String>> = response.json().await?;
-    assert_eq!(body.len(), 0);
-
-    // Test batch set with empty operations
+    // Test batch operations with empty operations list
     let batch_payload = json!({ "operations": [] });
     let response = server
-        .post_admin("/redis/string/batch/set", &batch_payload)
+        .post_admin("/api/v1/data/batch", &batch_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
-    // Test batch get with very large number of keys
-    let keys: Vec<String> = (0..1000)
-        .map(|i| format!("large_batch_key_{}", i))
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+
+    // Test batch set with multiple operations
+    let operations: Vec<Value> = (0..10)
+        .map(|i| {
+            json!({
+                "operation_type": "set",
+                "key": format!("batch_edge_key_{}", i),
+                "value": format!("batch_value_{}", i)
+            })
+        })
         .collect();
-    let batch_payload = json!({ "keys": keys });
+
+    let batch_payload = json!({ "operations": operations });
     let response = server
-        .post_admin("/redis/string/batch/get", &batch_payload)
+        .post_admin("/api/v1/data/batch", &batch_payload)
         .await?;
     assert_eq!(response.status(), 200);
 
-    let body: Vec<Option<String>> = response.json().await?;
-    assert_eq!(body.len(), 1000);
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
 
     Ok(())
 }
@@ -663,11 +701,11 @@ async fn test_string_unauthorized_operations() -> Result<()> {
 
     let key = server.unique_key();
 
-    // Test that regular users can access string operations
+    // Test that regular users can access data operations
     let set_payload = json!({ "value": "user_value" });
     let response = server
         .client
-        .post(&format!("{}/redis/string/{}", server.base_url, key))
+        .post(&format!("{}/api/v1/data/{}", server.base_url, key))
         .header(
             "Authorization",
             format!("Bearer {}", server.user_token.as_ref().unwrap()),
@@ -680,7 +718,7 @@ async fn test_string_unauthorized_operations() -> Result<()> {
 
     // Test unauthenticated access
     let response = server
-        .get_unauthenticated(&format!("/redis/string/{}", key))
+        .get_unauthenticated(&format!("/api/v1/data/{}", key))
         .await?;
     assert_eq!(response.status(), 401);
 
@@ -695,10 +733,10 @@ async fn test_string_method_not_allowed() -> Result<()> {
 
     let key = server.unique_key();
 
-    // Test PUT method (should return 405 Method Not Allowed)
+    // Test PATCH method (should return 405 Method Not Allowed)
     let response = server
         .client
-        .put(&format!("{}/redis/string/{}", server.base_url, key))
+        .patch(&format!("{}/api/v1/data/{}", server.base_url, key))
         .header(
             "Authorization",
             format!("Bearer {}", server.admin_token.as_ref().unwrap()),
@@ -708,10 +746,10 @@ async fn test_string_method_not_allowed() -> Result<()> {
 
     assert_eq!(response.status(), 405);
 
-    // Test PATCH method (should return 405 Method Not Allowed)
+    // Test HEAD method (should return 405 Method Not Allowed)
     let response = server
         .client
-        .patch(&format!("{}/redis/string/{}", server.base_url, key))
+        .head(&format!("{}/api/v1/data/{}", server.base_url, key))
         .header(
             "Authorization",
             format!("Bearer {}", server.admin_token.as_ref().unwrap()),
@@ -732,28 +770,30 @@ async fn test_string_info_operations() -> Result<()> {
 
     let key = server.unique_key();
 
-    // Test getting info for non-existent key
+    // Test existence check for non-existent key using new exists endpoint
     let response = server
-        .get_admin(&format!("/redis/string/{}/info", key))
+        .get_admin(&format!("/api/v1/data/{}/exists", key))
         .await?;
     assert_eq!(response.status(), 200);
 
-    let body: Option<Value> = response.json().await?;
-    assert!(body.is_none());
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert_eq!(body["data"]["data"].as_bool(), Some(false));
 
-    // Set a string and get info
+    // Set a string and check existence
     let set_payload = json!({ "value": "info_test_value" });
     server
-        .post_admin(&format!("/redis/string/{}", key), &set_payload)
+        .post_admin(&format!("/api/v1/data/{}", key), &set_payload)
         .await?;
 
     let response = server
-        .get_admin(&format!("/redis/string/{}/info", key))
+        .get_admin(&format!("/api/v1/data/{}/exists", key))
         .await?;
     assert_eq!(response.status(), 200);
 
-    let body: Option<Value> = response.json().await?;
-    assert!(body.is_some());
+    let body: Value = response.json().await?;
+    assert!(body["success"].as_bool().unwrap_or(false));
+    assert_eq!(body["data"]["data"].as_bool(), Some(true));
 
     Ok(())
 }
@@ -780,7 +820,7 @@ async fn test_string_concurrent_operations() -> Result<()> {
             let set_payload = json!({ "value": value });
 
             let response = client
-                .post(&format!("{}/redis/string/{}", server_url, key))
+                .post(&format!("{}/api/v1/data/{}", server_url, key))
                 .header("Authorization", format!("Bearer {}", token))
                 .json(&set_payload)
                 .send()
@@ -802,9 +842,10 @@ async fn test_string_concurrent_operations() -> Result<()> {
         let key = format!("{}:concurrent:{}", base_key, i);
         let expected_value = format!("concurrent_value_{}", i);
 
-        let response = server.get_admin(&format!("/redis/string/{}", key)).await?;
-        let body: Option<String> = response.json().await?;
-        assert_eq!(body, Some(expected_value));
+        let response = server.get_admin(&format!("/api/v1/data/{}", key)).await?;
+        let body: Value = response.json().await?;
+        assert!(body["success"].as_bool().unwrap_or(false));
+        assert_eq!(body["data"]["data"].as_str(), Some(expected_value.as_str()));
     }
 
     Ok(())

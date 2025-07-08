@@ -340,6 +340,18 @@ impl TestServer {
             .await?)
     }
 
+    /// Make authenticated PUT request as admin
+    pub async fn put_admin(&self, path: &str, json: &Value) -> Result<reqwest::Response> {
+        let url = format!("{}{}", self.base_url, path);
+        Ok(self
+            .client
+            .put(&url)
+            .headers(self.get_admin_auth_header()?)
+            .json(json)
+            .send()
+            .await?)
+    }
+
     /// Make authenticated DELETE request as admin
     pub async fn delete_admin(&self, path: &str) -> Result<reqwest::Response> {
         let url = format!("{}{}", self.base_url, path);
