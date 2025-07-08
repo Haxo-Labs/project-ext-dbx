@@ -112,6 +112,7 @@ impl DbxClient {
     }
 }
 
+#[napi]
 impl DbxClient {
     /// Create a new DBX client
     #[napi(constructor)]
