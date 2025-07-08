@@ -1,17 +1,20 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use redis::{JsonValue, Value as RedisValue};
+use base64::Engine;
+use chrono::Utc;
 use serde_json::{Map, Value as JsonValue};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::redis::client::RedisClient;
 use dbx_core::{
-    BackendCapabilities, BackendFeature, BackendHealth, BackendStats, DataOperation, DataResult,
-    DataValue, DbxError, QueryCapabilities, QueryOperation, QueryResult, QueryResultItem,
-    ResultMetadata, StreamCapabilities, StreamOperation, StreamResult, TransactionSupport,
-    UniversalBackend,
+    BackendCapabilities, BackendFeature, BackendHealth, BackendStats, ConnectionStats,
+    DataOperation, DataOperationType, DataResult, DataValue, DbxError, HealthStatus,
+    OperationStats, PerformanceStats, QueryCapabilities, QueryOperation, QueryResult,
+    QueryResultItem, ResultMetadata, StorageStats, StreamCapabilities, StreamEntry,
+    StreamOperation, StreamResult, TransactionSupport, UniversalBackend,
 };
 
 /// Redis backend implementation for DBX

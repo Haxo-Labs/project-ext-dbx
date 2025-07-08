@@ -6,7 +6,7 @@ use dbx_config::BackendConfig;
 use dbx_core::UniversalBackend;
 use dbx_router::{BackendFactory, RouterError, RouterResult};
 
-use super::universal::UniversalRedisBackend;
+use super::backend::RedisBackend;
 
 /// Factory for creating Redis backend instances
 pub struct RedisBackendFactory;
@@ -42,13 +42,12 @@ impl BackendFactory for RedisBackendFactory {
         }
 
         // Create the Redis backend
-        let backend =
-            UniversalRedisBackend::from_url(&config.url, name.to_string()).map_err(|e| {
-                RouterError::backend_initialization(
-                    name.to_string(),
-                    format!("Failed to create Redis backend: {}", e),
-                )
-            })?;
+        let backend = RedisBackend::from_url(&config.url, name.to_string()).map_err(|e| {
+            RouterError::backend_initialization(
+                name.to_string(),
+                format!("Failed to create Redis backend: {}", e),
+            )
+        })?;
 
         info!(backend = %name, url = %config.url, "Redis backend created successfully");
 

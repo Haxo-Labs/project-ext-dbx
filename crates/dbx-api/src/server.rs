@@ -253,7 +253,7 @@ pub async fn run_server(config_path: Option<&str>) -> Result<(), ServerError> {
     Ok(())
 }
 
-/// Public run function for compatibility  
+/// Public run function for compatibility
 pub async fn run() -> Result<(), ConfigError> {
     run_server(None).await.map_err(|e| match e {
         ServerError::Configuration(config_err) => config_err,

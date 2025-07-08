@@ -27,27 +27,27 @@ async fn main() {
         .map(|s| s.as_str());
 
     info!("Starting DBX Server");
-    if let Some(path) = config_path {
-        info!("Using configuration file: {}", path);
-    } else {
-        info!("Using default configuration from environment variables");
-    }
+        if let Some(path) = config_path {
+            info!("Using configuration file: {}", path);
+        } else {
+            info!("Using default configuration from environment variables");
+        }
 
     if let Err(e) = run_server(config_path).await {
-        match e {
-            ServerError::Configuration(config_err) => {
-                error!("Configuration error: {}", config_err);
-                error!("Make sure all required environment variables are set or provide a valid config file");
+            match e {
+                ServerError::Configuration(config_err) => {
+                    error!("Configuration error: {}", config_err);
+                    error!("Make sure all required environment variables are set or provide a valid config file");
+                }
+                ServerError::DatabaseConnection(db_err) => {
+                    error!("Database connection error: {}", db_err);
+                    error!("Make sure all configured backends are accessible");
+                }
+                _ => {
+                    error!("Server error: {}", e);
+                }
             }
-            ServerError::DatabaseConnection(db_err) => {
-                error!("Database connection error: {}", db_err);
-                error!("Make sure all configured backends are accessible");
-            }
-            _ => {
-                error!("Server error: {}", e);
-            }
-        }
-        std::process::exit(1);
+            std::process::exit(1);
     }
 }
 

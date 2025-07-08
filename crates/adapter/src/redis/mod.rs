@@ -5,14 +5,14 @@
 //! It includes support for individual commands, pipelined operations,
 //! transactions, and Lua scripts.
 
+pub mod backend;
 pub mod client;
 pub mod factory;
 pub mod primitives;
-pub mod universal;
 
 // Re-export key types for convenience
+pub use backend::RedisBackend;
 pub use factory::{create_redis_factory, RedisBackendFactory};
-pub use universal::UniversalRedisBackend;
 
 use redis::{Connection, RedisError, RedisResult, Script};
 
