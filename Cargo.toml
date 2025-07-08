@@ -5,7 +5,7 @@ members = [
     "crates/dbx-core",
     "crates/dbx-config",
     "crates/dbx-router",
-    "bindings/redis_ts",
+    "bindings/dbx_ts",
 ]
 resolver = "2"
 

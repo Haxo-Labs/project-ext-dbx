@@ -474,6 +474,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbx-bindings"
+version = "0.1.6"
+dependencies = [
+ "anyhow",
+ "dbx-adapter",
+ "dbx-core",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "dbx-config"
 version = "0.1.6"
 dependencies = [
@@ -501,19 +517,6 @@ dependencies = [
  "tokio",
  "tokio-test",
  "uuid",
-]
-
-[[package]]
-name = "dbx-redis-bindings"
-version = "0.1.6"
-dependencies = [
- "anyhow",
- "napi",
- "napi-build",
- "napi-derive",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
