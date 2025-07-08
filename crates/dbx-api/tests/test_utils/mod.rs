@@ -1,16 +1,20 @@
 use anyhow::Result;
-use dbx_adapter::redis::client::RedisPool;
-use dbx_redis_api::{
-    config::{AppConfig, JwtConfig, ServerConfig},
+use dbx_adapter::{redis::client::RedisPool, redis::factory::RedisBackendFactory};
+use dbx_api::{
+    config::{AppConfig, JwtConfig},
     middleware::{JwtService, UserStore},
     models::{CreateUserRequest, UserRole},
     server::{create_app, AppState},
 };
+use dbx_config::{BackendConfig, DbxConfig, LoadBalancingConfig, RoutingConfig};
+use dbx_core::LoadBalancingStrategy;
+use dbx_router::{BackendRegistryBuilder, BackendRouter};
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client,
 };
 use serde_json::Value;
+use std::collections::HashMap;
 use std::{
     env,
     sync::{Arc, Once},
@@ -95,7 +99,64 @@ impl TestServer {
 
     /// Create application state for testing
     async fn create_test_app_state(redis_url: &str) -> Result<AppState> {
-        // Create Redis pool
+        // Create backend configuration
+        let mut backends = HashMap::new();
+        backends.insert(
+            "default".to_string(),
+            BackendConfig {
+                provider: "redis".to_string(),
+                url: redis_url.to_string(),
+                pool_size: Some(5),
+                timeout_ms: Some(5000),
+                retry_attempts: Some(3),
+                retry_delay_ms: Some(1000),
+                capabilities: None,
+                additional_config: HashMap::new(),
+            },
+        );
+
+        let routing = RoutingConfig {
+            default_backend: "default".to_string(),
+            key_routing: Vec::new(),
+            operation_routing: HashMap::new(),
+            load_balancing: Some(LoadBalancingConfig {
+                strategy: LoadBalancingStrategy::RoundRobin,
+                backends: vec!["default".to_string()],
+                health_check_interval_ms: 30000,
+                weights: Some({
+                    let mut weights = HashMap::new();
+                    weights.insert("default".to_string(), 1.0);
+                    weights
+                }),
+            }),
+        };
+
+        let config = DbxConfig {
+            backends,
+            routing,
+            consistency: Default::default(),
+            performance: Default::default(),
+            security: Default::default(),
+            server: Default::default(),
+        };
+
+        // Build backend registry
+        let mut registry_builder = BackendRegistryBuilder::new();
+        let redis_factory = RedisBackendFactory::new();
+        registry_builder = registry_builder.with_factory("redis", redis_factory);
+        let registry = registry_builder.build();
+
+        // Initialize backends from configuration
+        registry
+            .initialize_backends(&config)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize backends: {}", e))?;
+
+        // Create backend router
+        let backend_router = BackendRouter::new(registry, &config)
+            .map_err(|e| anyhow::anyhow!("Failed to create router: {}", e))?;
+
+        // Create Redis pool for user store
         let redis_pool = Arc::new(RedisPool::new(redis_url, 5)?);
 
         // Create JWT service
@@ -132,7 +193,7 @@ impl TestServer {
         }
 
         Ok(AppState {
-            redis_pool,
+            backend_router: Arc::new(backend_router),
             jwt_service,
             user_store,
         })
