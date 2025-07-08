@@ -181,7 +181,7 @@ pub fn create_app(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health_check))
-        .merge(auth_routes)
+        .nest("/auth", auth_routes)
         .nest("/api/v1/data", data_routes)
         .nest("/api/v1/query", query_routes)
         .nest("/api/v1/stream", stream_routes)

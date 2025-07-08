@@ -106,9 +106,9 @@ impl RedisBackend {
         match value {
             None => Ok(DataValue::Null),
             Some(s) => {
-                // Try to parse as different types
+                // Empty strings should be preserved as empty strings, not converted to null
                 if s.is_empty() {
-                    return Ok(DataValue::Null);
+                    return Ok(DataValue::String(s));
                 }
 
                 // Try JSON first (for complex types)
