@@ -153,15 +153,9 @@ temp/
 @internals
 .DS_Store
 
-# Redis TS bindings
-bindings/redis_ts/index.js
-bindings/redis_ts/index.d.ts
-bindings/redis_ts/index.js.map
-bindings/redis_ts/index.d.ts.map
-bindings/redis_ts/index.js.map.gz
-bindings/redis_ts/index.d.ts.map.gz
-
-# Redis TS native bindings
-@0dbx
+# DBX NAPI native bindings - platform-specific compiled binaries only
+bindings/dbx_ts/*.node
+bindings/dbx_ts/@0dbx/
+bindings/dbx_ts/dbx/
 
 
