@@ -1,4 +1,11 @@
-use axum::{extract::State, middleware::from_fn_with_state, response::Json, routing::get, Router};
+use axum::{
+    extract::State,
+    http::{self, Method},
+    middleware::from_fn_with_state,
+    response::Json,
+    routing::get,
+    Router,
+};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
@@ -186,7 +193,6 @@ pub fn create_app(state: AppState) -> Router {
         .nest("/api/v1/query", query_routes)
         .nest("/api/v1/stream", stream_routes)
         .nest("/api/v1/admin", health_routes)
-        .layer(CorsLayer::permissive())
 }
 
 /// Status check endpoint

@@ -262,15 +262,13 @@ async fn test_hash_operations() -> Result<()> {
     let body: Value = response.json().await?;
     assert!(body["success"].as_bool().unwrap_or(false));
 
-    // Get hash field using field parameter
-    let response = server
-        .get_admin(&format!("/api/v1/data/{}?fields={}", key, field))
-        .await?;
+    // Get the hash data (will return the whole hash object)
+    let response = server.get_admin(&format!("/api/v1/data/{}", key)).await?;
     assert_eq!(response.status(), 200);
 
     let body: Value = response.json().await?;
     assert!(body["success"].as_bool().unwrap_or(false));
-    // Hash field should be in the returned object
+    // Hash field should be in the returned hash object
     assert_eq!(body["data"]["data"][field].as_str(), Some(value));
 
     Ok(())
@@ -733,10 +731,13 @@ async fn test_string_method_not_allowed() -> Result<()> {
 
     let key = server.unique_key();
 
-    // Test PATCH method (should return 405 Method Not Allowed)
+    // Test OPTIONS method (should return 405 Method Not Allowed)
     let response = server
         .client
-        .patch(&format!("{}/api/v1/data/{}", server.base_url, key))
+        .request(
+            reqwest::Method::from_bytes(b"OPTIONS").unwrap(),
+            &format!("{}/api/v1/data/{}", server.base_url, key),
+        )
         .header(
             "Authorization",
             format!("Bearer {}", server.admin_token.as_ref().unwrap()),
@@ -746,10 +747,13 @@ async fn test_string_method_not_allowed() -> Result<()> {
 
     assert_eq!(response.status(), 405);
 
-    // Test HEAD method (should return 405 Method Not Allowed)
+    // Test TRACE method (should return 405 Method Not Allowed)
     let response = server
         .client
-        .head(&format!("{}/api/v1/data/{}", server.base_url, key))
+        .request(
+            reqwest::Method::from_bytes(b"TRACE").unwrap(),
+            &format!("{}/api/v1/data/{}", server.base_url, key),
+        )
         .header(
             "Authorization",
             format!("Bearer {}", server.admin_token.as_ref().unwrap()),

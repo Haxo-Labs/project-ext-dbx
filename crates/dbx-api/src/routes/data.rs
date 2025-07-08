@@ -373,13 +373,38 @@ fn json_to_data_value(value: serde_json::Value) -> DataValue {
     }
 }
 
+/// Method not allowed handler
+async fn method_not_allowed() -> (StatusCode, Json<ApiResponse<()>>) {
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        Json(ApiResponse::error("Method not allowed".to_string())),
+    )
+}
+
 /// Create routes for data operations
 pub fn create_data_routes() -> Router<Arc<BackendRouter>> {
+    use axum::routing::MethodRouter;
+
     Router::new()
-        .route("/:key", get(get_data))
-        .route("/:key", post(set_data))
-        .route("/:key", put(update_data))
-        .route("/:key", delete(delete_data))
-        .route("/:key/exists", get(check_exists))
-        .route("/batch", post(batch_operations))
+        .route(
+            "/:key",
+            MethodRouter::new()
+                .get(get_data)
+                .post(set_data)
+                .put(update_data)
+                .delete(delete_data)
+                .fallback(method_not_allowed),
+        )
+        .route(
+            "/:key/exists",
+            MethodRouter::new()
+                .get(check_exists)
+                .fallback(method_not_allowed),
+        )
+        .route(
+            "/batch",
+            MethodRouter::new()
+                .post(batch_operations)
+                .fallback(method_not_allowed),
+        )
 }

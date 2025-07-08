@@ -137,6 +137,19 @@ impl RedisBackend {
         }
     }
 
+    /// Get the Redis data type of a key
+    fn get_redis_type(&self, key: &str) -> Result<String, DbxError> {
+        let redis_string = self.client.string();
+        let mut conn = redis_string.connection().lock().unwrap();
+        let key_type: String = redis::cmd("TYPE").arg(key).query(&mut *conn).map_err(|e| {
+            DbxError::backend(
+                self.backend_name.clone(),
+                format!("Failed to get key type: {}", e),
+            )
+        })?;
+        Ok(key_type)
+    }
+
     /// Convert JSON to DataValue
     fn json_to_data_value(&self, json: &JsonValue) -> Result<DataValue, DbxError> {
         match json {
@@ -225,15 +238,94 @@ impl RedisBackend {
                             }
                         }
                     } else {
-                        // Simple key-value get (no fields specified)
-                        let redis_string = self.client.string();
-                        let value = redis_string.get(key).map_err(|e| {
-                            DbxError::backend(
-                                self.backend_name.clone(),
-                                format!("Get failed: {}", e),
-                            )
-                        })?;
-                        self.redis_value_to_data_value(value)
+                        // No fields specified - detect data type and handle accordingly
+                        let data_type = self.get_redis_type(key)?;
+                        match data_type.as_str() {
+                            "hash" => {
+                                // Get all hash fields
+                                let redis_hash = self.client.hash();
+                                let hash_data = redis_hash.hgetall(key).map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("Hash get all failed: {}", e),
+                                    )
+                                })?;
+
+                                let mut result = HashMap::new();
+                                for (field, value) in hash_data {
+                                    result.insert(
+                                        field,
+                                        self.redis_value_to_data_value(Some(value))?,
+                                    );
+                                }
+                                Ok(DataValue::Object(result))
+                            }
+                            "string" => {
+                                // Get string value
+                                let redis_string = self.client.string();
+                                let value = redis_string.get(key).map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("Get failed: {}", e),
+                                    )
+                                })?;
+                                self.redis_value_to_data_value(value)
+                            }
+                            "list" => {
+                                // Get list values
+                                let redis_string = self.client.string();
+                                let mut conn = redis_string.connection().lock().unwrap();
+                                let list_data: Vec<String> = redis::cmd("LRANGE")
+                                    .arg(key)
+                                    .arg(0)
+                                    .arg(-1)
+                                    .query(&mut *conn)
+                                    .map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("List get failed: {}", e),
+                                        )
+                                    })?;
+
+                                let result: Result<Vec<DataValue>, DbxError> = list_data
+                                    .into_iter()
+                                    .map(|v| self.redis_value_to_data_value(Some(v)))
+                                    .collect();
+                                Ok(DataValue::Array(result?))
+                            }
+                            "set" => {
+                                // Get set members
+                                let redis_set = self.client.set();
+                                let set_data: Vec<String> =
+                                    redis_set.smembers(key).map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("Set get failed: {}", e),
+                                        )
+                                    })?;
+
+                                let result: Result<Vec<DataValue>, DbxError> = set_data
+                                    .into_iter()
+                                    .map(|v| self.redis_value_to_data_value(Some(v)))
+                                    .collect();
+                                Ok(DataValue::Array(result?))
+                            }
+                            "none" => {
+                                // Key doesn't exist
+                                Ok(DataValue::Null)
+                            }
+                            _ => {
+                                // Unsupported type, try string as fallback
+                                let redis_string = self.client.string();
+                                let value = redis_string.get(key).map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("Get failed: {}", e),
+                                    )
+                                })?;
+                                self.redis_value_to_data_value(value)
+                            }
+                        }
                     }
                 }
 
