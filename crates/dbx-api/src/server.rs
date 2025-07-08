@@ -1,5 +1,9 @@
 use axum::{
-    extract::State, http::Method, middleware::from_fn_with_state, response::Json, routing::get,
+    extract::State,
+    http::{HeaderMap, Method},
+    middleware::from_fn_with_state,
+    response::Json,
+    routing::get,
     Router,
 };
 use std::sync::Arc;
@@ -140,8 +144,14 @@ async fn health_check() -> Json<ApiResponse<String>> {
 
 /// Create the application router with BackendRouter
 pub fn create_app(state: AppState) -> Router {
-    // Create authentication routes (public)
-    let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
+    // Create authentication routes (public) with CORS for browser access
+    let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers(Any),
+        );
 
     // Import route modules
     use crate::routes::{data, health, query, stream};
@@ -189,12 +199,6 @@ pub fn create_app(state: AppState) -> Router {
         .nest("/api/v1/query", query_routes)
         .nest("/api/v1/stream", stream_routes)
         .nest("/api/v1/admin", health_routes)
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-                .allow_headers(Any),
-        )
 }
 
 /// Start the server with BackendRouter (now the main/default server)

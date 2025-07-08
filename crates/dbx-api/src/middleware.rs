@@ -10,8 +10,7 @@ use axum::{
     extract::{rejection::JsonRejection, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::Next,
-    response::IntoResponse,
-    response::Json,
+    response::{IntoResponse, Json},
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
@@ -19,6 +18,7 @@ use dbx_adapter::redis::client::RedisPool;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use redis;
 use std::sync::Arc;
+
 use uuid::Uuid;
 
 /// Handle Redis errors and convert them to HTTP responses
