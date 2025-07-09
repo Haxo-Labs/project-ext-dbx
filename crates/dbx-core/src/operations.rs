@@ -163,24 +163,16 @@ pub enum TrimStrategy {
 
 /// Data value that can represent any data type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", content = "value")]
+#[serde(untagged)]
 pub enum DataValue {
-    #[serde(rename = "null")]
     Null,
-    #[serde(rename = "bool")]
     Bool(bool),
-    #[serde(rename = "int")]
     Int(i64),
-    #[serde(rename = "float")]
     Float(f64),
-    #[serde(rename = "string")]
     String(String),
-    #[serde(rename = "bytes")]
-    Bytes(Vec<u8>),
-    #[serde(rename = "array")]
     Array(Vec<DataValue>),
-    #[serde(rename = "object")]
     Object(HashMap<String, DataValue>),
+    Bytes(Vec<u8>),
 }
 
 impl DataValue {
@@ -383,7 +375,11 @@ mod tests {
             DataValue::Int(42),
             DataValue::Float(3.14),
             DataValue::String("test".to_string()),
-            DataValue::Bytes(vec![1, 2, 3]),
+            DataValue::Array(vec![
+                DataValue::Int(1),
+                DataValue::Int(2),
+                DataValue::Int(3),
+            ]),
         ];
 
         for value in values {
@@ -391,6 +387,20 @@ mod tests {
             let deserialized: DataValue = serde_json::from_str(&json).unwrap();
             assert_eq!(value, deserialized);
         }
+
+        // Test bytes serialization behavior (bytes get deserialized as arrays due to JSON ambiguity)
+        let bytes_value = DataValue::Bytes(vec![1, 2, 3]);
+        let json = serde_json::to_string(&bytes_value).unwrap();
+        let deserialized: DataValue = serde_json::from_str(&json).unwrap();
+        // Due to untagged serialization, [1, 2, 3] deserializes as Array, not Bytes
+        assert_eq!(
+            deserialized,
+            DataValue::Array(vec![
+                DataValue::Int(1),
+                DataValue::Int(2),
+                DataValue::Int(3)
+            ])
+        );
     }
 
     #[test]
