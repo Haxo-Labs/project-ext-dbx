@@ -23,7 +23,7 @@ export interface DbxResponse {
   executionTimeMs?: number
   backend?: string
 }
-/** DBX client for interacting with the Universal Database API */
+/** DBX client for interacting with the Database API */
 export declare class DbxClient {
   /** Create a new DBX client */
   constructor(config: DbxConfig)

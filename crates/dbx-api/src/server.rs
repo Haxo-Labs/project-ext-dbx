@@ -371,16 +371,30 @@ mod tests {
         let app_state = create_test_app_state().await;
         let app = create_app(app_state);
 
-        let request = Request::builder()
+        // Test CORS preflight on auth endpoint (should work because CORS is applied there)
+        let auth_request = Request::builder()
             .method(Method::OPTIONS)
-            .uri("/health")
+            .uri("/auth/login")
             .header("Origin", "http://localhost:3000")
-            .header("Access-Control-Request-Method", "GET")
+            .header("Access-Control-Request-Method", "POST")
             .body(Body::empty())
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        let auth_response = app.oneshot(auth_request).await.unwrap();
+        assert_eq!(auth_response.status(), StatusCode::OK);
+
+        // Test OPTIONS on health endpoint (should return 405 as it doesn't support OPTIONS)
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
+
+        let health_request = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let health_response = app.oneshot(health_request).await.unwrap();
+        assert_eq!(health_response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]
@@ -418,16 +432,35 @@ mod tests {
         let app_state = create_test_app_state().await;
         let app = create_app(app_state);
 
-        let request = Request::builder()
+        // Test CORS preflight on auth endpoint (should work - CORS enabled for browser access)
+        let auth_preflight_request = Request::builder()
             .method(Method::OPTIONS)
-            .uri("/health")
+            .uri("/auth/login")
             .header("Origin", "http://localhost:3000")
-            .header("Access-Control-Request-Method", "GET")
+            .header("Access-Control-Request-Method", "POST")
             .body(Body::empty())
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        let auth_response = app.oneshot(auth_preflight_request).await.unwrap();
+        assert_eq!(auth_response.status(), StatusCode::OK);
+
+        // Test that CORS headers are present
+        assert!(auth_response
+            .headers()
+            .contains_key("access-control-allow-origin"));
+
+        // Test OPTIONS on API endpoint (should return 401 - requires authentication first)
+        let app_state = create_test_app_state().await;
+        let app = create_app(app_state);
+
+        let api_options_request = Request::builder()
+            .method(Method::OPTIONS)
+            .uri("/api/v1/data/test")
+            .body(Body::empty())
+            .unwrap();
+
+        let api_response = app.oneshot(api_options_request).await.unwrap();
+        assert_eq!(api_response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

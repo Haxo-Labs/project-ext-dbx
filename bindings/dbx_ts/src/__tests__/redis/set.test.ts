@@ -1,229 +1,201 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-const { DbxRedisClient } = require("../../../index.js");
+const { DbxClient } = require("../../../index.js");
 
-describe("Redis HTTP Set Operations", () => {
+describe("DBX Set-like Operations", () => {
   let client: any;
-  const TEST_BASE_URL = process.env.REDIS_HTTP_URL || "http://localhost:3000";
+  const TEST_BASE_URL = process.env.DBX_HTTP_URL || "http://localhost:3000";
+  const TEST_USERNAME = process.env.DBX_USERNAME || "testuser";
+  const TEST_PASSWORD = process.env.DBX_PASSWORD || "testpassword123";
 
   beforeAll(async () => {
-    client = new DbxRedisClient(TEST_BASE_URL);
+    client = new DbxClient({
+      baseUrl: TEST_BASE_URL,
+      timeoutMs: 5000,
+    });
+
+    // Authenticate the client
+    try {
+      await client.authenticate(TEST_USERNAME, TEST_PASSWORD);
+    } catch (error) {
+      console.warn("Authentication failed, skipping tests:", error.message);
+    }
   });
 
   afterAll(async () => {
-    const setClient = client.set();
-    await setClient.delete("test:set:1");
-    await setClient.delete("test:set:2");
-    await setClient.delete("test:set:3");
+    // Clean up test data
+    try {
+      await client.delete("test:set:1");
+      await client.delete("test:set:2");
+      await client.delete("test:set:3");
+      await client.delete("test:collection:1");
+      await client.delete("test:collection:2");
+    } catch (error) {
+      // Ignore cleanup errors
+    }
   });
 
   beforeEach(async () => {
-    const setClient = client.set();
-    await setClient.delete("test:set:1");
-    await setClient.delete("test:set:2");
-    await setClient.delete("test:set:3");
+    // Clear test data before each test
+    try {
+      await client.delete("test:set:1");
+      await client.delete("test:set:2");
+      await client.delete("test:set:3");
+      await client.delete("test:collection:1");
+      await client.delete("test:collection:2");
+    } catch (error) {
+      // Ignore cleanup errors
+    }
   });
 
-  describe("add_one", () => {
-    it("should add a single member to a set", async () => {
-      const setClient = client.set();
-      const result = await setClient.addOne("test:set:1", "member1");
-      expect(result).toBe(true);
+  describe("collection operations", () => {
+    it("should store collection data as JSON", async () => {
+      const setData = JSON.stringify({
+        type: "set",
+        members: ["member1", "member2", "member3"],
+      });
+      const result = await client.set("test:set:1", setData);
+      expect(result.success).toBe(true);
     });
 
-    it("should return true when adding duplicate member", async () => {
-      const setClient = client.set();
-      await setClient.addOne("test:set:1", "member1");
-      const result = await setClient.addOne("test:set:1", "member1");
-      expect(result).toBe(true);
-    });
-  });
+    it("should retrieve collection data", async () => {
+      // Ensure clean state for this specific test
+      await client.delete("test:set:1");
 
-  describe("add_many", () => {
-    it("should add multiple members to a set", async () => {
-      const setClient = client.set();
-      const members = ["member1", "member2", "member3"];
-      const result = await setClient.addMany("test:set:1", members);
-      expect(result).toBe(true);
-    });
+      const setData = JSON.stringify({
+        type: "set",
+        members: ["redis", "database", "cache"],
+      });
+      await client.set("test:set:1", setData);
 
-    it("should handle empty array of members", async () => {
-      const setClient = client.set();
-      const result = await setClient.addMany("test:set:1", []);
-      expect(result).toBe(true);
+      const result = await client.get("test:set:1");
+      expect(result.success).toBe(true);
+
+      const parsed = JSON.parse(result.data || "{}");
+      expect(parsed.type).toBe("set");
+      expect(parsed.members).toContain("redis");
+      expect(parsed.members).toContain("database");
+      expect(parsed.members).toContain("cache");
     });
 
-    it("should handle duplicate members in array", async () => {
-      const setClient = client.set();
-      const members = ["member1", "member1", "member2"];
-      const result = await setClient.addMany("test:set:1", members);
-      expect(result).toBe(true);
-    });
-  });
+    it("should update collection data", async () => {
+      const initialData = JSON.stringify({
+        type: "set",
+        members: ["member1"],
+      });
+      await client.set("test:set:1", initialData);
 
-  describe("remove", () => {
-    it("should remove a member from a set", async () => {
-      const setClient = client.set();
-      await setClient.addOne("test:set:1", "member1");
-      const result = await setClient.remove("test:set:1", "member1");
-      expect(result).toBe(true);
-    });
+      const updatedData = JSON.stringify({
+        type: "set",
+        members: ["member1", "member2", "member3"],
+      });
+      const result = await client.set("test:set:1", updatedData);
+      expect(result.success).toBe(true);
 
-    it("should return true when removing non-existent member", async () => {
-      const setClient = client.set();
-      const result = await setClient.remove("test:set:1", "non-existent");
-      expect(result).toBe(true);
-    });
-  });
-
-  describe("members", () => {
-    it("should get all members of a set", async () => {
-      const setClient = client.set();
-      await setClient.addMany("test:set:1", ["member1", "member2", "member3"]);
-      const members = await setClient.members("test:set:1");
-      expect(members).toContain("member1");
-      expect(members).toContain("member2");
-      expect(members).toContain("member3");
-      expect(members).toHaveLength(3);
-    });
-
-    it("should return empty array for non-existent set", async () => {
-      const setClient = client.set();
-      const members = await setClient.members("non-existent:set");
-      expect(members).toEqual([]);
+      const getResult = await client.get("test:set:1");
+      const parsed = JSON.parse(getResult.data || "{}");
+      expect(parsed.members).toHaveLength(3);
     });
   });
 
-  describe("cardinality", () => {
-    it("should return correct cardinality of a set", async () => {
-      const setClient = client.set();
-      await setClient.addMany("test:set:1", ["member1", "member2", "member3"]);
-      const cardinality = await setClient.cardinality("test:set:1");
-      expect(cardinality).toBe(3);
+  describe("hash-like operations using update", () => {
+    it("should create hash with multiple fields", async () => {
+      const fields = JSON.stringify({
+        name: "test-collection",
+        type: "set",
+        count: 5,
+        active: true,
+      });
+      const result = await client.update("test:collection:1", fields);
+      expect(result.success).toBe(true);
     });
 
-    it("should return 0 for empty set", async () => {
-      const setClient = client.set();
-      const cardinality = await setClient.cardinality("test:set:1");
-      expect(cardinality).toBe(0);
-    });
-  });
-
-  describe("exists", () => {
-    it("should return true for existing member", async () => {
-      const setClient = client.set();
-      await setClient.addOne("test:set:1", "member1");
-      const exists = await setClient.exists("test:set:1", "member1");
-      expect(exists).toBe(true);
+    it("should update hash fields with TTL", async () => {
+      const fields = JSON.stringify({
+        name: "temporary-set",
+        type: "set",
+        expires: true,
+      });
+      const result = await client.update("test:collection:1", fields, 60);
+      expect(result.success).toBe(true);
     });
 
-    it("should return false for non-existing member", async () => {
-      const setClient = client.set();
-      const exists = await setClient.exists("test:set:1", "non-existent");
-      expect(exists).toBe(false);
-    });
-  });
-
-  describe("contains", () => {
-    it("should return true for existing member (alias for exists)", async () => {
-      const setClient = client.set();
-      await setClient.addOne("test:set:1", "member1");
-      const contains = await setClient.contains("test:set:1", "member1");
-      expect(contains).toBe(true);
-    });
-
-    it("should return false for non-existing member", async () => {
-      const setClient = client.set();
-      const contains = await setClient.contains("test:set:1", "non-existent");
-      expect(contains).toBe(false);
+    it("should handle complex nested data", async () => {
+      const complexData = JSON.stringify({
+        metadata: {
+          type: "set",
+          created: new Date().toISOString(),
+          version: "1.0",
+        },
+        members: ["item1", "item2", "item3"],
+        operations: {
+          add: ["item4"],
+          remove: [],
+        },
+      });
+      const result = await client.update("test:collection:1", complexData);
+      expect(result.success).toBe(true);
     });
   });
 
-  describe("size", () => {
-    it("should return correct size of a set", async () => {
-      const setClient = client.set();
-      await setClient.addMany("test:set:1", ["member1", "member2", "member3"]);
-      const size = await setClient.size("test:set:1");
-      expect(size).toBe(3);
+  describe("existence and cleanup", () => {
+    it("should check if collection exists", async () => {
+      const setData = JSON.stringify({
+        type: "set",
+        members: ["exists-test"],
+      });
+      await client.set("test:set:1", setData);
+
+      const result = await client.exists("test:set:1");
+      expect(result.success).toBe(true);
+      expect(result.data).toBe("true"); // API returns string "true" for existing keys
     });
 
-    it("should return 0 for empty set", async () => {
-      const setClient = client.set();
-      const size = await setClient.size("test:set:1");
-      expect(size).toBe(0);
-    });
-  });
+    it("should delete collections", async () => {
+      const setData = JSON.stringify({
+        type: "set",
+        members: ["delete-test"],
+      });
+      await client.set("test:set:1", setData);
 
-  describe("intersect", () => {
-    it("should return intersection of multiple sets", async () => {
-      const setClient = client.set();
-      await setClient.addMany("test:set:1", ["member1", "member2", "member3"]);
-      await setClient.addMany("test:set:2", ["member2", "member3", "member4"]);
-      await setClient.addMany("test:set:3", ["member1", "member4", "member5"]);
+      const deleteResult = await client.delete("test:set:1");
+      expect(deleteResult.success).toBe(true);
 
-      const intersection = await setClient.intersect(["test:set:1", "test:set:2"]);
-      expect(intersection).toContain("member2");
-      expect(intersection).toContain("member3");
-      expect(intersection).toHaveLength(2);
-    });
-
-    it("should return empty array when no intersection", async () => {
-      const setClient = client.set();
-      await setClient.addOne("test:set:1", "member1");
-      await setClient.addOne("test:set:2", "member2");
-
-      const intersection = await setClient.intersect(["test:set:1", "test:set:2"]);
-      expect(intersection).toEqual([]);
+      const existsResult = await client.exists("test:set:1");
+      expect(existsResult.success).toBe(true);
+      expect(existsResult.data).toBe("false"); // API returns string "false" for non-existent keys
     });
   });
 
-  describe("union", () => {
-    it("should return union of multiple sets", async () => {
-      const setClient = client.set();
-      await setClient.addMany("test:set:1", ["member1", "member2"]);
-      await setClient.addMany("test:set:2", ["member2", "member3"]);
+  describe("multiple collections", () => {
+    it("should handle multiple sets simultaneously", async () => {
+      const set1Data = JSON.stringify({
+        type: "set",
+        name: "collection1",
+        members: ["a", "b", "c"],
+      });
+      const set2Data = JSON.stringify({
+        type: "set",
+        name: "collection2",
+        members: ["x", "y", "z"],
+      });
 
-      const union = await setClient.union(["test:set:1", "test:set:2"]);
-      expect(union).toContain("member1");
-      expect(union).toContain("member2");
-      expect(union).toContain("member3");
-      expect(union).toHaveLength(3);
-    });
+      const result1 = await client.set("test:set:1", set1Data);
+      const result2 = await client.set("test:set:2", set2Data);
 
-    it("should handle empty sets in union", async () => {
-      const setClient = client.set();
-      await setClient.addOne("test:set:1", "member1");
+      expect(result1.success).toBe(true);
+      expect(result2.success).toBe(true);
 
-      const union = await setClient.union(["test:set:1", "test:set:2"]);
-      expect(union).toContain("member1");
-      expect(union).toHaveLength(1);
-    });
-  });
+      const get1 = await client.get("test:set:1");
+      const get2 = await client.get("test:set:2");
 
-  describe("difference", () => {
-    it("should return difference of multiple sets", async () => {
-      const setClient = client.set();
-      await setClient.addMany("test:set:1", ["member1", "member2", "member3"]);
-      await setClient.addMany("test:set:2", ["member2", "member3"]);
+      expect(get1.success).toBe(true);
+      expect(get2.success).toBe(true);
 
-      // Debug: print members
-      const members1 = await setClient.members("test:set:1");
-      const members2 = await setClient.members("test:set:2");
-      console.log("test:set:1 members:", members1);
-      console.log("test:set:2 members:", members2);
+      const parsed1 = JSON.parse(get1.data || "{}");
+      const parsed2 = JSON.parse(get2.data || "{}");
 
-      const difference = await setClient.difference(["test:set:1", "test:set:2"]);
-      console.log("difference:", difference);
-      expect(difference).toContain("member1");
-      expect(difference).toHaveLength(1);
-    });
-
-    it("should return empty array when no difference", async () => {
-      const setClient = client.set();
-      await setClient.addMany("test:set:1", ["member1", "member2"]);
-      await setClient.addMany("test:set:2", ["member1", "member2"]);
-
-      const difference = await setClient.difference(["test:set:1", "test:set:2"]);
-      expect(difference).toEqual([]);
+      expect(parsed1.name).toBe("collection1");
+      expect(parsed2.name).toBe("collection2");
     });
   });
 });
