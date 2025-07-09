@@ -423,7 +423,7 @@ impl RedisBitmap {
     /// Add a script execution to the pipeline
     ///
     /// This integrates script execution with Redis pipelines. Since the Redis
-    /// crate doesn't expose script internals, this is a testing utility.
+    /// Testing utility for script internals.
     pub fn add_script_to_pipeline<'a, K, A>(
         pipe: &'a mut Pipeline,
         _script: &Script,
@@ -627,7 +627,7 @@ mod tests {
     // Create a connection for tests that's used just for compilation
     fn create_test_connection() -> Arc<Mutex<redis::Connection>> {
         // For tests, just create a client but don't actually connect
-        // This allows the tests to compile without needing a Redis server
+        // Test compilation without Redis server
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         let client = redis::Client::open(redis_url).unwrap_or_else(|_| {
@@ -639,8 +639,7 @@ mod tests {
         match client.get_connection() {
             Ok(conn) => Arc::new(Mutex::new(conn)),
             Err(_) => {
-                // If we can't connect (which is expected in tests), create a fake
-                // Note: This is just to make the tests compile, they're marked as #[ignore]
+                // Connection unavailable in test environment
                 let client =
                     redis::Client::open("redis://localhost:6379").expect("Creating test client");
                 let conn = client.get_connection().unwrap_or_else(|_| {

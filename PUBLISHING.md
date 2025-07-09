@@ -313,7 +313,7 @@ echo "Publishing complete!"
 ### Redis Backend
 
 ```bash
-# Publish Redis-optimized image
+# Publish Redis image
 docker buildx build --platform linux/amd64,linux/arm64 \
   -t effortlesslabs/dbx:1.0.0-redis \
   -t effortlesslabs/dbx:redis \
@@ -434,8 +434,8 @@ npm unpublish dbx@1.0.0
 
 - **Backend-Agnostic Architecture**: Complete UniversalBackend trait system
 - **MongoDB Adapter**: Full MongoDB support with document operations
-- **Enhanced TypeScript SDK**: Client with capability detection
-- **Multi-Backend Docker Images**: Optimized images for different backends
+- **TypeScript SDK**: Client with capability detection
+- **Multi-Backend Docker Images**: Images optimized for different backends
 
 ## Backend Support
 
@@ -447,12 +447,12 @@ npm unpublish dbx@1.0.0
 
 - Added backend-agnostic endpoints: `/data/*`, `/query/*`, `/stream/*`
 - Maintained backward compatibility with backend-specific endpoints
-- Enhanced capability detection at `/admin/capabilities`
+- Capability detection at `/admin/capabilities`
 
 ## Bug Fixes
 
 - Fixed connection pooling issues across backends
-- Improved error handling and error message consistency
+- Error handling and error message consistency
 - Resolved memory leaks in long-running connections
 
 ## Breaking Changes

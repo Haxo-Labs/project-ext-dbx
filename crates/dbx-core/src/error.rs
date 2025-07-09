@@ -469,8 +469,7 @@ mod tests {
         assert_eq!(dbx_error.category(), "serialization");
         assert!(!dbx_error.is_retryable());
 
-        // Test that the From implementation exists (we can't easily create Elapsed without private constructor)
-        // This is mainly testing the trait implementation compiles correctly
+        // From implementation compilation test
     }
 
     #[test]

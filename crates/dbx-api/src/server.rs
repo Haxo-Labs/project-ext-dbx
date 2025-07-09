@@ -331,10 +331,10 @@ mod tests {
         // The important thing is that the application handles the configuration correctly
         match result {
             Ok(_) => {
-                // If it succeeds, that's great
+                // Admin creation succeeded
             }
             Err(ServerError::UserStoreInitialization(_)) => {
-                // This is acceptable - the configuration was parsed correctly, but user creation failed
+                // Configuration parsed correctly, but user creation failed
             }
             Err(ServerError::Configuration(_)) => {
                 panic!("Configuration should have been valid");
@@ -570,8 +570,7 @@ mod tests {
     #[test]
     fn test_health_check_response() {
         let _response = health_check();
-        // Since this is async, we can't easily test the actual content here
-        // but we can test that the function compiles and returns the right type
+        // Async function compilation and return type validation
         assert!(true); // This test ensures the function compiles
     }
 

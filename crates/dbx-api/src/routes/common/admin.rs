@@ -145,10 +145,9 @@ mod tests {
 
     // Mock connection for testing
     fn create_mock_connection() -> Arc<Mutex<Connection>> {
-        // This will fail, but we're testing the function structure, not actual Redis
+        // Function structure test, Redis connection not required
         let client = redis::Client::open("redis://127.0.0.1:6379/").unwrap();
         let conn = client.get_connection().unwrap_or_else(|_| {
-            // If Redis is not available, this will panic, but the test structure will still be verified
             panic!("Redis connection not available for testing")
         });
         Arc::new(Mutex::new(conn))

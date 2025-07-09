@@ -566,7 +566,7 @@ impl UniversalBackend for RedisBackend {
             "Executing query operation"
         );
 
-        // Redis doesn't support complex queries, but we can implement basic pattern matching
+        // Redis supports basic pattern matching queries
         let start_time = std::time::Instant::now();
 
         match &operation.filter {

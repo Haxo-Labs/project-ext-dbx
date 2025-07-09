@@ -1291,7 +1291,7 @@ mod tests {
         assert!(UserRole::Admin < UserRole::User);
         assert!(UserRole::User < UserRole::ReadOnly);
 
-        // Test that we can use roles in collections requiring ordering
+        // Test roles in ordered collections
         let mut roles = vec![UserRole::ReadOnly, UserRole::Admin, UserRole::User];
         roles.sort();
         assert_eq!(
