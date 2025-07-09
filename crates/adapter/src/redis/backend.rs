@@ -476,7 +476,7 @@ impl RedisBackend {
                 }
 
                 DataOperation::Batch { operations } => {
-                    // Execute all operations in sequence (Redis doesn't have multi-statement transactions easily accessible)
+                    // Execute operations in sequence (Redis transaction limitations)
                     let mut results = Vec::new();
                     for op in operations {
                         let result = self.execute_data_operation(op).await?;

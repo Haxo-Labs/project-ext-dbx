@@ -1251,7 +1251,7 @@ mod tests {
         let token = extract_token_from_header(&headers);
         assert!(token.is_none());
 
-        // Test just "Bearer" without space
+        // Test "Bearer" without space
         headers.insert(header::AUTHORIZATION, "Bearer".parse().unwrap());
         let token = extract_token_from_header(&headers);
         assert!(token.is_none());

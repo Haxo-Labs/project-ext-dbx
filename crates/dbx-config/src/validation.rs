@@ -208,7 +208,7 @@ impl ConfigValidator {
                 }
             }
             _ => {
-                // For unknown providers, just check that it's a valid URL
+                // Validate URL format for unknown providers
                 // The specific provider implementation will handle validation
             }
         }

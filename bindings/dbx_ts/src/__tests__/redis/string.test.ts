@@ -18,7 +18,7 @@ describe("DBX String Operations", () => {
       await client.authenticate(TEST_USERNAME, TEST_PASSWORD);
     } catch (error) {
       console.warn("Authentication failed, skipping tests:", error.message);
-      // You might want to skip tests here if authentication is required
+      // Skip if authentication required
     }
   });
 

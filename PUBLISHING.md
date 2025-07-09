@@ -145,7 +145,7 @@ gh release create v1.0.0 \
   --title "DBX v1.0.0" \
   --notes "- Added backend-agnostic architecture
 - Complete Redis adapter implementation
-- Enhanced TypeScript SDK
+- TypeScript SDK updates
 - Multi-backend Docker images" \
   --draft
 ```

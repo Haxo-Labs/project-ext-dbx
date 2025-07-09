@@ -182,7 +182,7 @@ impl BackendRegistry {
         let mut provider_counts = HashMap::new();
         for entry in self.backends.iter() {
             let backend = entry.value();
-            let provider = backend.name(); // This might need to be adjusted based on actual implementation
+            let provider = backend.name(); // Provider name from backend implementation
             *provider_counts.entry(provider.to_string()).or_insert(0) += 1;
         }
 

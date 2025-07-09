@@ -296,14 +296,14 @@ impl UniversalBackend for YourBackendAdapter {
             DataOperation::Set { key, value, ttl } => {
                 // Your implementation
             }
-            // ... other operations
+            // Additional operations available
         }
     }
     
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             data_operations: vec![DataOperationType::Get, DataOperationType::Set],
-            // ... other capabilities
+            // Additional capabilities available
         }
     }
 }

@@ -458,7 +458,7 @@ mod tests {
 
         let _router = create_auth_routes(jwt_service, user_store);
         // Test that the router was created successfully
-        // Note: Router creation doesn't fail, so we just verify it compiles
+        // Router creation compilation verification
     }
 
     #[tokio::test]

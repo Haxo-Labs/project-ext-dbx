@@ -800,7 +800,7 @@ mod tests {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
         // This might fail if Redis doesn't have write permissions
-        // Just test that it doesn't panic
+        // Test compilation without panic
         let _ = admin.config_rewrite();
     }
 

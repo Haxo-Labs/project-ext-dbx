@@ -624,18 +624,16 @@ mod tests {
     use redis::pipe;
     use std::sync::{Arc, Mutex};
 
-    // Create a connection for tests that's used just for compilation
+    // Create test connection for compilation validation
     fn create_test_connection() -> Arc<Mutex<redis::Connection>> {
-        // For tests, just create a client but don't actually connect
-        // Test compilation without Redis server
+        // Test client without Redis server dependency
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         let client = redis::Client::open(redis_url).unwrap_or_else(|_| {
             redis::Client::open("redis://localhost:6379").expect("Creating test client")
         });
 
-        // In real tests, you would use actual connections or proper mocks
-        // We'll just create a connection object for compilation's sake
+        // Connection object for compilation
         match client.get_connection() {
             Ok(conn) => Arc::new(Mutex::new(conn)),
             Err(_) => {
@@ -651,14 +649,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "This test is for compilation only"]
+    #[ignore = "Compilation test only"]
     fn test_compile_operations() {
-        // This test doesn't actually execute Redis commands,
-        // it just verifies that the code compiles correctly
+        // Compilation verification test
         let conn = create_test_connection();
         let redis_bitmap = RedisBitmap::new(conn);
 
-        // Just make sure these compile
+        // Verify compilation
         let _setbit_cmd = redis_bitmap.setbit("test_bitmap", 0, true);
         let _getbit_cmd = redis_bitmap.getbit("test_bitmap", 0);
         let _bitcount_cmd = redis_bitmap.bitcount("test_bitmap");
@@ -680,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "This test is for compilation only"]
+    #[ignore = "Compilation test only"]
     fn test_pipeline_methods() {
         // Test that pipelines can be used directly with cmd()
         let mut pipeline = pipe();
@@ -691,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "This test is for compilation only"]
+    #[ignore = "Compilation test only"]
     fn test_batch_operations() {
         let conn = create_test_connection();
         let redis_bitmap = RedisBitmap::new(conn);
@@ -701,7 +698,7 @@ mod tests {
         let offsets = vec![0, 1, 2, 3];
         let keys = vec!["bitmap1", "bitmap2", "bitmap3"];
 
-        // Just check that these methods compile correctly
+        // Verify method compilation
         let _ = redis_bitmap.setbit_many("test_bitmap", bit_offsets);
         let _ = redis_bitmap.getbit_many("test_bitmap", offsets);
         let _ = redis_bitmap.bitcount_many(keys.clone());
@@ -710,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "This test is for compilation only"]
+    #[ignore = "Compilation test only"]
     fn test_lua_scripts() {
         let conn = create_test_connection();
         let _redis_bitmap = RedisBitmap::new(conn);
@@ -725,17 +722,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "This test is for compilation only"]
+    #[ignore = "Compilation test only"]
     fn test_transaction() {
         let conn = create_test_connection();
         let _redis_bitmap = RedisBitmap::new(conn);
 
-        // This test is just a compilation check
-        // We're not actually executing the transaction
+        // Compilation verification only
     }
 
-    // Real execution of transactions and Lua scripts would require integration tests
-    // with an actual Redis instance or more sophisticated mocking.
+    // Integration tests require Redis instance or mock setup.
 }
 
 /// Examples of how to use RedisBitmap with various features
@@ -748,19 +743,20 @@ mod examples {
     use crate::test_helpers::get_test_redis_url;
 
     #[test]
-    #[ignore = "This example is for demonstration only"]
+    #[ignore = "Demonstration only"]
     fn example_patterns() {
-        // Create a connection for examples
+        // Example connection setup
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         let client = redis::Client::open(redis_url).unwrap_or_else(|_| {
             redis::Client::open("redis://localhost:6379").expect("Creating example client")
         });
 
-        // This won't actually be used in ignored tests
-        let conn = Arc::new(Mutex::new(client.get_connection().unwrap_or_else(|_| {
-            panic!("This example is only for demonstration and is marked as ignored")
-        })));
+        // Example connection object
+        let conn =
+            Arc::new(Mutex::new(client.get_connection().unwrap_or_else(|_| {
+                panic!("Demonstration example - ignored test")
+            })));
 
         let redis_bitmap = RedisBitmap::new(conn);
 

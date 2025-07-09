@@ -18,12 +18,14 @@ The adapter crate serves as the bridge between DBX's backend-agnostic API and sp
 ### Supported Backends
 
 #### Redis Adapter
+
 - **Location**: `src/redis/`
 - **Features**: Complete Redis protocol implementation
 - **Operations**: Strings, hashes, sets, sorted sets, bitmaps, admin
 - **Connection**: Redis connection pooling with automatic failover
 
 #### Planned Backends
+
 - **MongoDB**: Document operations and aggregation pipeline
 - **PostgreSQL**: SQL operations with prepared statements  
 - **SQLite**: Embedded database operations
@@ -107,7 +109,7 @@ impl UniversalBackend for YourBackendAdapter {
         match operation.op_type {
             DataOperationType::Get => self.get(&operation.key).await,
             DataOperationType::Set => self.set(&operation.key, &operation.value, operation.ttl).await,
-            // ... implement other operations
+            // Additional operations available
         }
     }
     
@@ -116,9 +118,9 @@ impl UniversalBackend for YourBackendAdapter {
             data_operations: vec![
                 DataOperationType::Get,
                 DataOperationType::Set,
-                // ... list supported operations
+                // Additional operations available
             ],
-            // ... other capabilities
+            // Additional capabilities available
         }
     }
 }

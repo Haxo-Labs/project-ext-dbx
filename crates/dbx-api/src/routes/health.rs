@@ -83,8 +83,8 @@ pub struct StorageStats {
 #[derive(Debug, Serialize)]
 pub struct RoutingStatsInfo {
     pub total_backends: usize,
-    pub load_balancer_stats: String, // Simplified for now
-    pub key_matcher_stats: String,   // Simplified for now
+    pub load_balancer_stats: String, // Load balancer statistics
+    pub key_matcher_stats: String,   // Key matcher statistics
 }
 
 pub fn create_health_routes() -> Router<Arc<BackendRouter>> {

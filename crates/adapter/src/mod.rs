@@ -18,7 +18,7 @@ pub mod redis;
 mod tests {
     #[test]
     fn test_adapter_module_exists() {
-        // This test just verifies that the module compiles
+        // Module compilation verification
         assert!(true);
     }
 }
