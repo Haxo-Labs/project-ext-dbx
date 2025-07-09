@@ -1,40 +1,44 @@
 # DBX Testing Workflow
 
-This document explains the new testing workflow that ensures all crate tests run against a properly configured DBX server with the correct environment variables.
+This document explains the comprehensive testing workflow for DBX Universal Database API Server that ensures all crate tests run against properly configured backend adapters with correct environment variables.
 
-## 🎯 Overview
+## Overview
 
-The new testing workflow addresses the requirement that all crate tests need to run against a running DBX server with proper environment configuration. This ensures that:
+The testing workflow addresses the requirement that all crate tests need to run against actual database backends through the DBX Universal API server. This ensures that:
 
-1. **Server is running** - Tests run against an actual DBX API server
-2. **Environment is set** - All required environment variables are properly configured
-3. **Dependencies are met** - Redis is available and server is healthy
-4. **Tests are sequential** - Tests run in the correct dependency order (adapter → api → client)
+1. **Server is running** - Tests run against an actual DBX API server with backend adapters
+2. **Backend configuration** - All required backend environment variables are properly configured
+3. **Dependencies are met** - Database backends are available and server is healthy
+4. **Tests are sequential** - Tests run in the correct dependency order (core → adapter → api → client)
 
-## 📁 New Files
+## New Files
 
 ### Scripts
 
-- **`scripts/test-with-server.sh`** - Complete test runner with server setup
+- **`scripts/test-with-server.sh`** - Complete test runner with server and backend setup
 - **`scripts/test-simple.sh`** - Simple test runner for existing server
+- **`scripts/test-backends.sh`** - Backend-specific testing script
 
 ### Workflows
 
-- **`.github/workflows/crates-tests.yml`** - Updated workflow using test-with-server.sh
-- **`.github/workflows/crates-tests-simple.yml`** - Alternative workflow using test-simple.sh
+- **`.github/workflows/crates-tests.yml`** - Updated workflow using multi-backend testing
+- **`.github/workflows/backend-tests.yml`** - Backend-specific test workflows
 
-## 🚀 Usage
+## Usage
 
 ### Local Development
 
 #### Option 1: Complete Setup (Recommended)
 
 ```bash
-# Run tests with automatic server setup
+# Run tests with automatic server and backend setup
 ./scripts/test-with-server.sh
 
-# With custom environment
-./scripts/test-with-server.sh --env-file .env.test --redis-url redis://localhost:6379
+# Test specific backend
+./scripts/test-with-server.sh --backend redis --redis-url redis://localhost:6379
+
+# Test multiple backends
+./scripts/test-with-server.sh --backends redis,mongo --mongo-url mongodb://localhost:27017
 
 # Keep server running for debugging
 ./scripts/test-with-server.sh --skip-cleanup
@@ -43,8 +47,11 @@ The new testing workflow addresses the requirement that all crate tests need to 
 #### Option 2: Manual Server + Simple Tests
 
 ```bash
-# Start server manually
-cargo run -p redis_api --release &
+# Start backend (Redis example)
+docker run -d --name test-redis -p 6379:6379 redis:7-alpine
+
+# Start DBX server manually
+BACKEND_TYPE=redis REDIS_URL=redis://localhost:6379 cargo run -p dbx-api --release &
 SERVER_PID=$!
 
 # Wait for server
@@ -55,81 +62,106 @@ sleep 5
 
 # Stop server
 kill $SERVER_PID
+docker stop test-redis
 ```
 
 #### Option 3: Existing Server
 
 ```bash
 # If you have a server running elsewhere
-./scripts/test-simple.sh --server-url http://localhost:3000 --redis-url redis://localhost:6379
+./scripts/test-simple.sh --server-url http://localhost:3000 --backend redis --redis-url redis://localhost:6379
 ```
 
 ### CI/CD Pipeline
 
 The GitHub Actions workflows automatically:
 
-1. **Set up Redis** - Uses GitHub Actions Redis service
-2. **Create environment** - Generates `.env` file with proper configuration
-3. **Start server** - Builds and starts DBX API server
-4. **Run tests** - Executes all crate tests against the running server
+1. **Set up Backend Services** - Uses GitHub Actions services for Redis, MongoDB, PostgreSQL
+2. **Create Environment** - Generates `.env` file with backend configuration
+3. **Start DBX Server** - Builds and starts DBX API server with specified backend
+4. **Run Tests** - Executes all crate tests against the running server with backend
 5. **Clean up** - Stops server and cleans up resources
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
 The scripts automatically set these environment variables for tests:
 
 ```bash
-# Database
-REDIS_URL=redis://localhost:6379
-
-# Server
+# Server configuration
 DBX_BASE_URL=http://localhost:3000
-DBX_WS_HOST_URL=ws://localhost:3000/redis_ws
+DBX_WS_HOST_URL=ws://localhost:3000/ws
 
-# Optional (from .env file)
-HOST=0.0.0.0
-PORT=3000
-POOL_SIZE=10
-LOG_LEVEL=INFO
-```
+# Backend selection
+BACKEND_TYPE=redis  # or mongo, postgres, sqlite
 
-### .env File
-
-Create a `.env` file for custom configuration:
-
-```bash
-# Database Configuration
+# Backend-specific URLs
 REDIS_URL=redis://localhost:6379
+MONGO_URL=mongodb://localhost:27017/test
+POSTGRES_URL=postgresql://localhost:5432/test
+SQLITE_PATH=./test.db
 
-# Server Configuration
+# Optional server settings
 HOST=0.0.0.0
 PORT=3000
 POOL_SIZE=10
-
-# Logging Configuration
 LOG_LEVEL=INFO
 ```
 
-## 📋 Test Execution Order
+### Backend Configuration Files
+
+Create backend-specific `.env` files:
+
+#### Redis Backend (`.env.redis`)
+```bash
+BACKEND_TYPE=redis
+REDIS_URL=redis://localhost:6379
+POOL_SIZE=10
+```
+
+#### MongoDB Backend (`.env.mongo`)
+```bash
+BACKEND_TYPE=mongo
+MONGO_URL=mongodb://localhost:27017/dbx_test
+MONGO_DATABASE=dbx_test
+POOL_SIZE=5
+```
+
+#### PostgreSQL Backend (`.env.postgres`)
+```bash
+BACKEND_TYPE=postgres
+POSTGRES_URL=postgresql://localhost:5432/dbx_test
+POSTGRES_DATABASE=dbx_test
+POOL_SIZE=8
+```
+
+## Test Execution Order
 
 All tests run in this sequential order to respect dependencies:
 
-1. **Adapter tests** (`crates/adapter`) - Foundation layer
-2. **API tests** (`crates/redis_api`) - Depends on adapter
-3. **Client tests** (`crates/redis_client`) - Depends on adapter and API
+1. **Core tests** (`crates/dbx-core`) - Universal backend trait system
+2. **Adapter tests** (`crates/dbx-adapter`) - Generic adapter interfaces
+3. **Backend-specific tests** (`crates/adapter/src/redis`, `crates/adapter/src/mongo`) - Specific implementations
+4. **API tests** (`crates/dbx-api`) - HTTP/WebSocket server with backends
+5. **Client tests** (`crates/dbx-client`) - Client libraries against live server
 
-## 🛠️ Script Options
+## Script Options
 
 ### test-with-server.sh
 
 ```bash
+--backend <type>        # Backend type (redis, mongo, postgres, sqlite)
+--backends <list>       # Comma-separated list of backends to test
 --env-file <path>       # Path to .env file (default: .env)
---redis-url <url>       # Redis connection URL (overrides .env)
+--redis-url <url>       # Redis connection URL
+--mongo-url <url>       # MongoDB connection URL
+--postgres-url <url>    # PostgreSQL connection URL
+--sqlite-path <path>    # SQLite database file path
 --server-port <port>    # Server port (default: 3000)
 --skip-server           # Skip starting server (assume it's already running)
 --skip-cleanup          # Don't stop server after tests
+--skip-backend-setup    # Don't start backend services
 --verbose               # Enable verbose output
 --help                  # Show help message
 ```
@@ -137,13 +169,59 @@ All tests run in this sequential order to respect dependencies:
 ### test-simple.sh
 
 ```bash
---redis-url <url>       # Redis connection URL (default: redis://localhost:6379)
+--backend <type>        # Backend type being tested
 --server-url <url>      # Server base URL (default: http://localhost:3000)
+--redis-url <url>       # Redis connection URL (if using Redis)
+--mongo-url <url>       # MongoDB connection URL (if using MongoDB)
+--postgres-url <url>    # PostgreSQL connection URL (if using PostgreSQL)
 --verbose               # Enable verbose output
 --help                  # Show help message
 ```
 
-## 🔍 Troubleshooting
+### test-backends.sh
+
+```bash
+--backends <list>       # Backends to test (default: redis)
+--parallel              # Run backend tests in parallel
+--sequential            # Run backend tests sequentially
+--stop-on-failure       # Stop on first backend test failure
+--verbose               # Enable verbose output
+--help                  # Show help message
+```
+
+## Backend-Specific Testing
+
+### Redis Backend Testing
+
+```bash
+# Test Redis backend specifically
+./scripts/test-with-server.sh --backend redis --redis-url redis://localhost:6379
+
+# Test Redis with different configurations
+./scripts/test-with-server.sh --backend redis --env-file .env.redis
+```
+
+### MongoDB Backend Testing
+
+```bash
+# Test MongoDB backend
+./scripts/test-with-server.sh --backend mongo --mongo-url mongodb://localhost:27017/test
+
+# Test with replica set
+./scripts/test-with-server.sh --backend mongo --mongo-url mongodb://localhost:27017,localhost:27018,localhost:27019/test?replicaSet=rs0
+```
+
+### Multi-Backend Testing
+
+```bash
+# Test multiple backends sequentially
+./scripts/test-backends.sh --backends redis,mongo,postgres --sequential
+
+# Test all available backends
+./scripts/test-backends.sh --backends all
+```
+
+## Troubleshooting
 
 ### Common Issues
 
@@ -160,17 +238,20 @@ docker logs dbx-test-server
 ./scripts/test-with-server.sh --server-port 3001
 ```
 
-#### Redis Connection Issues
+#### Backend Connection Issues
 
 ```bash
-# Check if Redis is running
+# Redis: Check if Redis is running
 docker ps | grep redis
-
-# Test Redis connection
 redis-cli ping
 
-# Use different Redis URL
-./scripts/test-with-server.sh --redis-url redis://localhost:6380
+# MongoDB: Check MongoDB connection
+docker ps | grep mongo
+mongosh --eval "db.admin.Command('ismaster')"
+
+# PostgreSQL: Check PostgreSQL connection
+docker ps | grep postgres
+psql -h localhost -p 5432 -U postgres -c "SELECT 1"
 ```
 
 #### Test Failures
@@ -179,13 +260,27 @@ redis-cli ping
 # Run with verbose output
 ./scripts/test-with-server.sh --verbose
 
-# Check server health
-curl http://localhost:3000/redis/admin/ping
+# Check server health for specific backend
+curl http://localhost:3000/admin/health
+curl http://localhost:3000/admin/capabilities
 
 # Run individual test suites
-cd crates/adapter && cargo test
-cd ../redis_api && cargo test
-cd ../redis_client && cargo test
+cd crates/dbx-core && cargo test
+cd ../dbx-adapter && cargo test
+cd ../adapter && cargo test --test redis_integration
+```
+
+#### Backend-Specific Issues
+
+```bash
+# Redis connection timeout
+REDIS_TIMEOUT=10 ./scripts/test-with-server.sh --backend redis
+
+# MongoDB authentication
+MONGO_URL=mongodb://user:pass@localhost:27017/test ./scripts/test-with-server.sh --backend mongo
+
+# PostgreSQL SSL issues
+POSTGRES_URL=postgresql://localhost:5432/test?sslmode=disable ./scripts/test-with-server.sh --backend postgres
 ```
 
 ### Debug Mode
@@ -196,72 +291,89 @@ Enable debug output to see all commands:
 # Set debug environment variable
 DEBUG=true ./scripts/test-with-server.sh
 
-# Or use verbose mode
-./scripts/test-with-server.sh --verbose
+# Or use verbose mode with backend details
+./scripts/test-with-server.sh --verbose --backend redis
 ```
 
-## 🔄 Migration from Old Workflow
+### Docker-based Backend Testing
 
-### Before (Old Workflow)
+```bash
+# Test with Docker Compose backends
+docker-compose -f docker-compose.test.yml up -d
+./scripts/test-simple.sh --backends redis,mongo,postgres
+docker-compose -f docker-compose.test.yml down
+```
+
+## GitHub Actions Integration
+
+### Multi-Backend Testing
 
 ```yaml
-- name: Run unit tests
-  run: cargo test -p dbx-crates --features "${{ matrix.features }}" --verbose --lib
-  env:
-    REDIS_URL: redis://localhost:6379
+name: Multi-Backend Tests
+
+on: [push, pull_request]
+
+jobs:
+  test-backends:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [redis, mongo, postgres]
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      
+      mongodb:
+        image: mongo:6
+        ports:
+          - 27017:27017
+      
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          
+      - name: Run Backend Tests
+        run: |
+          ./scripts/test-with-server.sh --backend ${{ matrix.backend }}
+        env:
+          REDIS_URL: redis://localhost:6379
+          MONGO_URL: mongodb://localhost:27017/test
+          POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/test
 ```
 
-### After (New Workflow)
+## Performance Testing
 
-```yaml
-- name: Run tests with server
-  run: |
-    # Create .env file for testing
-    cat > .env << EOF
-    REDIS_URL=redis://localhost:6379
-    HOST=0.0.0.0
-    PORT=3000
-    POOL_SIZE=10
-    LOG_LEVEL=INFO
-    EOF
+### Backend Performance Tests
 
-    # Run tests using the script
-    ./scripts/test-with-server.sh --verbose
-  env:
-    REDIS_URL: redis://localhost:6379
+```bash
+# Test backend performance
+./scripts/test-performance.sh --backend redis --duration 60s --connections 100
+
+# Compare backend performance
+./scripts/test-performance.sh --backends redis,mongo --compare
 ```
 
-## 📊 Benefits
+### Load Testing
 
-### ✅ Advantages
+```bash
+# Load test specific backend
+wrk -t12 -c400 -d30s http://localhost:3000/data/test-key
 
-1. **Realistic Testing** - Tests run against actual server implementation
-2. **Environment Consistency** - All tests use the same environment configuration
-3. **Dependency Validation** - Tests verify actual integration between components
-4. **CI/CD Ready** - Automated setup and teardown in CI environments
-5. **Flexible Configuration** - Support for custom environments and configurations
-6. **Error Isolation** - Clear separation between server issues and test issues
-7. **Resource Management** - Automatic cleanup prevents resource leaks
-
-### 🔧 Technical Improvements
-
-1. **Server Health Checks** - Validates server is ready before running tests
-2. **Container Management** - Proper Docker container lifecycle management
-3. **Environment Variables** - Automatic setup of all required environment variables
-4. **Sequential Execution** - Tests run in correct dependency order
-5. **Error Handling** - Comprehensive error handling and cleanup
-6. **Logging** - Detailed logging for debugging and monitoring
-
-## 🚀 Next Steps
-
-1. **Update CI/CD** - Use the new workflows in your CI/CD pipeline
-2. **Local Development** - Use the new scripts for local testing
-3. **Documentation** - Update team documentation with new testing procedures
-4. **Monitoring** - Monitor test results and server health in CI
-5. **Optimization** - Fine-tune server configuration based on test performance
-
-## 📚 Related Documentation
-
-- [Scripts README](scripts/README.md) - Complete script documentation
-- [GitHub Workflows](.github/workflows/) - CI/CD workflow files
-- [Environment Configuration](env.example) - Environment variable reference
+# Backend-specific load testing
+wrk -t12 -c400 -d30s http://localhost:3000/redis/string/test-key
+```

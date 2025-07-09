@@ -1,122 +1,375 @@
 # Configuration
 
-DBX can be configured using environment variables or command-line arguments. This guide covers all available configuration options.
+DBX supports flexible configuration for multiple database backends through environment variables, configuration files, and automatic detection.
 
-## Environment Variables
+## Configuration Methods
 
-### Database Configuration
+### 1. Environment Variables
 
-| Variable    | Default                                   | Description          |
-| ----------- | ----------------------------------------- | -------------------- |
-| `REDIS_URL` | `redis://default:redispw@localhost:55000` | Redis connection URL |
-
-### Server Configuration
-
-| Variable    | Default   | Description                |
-| ----------- | --------- | -------------------------- |
-| `HOST`      | `0.0.0.0` | Server host address        |
-| `PORT`      | `3000`    | Server port number         |
-| `POOL_SIZE` | `10`      | Redis connection pool size |
-
-### Logging Configuration
-
-| Variable     | Default | Description                              |
-| ------------ | ------- | ---------------------------------------- |
-| `LOG_LEVEL`  | `INFO`  | Logging level (DEBUG, INFO, WARN, ERROR) |
-| `LOG_FORMAT` | `text`  | Log format (text, json)                  |
-
-### Security Configuration (Optional)
-
-| Variable                  | Default | Description                       |
-| ------------------------- | ------- | --------------------------------- |
-| `DBX_API_KEY`             | -       | Secret API key for authentication |
-| `DBX_CORS_ORIGINS`        | `*`     | CORS allowed origins              |
-| `DBX_RATE_LIMIT_REQUESTS` | `1000`  | Rate limit requests per window    |
-| `DBX_RATE_LIMIT_WINDOW`   | `60`    | Rate limit window in seconds      |
-
-### WebSocket Configuration (Optional)
-
-| Variable         | Default     | Description              |
-| ---------------- | ----------- | ------------------------ |
-| `DBX_WS_ENABLED` | `true`      | Enable WebSocket support |
-| `DBX_WS_PATH`    | `/redis_ws` | WebSocket endpoint path  |
-
-### Monitoring Configuration (Optional)
-
-| Variable                    | Default | Description                      |
-| --------------------------- | ------- | -------------------------------- |
-| `DBX_METRICS_ENABLED`       | `true`  | Enable metrics collection        |
-| `DBX_HEALTH_CHECK_INTERVAL` | `30`    | Health check interval in seconds |
-
-## Configuration Examples
-
-### Basic Configuration
+The simplest way to configure DBX is through environment variables:
 
 ```bash
-# .env file
-REDIS_URL=redis://localhost:6379
-HOST=0.0.0.0
-PORT=3000
-POOL_SIZE=10
-LOG_LEVEL=INFO
+# Backend type (auto-detected if not specified)
+export BACKEND_TYPE=redis
+
+# Backend-specific connection URLs
+export REDIS_URL=redis://localhost:6379
+export MONGO_URL=mongodb://localhost:27017/dbx
+export POSTGRES_URL=postgresql://localhost:5432/dbx
+export SQLITE_PATH=/data/dbx.db
+
+# Server configuration
+export PORT=3000
+export HOST=0.0.0.0
+export LOG_LEVEL=INFO
 ```
 
-### Production Configuration
+### 2. Configuration File
 
-```bash
-# .env file
-REDIS_URL=redis://user:password@redis.example.com:6379/0
-HOST=0.0.0.0
-PORT=8080
-POOL_SIZE=50
-LOG_LEVEL=WARN
-DBX_API_KEY=your-secret-api-key
-DBX_CORS_ORIGINS=https://yourdomain.com
-DBX_RATE_LIMIT_REQUESTS=1000
-DBX_RATE_LIMIT_WINDOW=60
+DBX supports TOML and JSON configuration files:
+
+#### TOML Configuration (`dbx.toml`)
+
+```toml
+[server]
+port = 3000
+host = "0.0.0.0"
+log_level = "INFO"
+timeout = 30000
+
+[backends.redis]
+url = "redis://localhost:6379"
+pool_size = 10
+timeout = 5000
+retry_attempts = 3
+
+[backends.mongodb]
+url = "mongodb://localhost:27017/dbx"
+pool_size = 5
+database = "dbx"
+collection_prefix = "data"
+
+[backends.postgresql]
+url = "postgresql://user:password@localhost:5432/dbx"
+pool_size = 15
+ssl_mode = "require"
+schema = "public"
+
+[backends.sqlite]
+path = "/data/dbx.db"
+journal_mode = "WAL"
+synchronous = "NORMAL"
 ```
 
-### Development Configuration
+#### JSON Configuration (`dbx.json`)
+
+```json
+{
+  "server": {
+    "port": 3000,
+    "host": "0.0.0.0",
+    "log_level": "INFO"
+  },
+  "backends": {
+    "redis": {
+      "url": "redis://localhost:6379",
+      "pool_size": 10
+    },
+    "mongodb": {
+      "url": "mongodb://localhost:27017/dbx",
+      "pool_size": 5
+    }
+  }
+}
+```
+
+### 3. Automatic Detection
+
+DBX can automatically detect available backends:
 
 ```bash
-# .env file
+# Start with auto-detection
+./dbx
+
+# Or via Docker
+docker run -p 3000:3000 effortlesslabs/dbx:latest
+```
+
+Detection order:
+1. Check for `BACKEND_TYPE` environment variable
+2. Scan for database connection URLs in environment
+3. Attempt to connect to common database services on localhost
+4. Fall back to SQLite if no other backend is found
+
+## Backend Configuration
+
+### Redis Configuration
+
+```toml
+[backends.redis]
+# Connection settings
+url = "redis://user:password@localhost:6379/0"
+cluster_urls = [
+  "redis://node1:6379",
+  "redis://node2:6379",
+  "redis://node3:6379"
+]
+
+# Pool settings
+pool_size = 10
+min_idle = 2
+max_lifetime = 3600
+
+# Connection settings
+connect_timeout = 5000
+command_timeout = 3000
+retry_attempts = 3
+retry_delay = 100
+
+# Feature flags
+enable_pipeline = true
+enable_transaction = true
+enable_pub_sub = true
+```
+
+#### Redis Environment Variables
+
+```bash
 REDIS_URL=redis://localhost:6379
-HOST=127.0.0.1
-PORT=3000
-POOL_SIZE=5
-LOG_LEVEL=DEBUG
-DBX_CORS_ORIGINS=*
-DBX_WS_ENABLED=true
-DBX_METRICS_ENABLED=true
+REDIS_PASSWORD=secret
+REDIS_DB=0
+REDIS_POOL_SIZE=10
+REDIS_TIMEOUT=5000
+```
+
+### MongoDB Configuration
+
+```toml
+[backends.mongodb]
+# Connection settings
+url = "mongodb://user:password@localhost:27017/dbx"
+database = "dbx"
+collection_prefix = "dbx_"
+
+# Pool settings
+pool_size = 5
+min_pool_size = 1
+max_idle_time = 600
+
+# Connection settings
+connect_timeout = 10000
+server_selection_timeout = 30000
+socket_timeout = 0
+
+# Feature settings
+enable_transactions = true
+read_preference = "primary"
+write_concern = "majority"
+```
+
+#### MongoDB Environment Variables
+
+```bash
+MONGO_URL=mongodb://localhost:27017/dbx
+MONGO_DATABASE=dbx
+MONGO_USERNAME=user
+MONGO_PASSWORD=password
+MONGO_POOL_SIZE=5
+```
+
+### PostgreSQL Configuration
+
+```toml
+[backends.postgresql]
+# Connection settings
+url = "postgresql://user:password@localhost:5432/dbx"
+schema = "public"
+application_name = "dbx"
+
+# Pool settings
+pool_size = 15
+min_idle = 5
+max_lifetime = 1800
+
+# Connection settings
+connect_timeout = 10000
+command_timeout = 30000
+ssl_mode = "require"
+ssl_cert = "/path/to/client.crt"
+ssl_key = "/path/to/client.key"
+ssl_ca = "/path/to/ca.crt"
+
+# Feature settings
+enable_prepared_statements = true
+enable_transactions = true
+statement_cache_size = 100
+```
+
+#### PostgreSQL Environment Variables
+
+```bash
+POSTGRES_URL=postgresql://localhost:5432/dbx
+POSTGRES_USERNAME=user
+POSTGRES_PASSWORD=password
+POSTGRES_DATABASE=dbx
+POSTGRES_SCHEMA=public
+POSTGRES_POOL_SIZE=15
+POSTGRES_SSL_MODE=require
+```
+
+### SQLite Configuration
+
+```toml
+[backends.sqlite]
+# Database file
+path = "/data/dbx.db"
+in_memory = false
+
+# Performance settings
+journal_mode = "WAL"
+synchronous = "NORMAL"
+cache_size = 2000
+page_size = 4096
+
+# Connection settings
+busy_timeout = 30000
+foreign_keys = true
+auto_vacuum = "incremental"
+
+# Pool settings (for multiple connections)
+pool_size = 5
+```
+
+#### SQLite Environment Variables
+
+```bash
+SQLITE_PATH=/data/dbx.db
+SQLITE_JOURNAL_MODE=WAL
+SQLITE_SYNCHRONOUS=NORMAL
+SQLITE_CACHE_SIZE=2000
+SQLITE_POOL_SIZE=5
+```
+
+## Server Configuration
+
+### Basic Server Settings
+
+```toml
+[server]
+# Network settings
+host = "0.0.0.0"
+port = 3000
+workers = 4
+
+# Logging
+log_level = "INFO"
+log_format = "json"
+access_log = true
+
+# Timeouts
+request_timeout = 30000
+keepalive_timeout = 60000
+shutdown_timeout = 10000
+
+# Limits
+max_request_size = "10MB"
+max_connections = 1000
+```
+
+### CORS Configuration
+
+```toml
+[server.cors]
+enabled = true
+allow_origins = ["*"]
+allow_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+allow_headers = ["Content-Type", "Authorization", "X-API-Key"]
+expose_headers = ["X-Request-ID", "X-Response-Time"]
+max_age = 3600
+allow_credentials = false
+```
+
+### TLS Configuration
+
+```toml
+[server.tls]
+enabled = true
+cert_path = "/path/to/cert.pem"
+key_path = "/path/to/key.pem"
+ca_path = "/path/to/ca.pem"
+cipher_suites = ["TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256"]
+protocols = ["TLSv1.2", "TLSv1.3"]
+```
+
+## Multi-Backend Configuration
+
+### Running Multiple Backends
+
+Configure multiple backends simultaneously:
+
+```toml
+[backends.redis]
+url = "redis://redis:6379"
+pool_size = 10
+
+[backends.mongodb]
+url = "mongodb://mongo:27017/dbx"
+pool_size = 5
+
+[backends.postgresql]
+url = "postgresql://postgres:5432/dbx"
+pool_size = 15
+
+# Backend selection rules
+[routing]
+default_backend = "redis"
+backend_selection = "capability_based"  # or "round_robin", "explicit"
+
+# Backend-specific routing
+[[routing.rules]]
+path_prefix = "/redis/"
+backend = "redis"
+
+[[routing.rules]]
+path_prefix = "/mongo/"
+backend = "mongodb"
+
+[[routing.rules]]
+path_prefix = "/postgres/"
+backend = "postgresql"
+```
+
+### Environment Variables for Multi-Backend
+
+```bash
+# Enable multiple backends
+MULTI_BACKEND=true
+DEFAULT_BACKEND=redis
+
+# Backend URLs
+REDIS_URL=redis://redis:6379
+MONGO_URL=mongodb://mongo:27017/dbx
+POSTGRES_URL=postgresql://postgres:5432/dbx
+
+# Backend selection
+BACKEND_SELECTION=capability_based  # or round_robin, explicit
 ```
 
 ## Docker Configuration
 
-### Docker Run
-
-```bash
-docker run -d --name dbx -p 3000:3000 \
-  -e REDIS_URL=redis://your-redis-server:6379 \
-  -e PORT=3000 \
-  -e LOG_LEVEL=INFO \
-  -e POOL_SIZE=10 \
-  effortlesslabs/0dbx_redis:latest
-```
-
-### Docker Compose
+### Single Backend
 
 ```yaml
 version: "3.8"
 services:
   dbx:
-    image: effortlesslabs/0dbx_redis:latest
+    image: effortlesslabs/dbx:latest
     ports:
       - "3000:3000"
     environment:
+      - BACKEND_TYPE=redis
       - REDIS_URL=redis://redis:6379
-      - PORT=3000
       - LOG_LEVEL=INFO
-      - POOL_SIZE=10
     depends_on:
       - redis
 
@@ -126,306 +379,262 @@ services:
       - "6379:6379"
 ```
 
-## Command Line Arguments
+### Multi-Backend Setup
 
-### Running with Arguments
+```yaml
+version: "3.8"
+services:
+  dbx:
+    image: effortlesslabs/dbx:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - MULTI_BACKEND=true
+      - DEFAULT_BACKEND=redis
+      - REDIS_URL=redis://redis:6379
+      - MONGO_URL=mongodb://mongo:27017/dbx
+      - POSTGRES_URL=postgresql://user:password@postgres:5432/dbx
+    volumes:
+      - ./dbx.toml:/app/dbx.toml
+    depends_on:
+      - redis
+      - mongo
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=dbx
+
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=dbx
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+```
+
+### Backend-Specific Images
 
 ```bash
-# Run with custom Redis URL
-cargo run --bin dbx-redis-api -- --redis-url redis://localhost:6379
+# Redis-optimized image
+docker run -p 3000:3000 \
+  -e REDIS_URL=redis://redis:6379 \
+  effortlesslabs/dbx:redis
 
-# Run with custom port
-cargo run --bin dbx-redis-api -- --port 8080
-
-# Run with custom host
-cargo run --bin dbx-redis-api -- --host 127.0.0.1
+# Multi-backend image
+docker run -p 3000:3000 \
+  -e MULTI_BACKEND=true \
+  -e REDIS_URL=redis://redis:6379 \
+  -e MONGO_URL=mongodb://mongo:27017/dbx \
+  effortlesslabs/dbx:all
 ```
 
-### Available Arguments
+## Kubernetes Configuration
 
-| Argument      | Environment Variable | Description          |
-| ------------- | -------------------- | -------------------- |
-| `--redis-url` | `REDIS_URL`          | Redis connection URL |
-| `--host`      | `HOST`               | Server host address  |
-| `--port`      | `PORT`               | Server port number   |
-| `--pool-size` | `POOL_SIZE`          | Connection pool size |
+### Single Backend Deployment
 
-## Redis URL Format
-
-### Basic Format
-
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbx-redis
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: dbx
+  template:
+    metadata:
+      labels:
+        app: dbx
+    spec:
+      containers:
+      - name: dbx
+        image: effortlesslabs/dbx:redis
+        ports:
+        - containerPort: 3000
+        env:
+        - name: REDIS_URL
+          value: "redis://redis-service:6379"
+        - name: PORT
+          value: "3000"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
 ```
-redis://[username:password@]host:port[/database]
+
+### ConfigMap for Multi-Backend
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dbx-config
+data:
+  dbx.toml: |
+    [server]
+    port = 3000
+    host = "0.0.0.0"
+
+    [backends.redis]
+    url = "redis://redis-service:6379"
+    pool_size = 10
+
+    [backends.mongodb]
+    url = "mongodb://mongo-service:27017/dbx"
+    pool_size = 5
+
+    [routing]
+    default_backend = "redis"
+    backend_selection = "capability_based"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbx-multi
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dbx-multi
+  template:
+    metadata:
+      labels:
+        app: dbx-multi
+    spec:
+      containers:
+      - name: dbx
+        image: effortlesslabs/dbx:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: CONFIG_FILE
+          value: "/config/dbx.toml"
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: config
+        configMap:
+          name: dbx-config
 ```
 
-### Examples
+## Configuration Loading Order
+
+DBX loads configuration in the following priority order:
+
+1. **Command line arguments** (highest priority)
+2. **Environment variables**
+3. **Configuration file** (`dbx.toml` or `dbx.json`)
+4. **Auto-detection**
+5. **Default values** (lowest priority)
+
+### Configuration File Locations
+
+DBX searches for configuration files in this order:
+
+1. `./dbx.toml` or `./dbx.json` (current directory)
+2. `$HOME/.config/dbx/dbx.toml`
+3. `/etc/dbx/dbx.toml`
+4. Path specified by `CONFIG_FILE` environment variable
+
+## Validation and Health Checks
+
+### Configuration Validation
+
+DBX validates all configuration on startup:
 
 ```bash
-# Local Redis without authentication
-REDIS_URL=redis://localhost:6379
+# Validate configuration without starting
+./dbx --validate-config
 
-# Local Redis with database selection
-REDIS_URL=redis://localhost:6379/1
-
-# Remote Redis with authentication
-REDIS_URL=redis://user:password@redis.example.com:6379
-
-# Remote Redis with authentication and database
-REDIS_URL=redis://user:password@redis.example.com:6379/2
-
-# Redis with SSL/TLS
-REDIS_URL=rediss://user:password@redis.example.com:6380
+# Validate specific config file
+./dbx --validate-config --config /path/to/dbx.toml
 ```
 
-## Connection Pooling
+### Backend Health Checks
 
-### Pool Configuration
+Configure health check intervals and timeouts:
 
-The connection pool manages Redis connections for optimal performance:
+```toml
+[health_checks]
+enabled = true
+interval = 30  # seconds
+timeout = 5    # seconds
+failure_threshold = 3
+success_threshold = 1
+
+[health_checks.redis]
+enabled = true
+check_command = "PING"
+
+[health_checks.mongodb]
+enabled = true
+check_command = "ping"
+
+[health_checks.postgresql]
+enabled = true
+check_query = "SELECT 1"
+```
+
+## Environment-Specific Configuration
+
+### Development Configuration
 
 ```bash
-# Set pool size based on your needs
-POOL_SIZE=10  # For small applications
-POOL_SIZE=50  # For medium applications
-POOL_SIZE=100 # For high-traffic applications
+# Development with auto-reload
+export LOG_LEVEL=DEBUG
+export AUTO_RELOAD=true
+export CORS_ALLOW_ORIGINS=*
+export SQLITE_PATH=./dev.db
 ```
 
-### Pool Behavior
-
-- Connections are created on-demand up to the pool size limit
-- Idle connections are kept alive for reuse
-- Failed connections are automatically retried
-- Pool size should be tuned based on your application's concurrency needs
-
-## Logging Configuration
-
-### Log Levels
+### Production Configuration
 
 ```bash
-# Debug level - detailed information
-LOG_LEVEL=DEBUG
-
-# Info level - general information
-LOG_LEVEL=INFO
-
-# Warn level - warnings only
-LOG_LEVEL=WARN
-
-# Error level - errors only
-LOG_LEVEL=ERROR
+# Production optimized
+export LOG_LEVEL=WARN
+export WORKERS=8
+export REDIS_POOL_SIZE=50
+export REQUEST_TIMEOUT=10000
+export CORS_ALLOW_ORIGINS=https://yourdomain.com
 ```
 
-### Log Format
+### Testing Configuration
 
 ```bash
-# Text format (human-readable)
-LOG_FORMAT=text
-
-# JSON format (machine-readable)
-LOG_FORMAT=json
+# Testing with in-memory backends
+export BACKEND_TYPE=sqlite
+export SQLITE_IN_MEMORY=true
+export LOG_LEVEL=ERROR
+export PORT=0  # Random available port
 ```
 
-## Security Configuration
+## Configuration Examples
 
-### API Key Authentication
+For more configuration examples, see:
 
-```bash
-# Set a secret API key
-DBX_API_KEY=your-secret-api-key
-
-# Use in requests
-curl -H "Authorization: Bearer your-secret-api-key" \
-  http://localhost:3000/redis/admin/health
-```
-
-### CORS Configuration
-
-```bash
-# Allow all origins (development)
-DBX_CORS_ORIGINS=*
-
-# Allow specific origins
-DBX_CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
-
-# Allow multiple origins
-DBX_CORS_ORIGINS=https://yourdomain.com,https://api.yourdomain.com
-```
-
-### Rate Limiting
-
-```bash
-# Rate limit configuration
-DBX_RATE_LIMIT_REQUESTS=1000  # Requests per window
-DBX_RATE_LIMIT_WINDOW=60      # Window in seconds
-```
-
-## WebSocket Configuration
-
-### WebSocket Settings
-
-```bash
-# Enable/disable WebSocket support
-DBX_WS_ENABLED=true
-
-# Custom WebSocket path
-DBX_WS_PATH=/redis_ws
-```
-
-### WebSocket URLs
-
-```bash
-# Default WebSocket endpoints
-ws://localhost:3000/redis_ws/string/ws
-ws://localhost:3000/redis_ws/hash/ws
-ws://localhost:3000/redis_ws/set/ws
-ws://localhost:3000/redis_ws/admin/ws
-```
-
-## Monitoring Configuration
-
-### Health Checks
-
-```bash
-# Health check endpoint
-GET http://localhost:3000/redis/admin/health
-
-# Health check interval
-DBX_HEALTH_CHECK_INTERVAL=30
-```
-
-### Metrics
-
-```bash
-# Enable metrics collection
-DBX_METRICS_ENABLED=true
-```
-
-## Environment-Specific Configurations
-
-### Development
-
-```bash
-# .env.development
-REDIS_URL=redis://localhost:6379
-HOST=127.0.0.1
-PORT=3000
-POOL_SIZE=5
-LOG_LEVEL=DEBUG
-DBX_CORS_ORIGINS=*
-DBX_WS_ENABLED=true
-DBX_METRICS_ENABLED=true
-```
-
-### Staging
-
-```bash
-# .env.staging
-REDIS_URL=redis://staging-redis.example.com:6379
-HOST=0.0.0.0
-PORT=3000
-POOL_SIZE=20
-LOG_LEVEL=INFO
-DBX_API_KEY=staging-api-key
-DBX_CORS_ORIGINS=https://staging.yourdomain.com
-DBX_RATE_LIMIT_REQUESTS=500
-DBX_RATE_LIMIT_WINDOW=60
-```
-
-### Production
-
-```bash
-# .env.production
-REDIS_URL=redis://prod-redis.example.com:6379
-HOST=0.0.0.0
-PORT=8080
-POOL_SIZE=50
-LOG_LEVEL=WARN
-DBX_API_KEY=production-api-key
-DBX_CORS_ORIGINS=https://yourdomain.com
-DBX_RATE_LIMIT_REQUESTS=1000
-DBX_RATE_LIMIT_WINDOW=60
-DBX_WS_ENABLED=true
-DBX_METRICS_ENABLED=true
-```
-
-## Configuration Validation
-
-### Environment Variable Validation
-
-DBX validates configuration on startup:
-
-```bash
-# Invalid Redis URL
-REDIS_URL=invalid-url
-# Error: Invalid Redis URL format
-
-# Invalid port
-PORT=99999
-# Error: Port must be between 1 and 65535
-
-# Invalid pool size
-POOL_SIZE=0
-# Error: Pool size must be greater than 0
-```
-
-### Configuration Check
-
-```bash
-# Check configuration without starting server
-cargo run --bin dbx-redis-api -- --check-config
-
-# Or check environment variables
-echo $REDIS_URL
-echo $PORT
-echo $POOL_SIZE
-```
-
-## Troubleshooting
-
-### Common Configuration Issues
-
-**Redis Connection Failed**
-
-```bash
-# Check Redis URL format
-REDIS_URL=redis://localhost:6379
-
-# Test Redis connection
-redis-cli -u redis://localhost:6379 ping
-```
-
-**Port Already in Use**
-
-```bash
-# Check what's using the port
-lsof -i :3000
-
-# Use a different port
-PORT=8080
-```
-
-**Permission Denied**
-
-```bash
-# Check file permissions
-ls -la .env
-
-# Fix permissions
-chmod 600 .env
-```
-
-### Configuration Debugging
-
-```bash
-# Enable debug logging
-LOG_LEVEL=DEBUG
-
-# Check configuration at startup
-cargo run --bin dbx-redis-api -- --verbose
-```
-
-## Next Steps
-
-- [Getting Started](/docs/getting-started) - Get up and running with DBX
-- [Installation](/docs/installation) - Learn about installation options
-- [API Reference](/docs/api/rest/string) - Explore the complete API documentation
+- [Docker Compose Examples](https://github.com/effortlesslabs/dbx/tree/main/examples/docker-compose)
+- [Kubernetes Examples](https://github.com/effortlesslabs/dbx/tree/main/examples/kubernetes)
+- [Configuration Templates](https://github.com/effortlesslabs/dbx/tree/main/config/examples)

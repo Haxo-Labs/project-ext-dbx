@@ -1,5 +1,5 @@
 ---
-title: DBX – Minimal, Blazing-Fast API Proxy
+title: DBX – Backend-Agnostic Database API Server
 layout: landing
 showLogo: false
 ---
@@ -9,12 +9,12 @@ import { HomePage } from "vocs/components";
 <HomePage.Root>
   <HomePage.Logo />
   <HomePage.Tagline>
-    Minimal, blazing-fast API proxy for edge and embedded systems.
+    Backend-agnostic database API server with pluggable architecture.
   </HomePage.Tagline>
-  <HomePage.InstallPackage name="@0dbx/redis" type="install" />
+  <HomePage.InstallPackage name="dbx" type="install" />
   <HomePage.Description>
-    DBX is a minimal, blazing-fast Redis API proxy designed for edge and embedded systems. Built in
-    Rust with TypeScript SDK support, providing REST and WebSocket APIs for Redis operations.
+    DBX is a lightweight, high-performance database API server designed for edge and embedded systems. Built in
+    Rust with pluggable backend adapters, providing REST and WebSocket APIs for multiple database types through a unified interface.
   </HomePage.Description>
   <HomePage.Buttons>
     <HomePage.Button href="/docs" variant="accent">
@@ -26,44 +26,66 @@ import { HomePage } from "vocs/components";
 
 # DBX Documentation
 
-Welcome to the DBX documentation! DBX is a lightweight, high-performance Redis API proxy designed for edge and embedded systems.
+Welcome to the DBX documentation! DBX is a lightweight, high-performance database API server with backend-agnostic architecture.
 
 ## What is DBX?
 
-DBX is a minimal and portable HTTP/WebSocket proxy that exposes Redis through a unified API layer. Built in Rust, DBX is optimized for edge runtimes like Cloudflare Workers, Raspberry Pi, and RISC-V boards.
+DBX is a minimal and portable HTTP/WebSocket proxy that exposes multiple database types through a unified API layer. Built in Rust with pluggable backend adapters implementing the `UniversalBackend` trait, DBX provides consistent APIs regardless of the underlying database.
 
 ### Key Features
 
-- **🚀 Lightweight**: Minimal footprint, perfect for edge computing
-- **🔌 Redis-Focused**: Optimized Redis operations with connection pooling
-- **🌐 Dual Interface**: HTTP REST API + WebSocket real-time updates
-- **📱 TypeScript SDK**: Full client library with type safety via NAPI bindings
-- **⚡ High Performance**: Built in Rust for maximum efficiency
-- **🔧 Pluggable**: Easy to extend with new database backends
+- **Backend-Agnostic**: Pluggable adapter system for multiple database types
+- **Unified Interface**: Consistent HTTP REST API and WebSocket support across all backends
+- **TypeScript SDK**: Client library with backend capability detection
+- **High Performance**: Built in Rust for maximum efficiency
+- **Lightweight**: Minimal footprint, perfect for edge computing
+- **Extensible**: Easy to add new database backends
+
+### Supported Backends
+
+#### Currently Available
+- **Redis**: Complete implementation with strings, hashes, sets, sorted sets, bitmaps
+
+#### Planned Backends
+- **MongoDB**: Document-based operations with collections and aggregations
+- **PostgreSQL**: Relational database with SQL query support
+- **SQLite**: Embedded database for local storage
 
 ## Quick Start
 
 ### Using Docker
 
 ```bash
-# Run with Docker
+# Run with Redis backend
 docker run -d --name dbx -p 3000:3000 \
+  -e BACKEND_TYPE=redis \
   -e REDIS_URL=redis://localhost:6379 \
-  effortlesslabs/0dbx_redis:latest
+  effortlesslabs/dbx:latest
+
+# Run with auto-detection
+docker run -d --name dbx -p 3000:3000 \
+  effortlesslabs/dbx:latest
 ```
 
 ### Using TypeScript SDK
 
 ```bash
 # Install SDK
-npm install @0dbx/redis
+npm install dbx
 
 # Use in your code
-import { DbxRedisClient } from "@0dbx/redis";
+import { DbxClient } from "dbx";
 
-const client = new DbxRedisClient("http://localhost:3000");
-await client.string.set("key", "value");
-const value = await client.string.get("key");
+const client = new DbxClient("http://localhost:3000");
+
+// Data operations
+await client.data.set("user:1", { name: "Alice", age: 30 });
+const user = await client.data.get("user:1");
+
+// Backend-specific operations (when available)
+if (client.capabilities.supports("redis_strings")) {
+  await client.redis.string.set("key", "value", 3600);
+}
 ```
 
 ## Documentation Sections
@@ -72,79 +94,124 @@ const value = await client.string.get("key");
 
 - **[Quick Start Guide](/docs/getting-started)** - Get up and running in minutes
 - **[Installation](/docs/installation)** - Detailed installation instructions
-- **[Configuration](/docs/configuration)** - Learn about configuration options
+- **[Configuration](/docs/configuration)** - Learn about multi-backend configuration
+- **[Backend Setup](/docs/backends)** - Configure different database backends
 
 ### API Reference
 
-#### REST API
+#### Backend-Agnostic API
 
-- **[String Operations](/docs/api/rest/string)** - String data type operations
-- **[Hash Operations](/docs/api/rest/hash)** - Hash data type operations
-- **[Set Operations](/docs/api/rest/set)** - Set data type operations
-- **[Admin Operations](/docs/api/rest/admin)** - Server administration
-- **[Error Handling](/docs/api/rest/errors)** - Error codes and responses
+- **[Data Operations](/docs/api/universal/data)** - Data operations across backends
+- **[Query Operations](/docs/api/universal/query)** - Cross-backend query capabilities
+- **[Stream Operations](/docs/api/universal/stream)** - Stream and real-time operations
+- **[Admin Operations](/docs/api/universal/admin)** - Server administration and health checks
+
+#### Backend-Specific APIs
+
+- **[Redis API](/docs/api/redis/)** - Redis-specific operations
+- **[MongoDB API](/docs/api/mongodb/)** - MongoDB document operations (planned)
+- **[PostgreSQL API](/docs/api/postgres/)** - SQL operations (planned)
 
 #### WebSocket API
 
 - **[Connection Guide](/docs/api/websocket/connection)** - WebSocket connection setup
-- **[String Operations](/docs/api/websocket/string)** - WebSocket string operations
-- **[Hash Operations](/docs/api/websocket/hash)** - WebSocket hash operations
-- **[Set Operations](/docs/api/websocket/set)** - WebSocket set operations
-- **[Admin Operations](/docs/api/websocket/admin)** - WebSocket admin operations
+- **[Backend-Agnostic Operations](/docs/api/websocket/universal)** - WebSocket operations
+- **[Backend-Specific](/docs/api/websocket/backends)** - Backend-specific WebSocket operations
 
 ### SDK Documentation
 
 #### TypeScript SDK
 
 - **[Installation](/docs/sdk/typescript/installation)** - SDK setup and configuration
-- **[String Operations](/docs/sdk/typescript/string)** - String operations with TypeScript
-- **[Set Operations](/docs/sdk/typescript/set)** - Set operations with TypeScript
-- **[WebSocket Operations](/docs/sdk/typescript/websocket)** - WebSocket operations with TypeScript
+- **[Client Library](/docs/sdk/typescript/universal)** - Backend-agnostic operations
+- **[Backend Clients](/docs/sdk/typescript/backends)** - Backend-specific clients
+- **[Capability Detection](/docs/sdk/typescript/capabilities)** - Runtime capability detection
 
 ### Deployment
 
 - **[Docker Deployment](/docs/deployment/docker)** - Deploy with Docker
+- **[Multi-Backend Setup](/docs/deployment/multi-backend)** - Configure multiple backends
 - **[Cloud Deployment](/docs/deployment/cloud)** - Deploy to cloud platforms
 
 ### Development
 
 - **[Development Setup](/docs/development)** - Set up development environment
+- **[Adding Backends](/docs/development/backends)** - Implement new database adapters
 - **[Contributing](/docs/development/contributing)** - How to contribute to DBX
 
 ## API Endpoints Overview
 
-### REST API Endpoints
+### Backend-Agnostic Endpoints
 
-| Endpoint                          | Method | Description         |
-| --------------------------------- | ------ | ------------------- |
-| `/redis/string/{key}`             | GET    | Get string value    |
-| `/redis/string/{key}`             | POST   | Set string value    |
-| `/redis/string/{key}`             | DELETE | Delete string value |
-| `/redis/hash/{key}/field/{field}` | GET    | Get hash field      |
-| `/redis/hash/{key}/field/{field}` | POST   | Set hash field      |
-| `/redis/set/{key}/members`        | GET    | Get set members     |
-| `/redis/set/{key}/members`        | POST   | Add set members     |
-| `/redis/admin/health`             | GET    | Health check        |
-| `/redis/admin/ping`               | GET    | Ping server         |
+| Endpoint              | Method | Description                    |
+| --------------------- | ------ | ------------------------------ |
+| `/data/{key}`         | GET    | Get data by key                |
+| `/data/{key}`         | POST   | Set data by key                |
+| `/data/{key}`         | DELETE | Delete data by key             |
+| `/query`              | POST   | Execute query operation        |
+| `/stream`             | POST   | Stream operation               |
+| `/admin/health`       | GET    | Health check                   |
+| `/admin/capabilities` | GET    | Backend capabilities discovery |
+
+### Backend-Specific Endpoints
+
+#### Redis (when Redis backend is active)
+
+| Endpoint                          | Method | Description      |
+| --------------------------------- | ------ | ---------------- |
+| `/redis/string/{key}`             | GET    | Get string value |
+| `/redis/string/{key}`             | POST   | Set string value |
+| `/redis/hash/{key}/field/{field}` | GET    | Get hash field   |
+| `/redis/set/{key}/members`        | GET    | Get set members  |
 
 ### WebSocket Endpoints
 
-| Endpoint                                 | Description       |
-| ---------------------------------------- | ----------------- |
-| `ws://localhost:3000/redis_ws/string/ws` | String operations |
-| `ws://localhost:3000/redis_ws/hash/ws`   | Hash operations   |
-| `ws://localhost:3000/redis_ws/set/ws`    | Set operations    |
-| `ws://localhost:3000/redis_ws/admin/ws`  | Admin operations  |
+| Endpoint                     | Description       |
+| ---------------------------- | ----------------- |
+| `ws://localhost:3000/data`   | Data operations   |
+| `ws://localhost:3000/query`  | Query operations  |
+| `ws://localhost:3000/stream` | Stream operations |
+
+## Architecture
+
+### Core Components
+
+- **dbx-core**: Backend traits and operation abstractions
+- **dbx-adapter**: Database-specific implementations of UniversalBackend
+- **dbx-config**: Multi-backend configuration management
+- **dbx-router**: HTTP/WebSocket routing with backend abstraction
+
+### UniversalBackend Trait
+
+All database adapters implement a consistent interface:
+
+```rust
+#[async_trait]
+pub trait UniversalBackend: Send + Sync {
+    async fn execute_data(&self, operation: DataOperation) -> Result<DataResult, DbxError>;
+    async fn execute_query(&self, operation: QueryOperation) -> Result<QueryResult, DbxError>;
+    async fn execute_stream(&self, operation: StreamOperation) -> Result<StreamResult, DbxError>;
+    fn capabilities(&self) -> BackendCapabilities;
+}
+```
 
 ## Use Cases
 
+### Multi-Database Applications
+
+Use DBX to provide a unified API across different database types in complex systems.
+
+### Database Migration
+
+Seamlessly migrate between database types without changing your application API.
+
 ### Edge Computing
 
-Deploy DBX on edge nodes to provide local database access with cloud synchronization capabilities.
+Deploy DBX on edge nodes with local databases for reduced latency and improved resilience.
 
 ### IoT Applications
 
-Use DBX in embedded systems to provide a standardized API for various database backends.
+Use DBX in embedded systems to provide a standardized API for various storage backends.
 
 ### Microservices
 
@@ -152,7 +219,7 @@ Integrate DBX as a database proxy layer in microservice architectures for consis
 
 ### Real-time Applications
 
-Leverage WebSocket connections for real-time data synchronization and event streaming.
+Leverage WebSocket connections for real-time data synchronization and event streaming across different backends.
 
 ## Community
 
@@ -166,40 +233,33 @@ DBX is open source and available under the MIT License.
 
 # Features
 
-## 🚀 Performance
+## Performance
 
 Ultra-low latency optimized for edge computing environments with high throughput and minimal overhead.
 
-## 🔧 Redis Operations
+## Backend Support
 
-String, Hash, and Set operations with batch support and connection pooling.
+Support for multiple database types through a pluggable adapter system with runtime capability detection.
 
-## 🌐 Connectivity
+## Connectivity
 
-REST API and WebSocket connections with a full-featured TypeScript SDK.
+REST API and WebSocket connections with backend-agnostic TypeScript SDK.
 
-## 🛡️ Edge-Optimized
+## Edge-Optimized
 
-~50MB Docker image designed for Cloudflare Workers, IoT devices, and microservices.
+Minimal Docker image designed for Cloudflare Workers, IoT devices, and microservices.
 
 # Quick Start
 
 ```bash
-# Run with Docker
-docker run -d --name dbx -p 3000:3000 \
-  -e REDIS_URL=redis://localhost:6379 \
-  effortlesslabs/0dbx_redis:latest
+# Run with auto-detection
+docker run -d --name dbx -p 3000:3000 effortlesslabs/dbx:latest
 
 # Use the TypeScript SDK
-npm install @0dbx/redis
+npm install dbx
 ```
 
 # Community
 
 - **GitHub**: [effortlesslabs/dbx](https://github.com/effortlesslabs/dbx)
 - **Twitter**: [@effortlesslabs](https://x.com/effortlesslabs)
-- **Discussions**: [GitHub Discussions](https://github.com/effortlesslabs/dbx/discussions)
-
-# Sponsors
-
-::sponsors

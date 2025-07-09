@@ -5,7 +5,7 @@ description: Set up your development environment for DBX
 
 # Development Setup
 
-This guide will help you set up a development environment for DBX, the high-performance Redis API server.
+This guide will help you set up a development environment for DBX, the high-performance Universal Database API Server with backend-agnostic architecture.
 
 ## Prerequisites
 
@@ -14,7 +14,9 @@ Before you begin, make sure you have the following installed:
 - **Rust** (1.70+) - [Install Rust](https://rustup.rs/)
 - **Node.js** (18+) - [Install Node.js](https://nodejs.org/)
 - **Docker** (optional) - [Install Docker](https://docs.docker.com/get-docker/)
-- **Redis** (for testing) - [Install Redis](https://redis.io/download)
+- **Database Backend** (for testing):
+  - **Redis** (currently supported) - [Install Redis](https://redis.io/download)
+  - Additional backends coming soon (MongoDB, PostgreSQL, SQLite)
 
 ## Quick Start
 
@@ -32,7 +34,7 @@ cd dbx
 cargo build --release
 
 # Build the TypeScript SDK
-cd bindings/redis_ts
+cd bindings/dbx_ts
 npm install
 npm run build
 cd ../..
@@ -41,10 +43,10 @@ cd ../..
 ### 3. Run the Development Server
 
 ```bash
-# Run with default configuration
+# Run with default configuration (Redis backend)
 cargo run --bin dbx-redis-api
 
-# Run with custom Redis URL
+# Run with custom backend URL
 cargo run --bin dbx-redis-api -- --redis-url redis://localhost:6379
 ```
 
@@ -57,7 +59,7 @@ cargo run --bin dbx-redis-api -- --redis-url redis://localhost:6379
 cargo test
 
 # Run TypeScript tests
-cd bindings/redis_ts
+cd bindings/dbx_ts
 npm test
 cd ../..
 
@@ -79,7 +81,7 @@ docker run -p 3000:3000 -e REDIS_URL=redis://host.docker.internal:6379 effortles
 
 ```bash
 # Navigate to TypeScript bindings
-cd bindings/redis_ts
+cd bindings/dbx_ts
 
 # Install dependencies
 npm install
@@ -99,19 +101,21 @@ npm run dev
 ```
 dbx/
 ├── crates/
-│   ├── adapter/          # Database adapter layer
-│   ├── redis_api/        # HTTP/WebSocket API server
-│   └── redis_client/     # Redis client implementation
+│   ├── dbx-core/         # Core engine with universal backend traits
+│   ├── dbx-adapter/      # Database adapter layer
+│   ├── dbx-config/       # Configuration management
+│   ├── dbx-router/       # HTTP/WebSocket routing
+│   └── adapter/          # Specific database adapters (Redis, etc.)
 ├── bindings/
-│   └── redis_ts/         # TypeScript SDK (NAPI bindings)
+│   └── dbx_ts/          # TypeScript SDK (NAPI bindings)
 ├── scripts/              # Development and deployment scripts
 ├── docs/                 # Documentation
 └── tests/                # Integration tests
 ```
 
-## Configuration
+## Backend Configuration
 
-### Environment Variables
+### Currently Supported: Redis
 
 | Variable    | Default                  | Description             |
 | ----------- | ------------------------ | ----------------------- |
@@ -125,10 +129,15 @@ dbx/
 Create a `.env` file for local development:
 
 ```bash
+# Current Redis backend
 REDIS_URL=redis://localhost:6379
 PORT=3000
 LOG_LEVEL=DEBUG
 POOL_SIZE=5
+
+# Future: Other backends will use similar patterns
+# MONGO_URL=mongodb://localhost:27017/dbx
+# POSTGRES_URL=postgresql://localhost:5432/dbx
 ```
 
 ## Testing
@@ -137,7 +146,8 @@ POOL_SIZE=5
 
 ```bash
 # Test specific crate
-cargo test -p redis_api
+cargo test -p dbx-core
+cargo test -p dbx-adapter
 
 # Test with output
 cargo test -- --nocapture
@@ -146,7 +156,7 @@ cargo test -- --nocapture
 ### Integration Tests
 
 ```bash
-# Run integration tests with Redis server
+# Run integration tests with database server
 ./scripts/test-with-server.sh
 
 # Run simple tests
@@ -156,7 +166,7 @@ cargo test -- --nocapture
 ### TypeScript SDK Tests
 
 ```bash
-cd bindings/redis_ts
+cd bindings/dbx_ts
 npm run test:run
 ```
 
@@ -168,8 +178,8 @@ npm run test:run
 # Run with debug logging
 RUST_LOG=debug cargo run --bin dbx-redis-api
 
-# Run with specific log level
-RUST_LOG=redis_api=debug cargo run --bin dbx-redis-api
+# Run with specific module logging
+RUST_LOG=dbx_core=debug,dbx_adapter=debug cargo run --bin dbx-redis-api
 ```
 
 ### Docker Debugging
@@ -192,16 +202,40 @@ cargo bench
 wrk -t12 -c400 -d30s http://localhost:3000/redis/admin/health
 ```
 
+## Backend Development
+
+### Adding New Database Backends
+
+DBX uses a pluggable adapter system. To add a new backend:
+
+1. **Implement the UniversalBackend trait** in `crates/dbx-core/src/backends.rs`
+2. **Create adapter implementation** in `crates/adapter/src/your_backend/`
+3. **Add configuration support** in `crates/dbx-config/`
+4. **Update routing** in `crates/dbx-router/` for backend-specific endpoints
+
+```rust
+// Example: Implementing a new backend
+#[async_trait]
+impl UniversalBackend for YourBackend {
+    async fn execute_data(&self, operation: DataOperation) -> Result<DataResult, DbxError> {
+        // Your implementation
+    }
+    // ... other required methods
+}
+```
+
 ## Common Issues
 
-### Redis Connection Issues
+### Database Connection Issues
 
 ```bash
-# Check Redis is running
+# Redis: Check Redis is running
 redis-cli ping
 
 # Test connection
 redis-cli -h localhost -p 6379 ping
+
+# Future backends will have similar diagnostic commands
 ```
 
 ### Port Conflicts
@@ -225,8 +259,19 @@ cargo build --release
 cargo update
 ```
 
+## Architecture Overview
+
+DBX follows a modular, backend-agnostic architecture:
+
+- **Core Engine** (`dbx-core`) - Universal backend traits and operation types
+- **Adapter Layer** (`dbx-adapter`) - Database-specific implementations  
+- **Configuration** (`dbx-config`) - Backend configuration management
+- **Routing** (`dbx-router`) - HTTP/WebSocket request routing
+- **API Server** - HTTP/WebSocket server with unified endpoints
+
 ## Next Steps
 
 - **[Contributing Guide](/docs/development/contributing)** - Learn how to contribute to DBX
 - **[API Documentation](/docs/api/rest/string)** - Explore the API endpoints
 - **[TypeScript SDK](/docs/sdk/typescript/installation)** - Use the TypeScript client
+- **[Backend Architecture](/docs/architecture/backends)** - Understand the pluggable backend system

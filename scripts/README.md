@@ -1,372 +1,486 @@
-# DBX Publishing Scripts
+# DBX Scripts
 
-This directory contains optimized publishing scripts for the DBX project. All scripts now use shared functions and configuration for consistency and maintainability.
+This directory contains various scripts for managing DBX development, testing, and deployment.
 
-## 📁 Script Files
+## Available Scripts
 
-### Core Scripts
+### Development Scripts
 
-- **`publish-release.sh`** - Complete release automation (Docker + NPM + Git)
-- **`publish-docker.sh`** - Docker-only image building and publishing
-- **`publish-npm.sh`** - NPM-only TypeScript bindings publishing
-- **`quick-publish.sh`** - Interactive release helper
-- **`test-sequential.sh`** - Sequential testing (adapter → api → client)
+#### `run.sh`
+
+Runs the DBX server locally with development settings.
+
+```bash
+./scripts/run.sh
+```
+
+**Features:**
+
+- Starts Redis in background if not running
+- Sets up development environment variables
+- Runs DBX with hot reload enabled
+- Includes debug logging
+
+#### `config.sh`
+
+Configuration script for setting up environment variables.
+
+```bash
+source ./scripts/config.sh
+```
+
+**Sets:**
+
+- `REDIS_URL=redis://localhost:6379`
+- `HOST=0.0.0.0`
+- `PORT=3000`
+- `LOG_LEVEL=DEBUG`
 
 ### Testing Scripts
 
-- **`test-with-server.sh`** - Complete test runner with server setup and cleanup
-- **`test-simple.sh`** - Simple test runner for existing server
+#### `test-simple.sh`
 
-### Shared Files
-
-- **`common.sh`** - Shared functions and utilities
-- **`config.sh`** - Centralized configuration
-
-## 🚀 Quick Start
-
-### Environment Setup
-
-Set up your environment variables for easier usage:
+Runs basic unit tests for all workspace members.
 
 ```bash
-# Docker credentials
-export DOCKER_USERNAME="your-username"
-export DOCKER_PASSWORD="your-token"
-
-# NPM credentials
-export NPM_TOKEN="your-npm-token"
-
-# Optional: Customize defaults
-export DOCKER_REPO="your-repo-name"
-export NPM_PACKAGE_NAME="dbx-redis-ts-bindings"
+./scripts/test-simple.sh
 ```
 
-### Basic Usage
+**What it does:**
 
-#### Full Release (Recommended)
+- Runs `cargo test` for all crates
+- Includes both unit and integration tests
+- Fast execution, no external dependencies
+
+#### `test-with-server.sh`
+
+Comprehensive testing with a running DBX server instance.
 
 ```bash
-# Interactive mode
+./scripts/test-with-server.sh
+```
+
+**Features:**
+
+- Starts Redis and DBX server
+- Runs API tests against live server
+- Tests WebSocket connections
+- Includes performance benchmarks
+- Cleans up services after testing
+
+#### `test-sequential.sh`
+
+Runs tests in sequential order to avoid conflicts.
+
+```bash
+./scripts/test-sequential.sh
+```
+
+**Use cases:**
+
+- When tests have shared resource conflicts
+- For debugging test interactions
+- CI/CD environments with limited resources
+
+### Health Monitoring Scripts
+
+#### `check-status.sh`
+
+Comprehensive health check for all DBX components.
+
+```bash
+./scripts/check-status.sh
+```
+
+**Checks:**
+
+- Redis connection and status
+- DBX API server health endpoints
+- WebSocket connection status
+- Database operation functionality
+
+Example output:
+
+```
+DBX System Status Check
+======================
+✓ Redis: Connected (localhost:6379)
+✓ DBX API: Healthy (http://localhost:3000)
+✓ WebSocket: Connected (ws://localhost:3000/data/ws)
+✓ String Operations: Working
+✓ Hash Operations: Working
+✓ Set Operations: Working
+
+Overall Status: HEALTHY
+```
+
+### Publishing Scripts
+
+#### `publish.sh`
+
+Main publishing script for releases.
+
+```bash
+./scripts/publish.sh --version 1.0.0 --docker-tag latest
+```
+
+**Options:**
+
+- `--version`: Version number for the release
+- `--docker-tag`: Docker tag (default: latest)
+- `--npm-publish`: Also publish NPM package
+- `--github-release`: Create GitHub release
+
+#### `publish-docker.sh`
+
+Docker-specific publishing script.
+
+```bash
+./scripts/publish-docker.sh --tag v1.0.0
+```
+
+**Features:**
+
+- Builds multi-architecture Docker images
+- Pushes to Docker Hub (`effortlesslabs/dbx`)
+- Creates versioned and latest tags
+- Includes health checks and metadata
+
+#### `publish-npm.sh`
+
+NPM package publishing script.
+
+```bash
+./scripts/publish-npm.sh --version 1.0.0
+```
+
+**Process:**
+
+- Builds TypeScript bindings
+- Runs tests to ensure functionality
+- Publishes to NPM registry
+- Updates version tags
+
+#### `quick-publish.sh`
+
+One-command publishing for rapid releases.
+
+```bash
 ./scripts/quick-publish.sh
-
-# Command line mode
-./scripts/publish-release.sh --version 1.0.0 --docker-password $DOCKER_TOKEN --npm-token $NPM_TOKEN
 ```
 
-#### Docker Only
+**Interactive process:**
+
+1. Prompts for version number
+2. Builds and tests all components
+3. Publishes Docker image and NPM package
+4. Creates git tags
+5. Updates documentation
+
+### Utility Scripts
+
+#### `common.sh`
+
+Shared utilities and functions used by other scripts.
+
+**Functions:**
+
+- `log_info()`: Colored info logging
+- `log_error()`: Colored error logging
+- `wait_for_service()`: Wait for service to be ready
+- `cleanup()`: Clean up background processes
+- `check_dependencies()`: Verify required tools
+
+Usage in other scripts:
 
 ```bash
-# Build locally
-./scripts/publish-docker.sh --tag latest
+source ./scripts/common.sh
 
-# Build and push
-./scripts/publish-docker.sh --tag v1.0.0 --push --password $DOCKER_TOKEN
+log_info "Starting deployment..."
+wait_for_service "http://localhost:3000/admin/health" 30
 ```
 
-#### NPM Only
-
-```bash
-# Publish current version
-./scripts/publish-npm.sh --npm-token $NPM_TOKEN
-
-# Publish with new version
-./scripts/publish-npm.sh --version 1.0.0 --npm-token $NPM_TOKEN --update-version
-```
-
-#### Testing
-
-```bash
-# Test with server setup (recommended for CI)
-./scripts/test-with-server.sh
-
-# Test against existing server
-./scripts/test-simple.sh
-
-# Sequential testing (no server)
-./scripts/test-sequential.sh
-```
-
-## 🧪 Testing Scripts
-
-### test-with-server.sh
-
-Complete test runner that sets up the entire testing environment:
-
-**Features:**
-
-- Starts Redis service automatically
-- Builds and starts DBX API server
-- Runs all crate tests against the running server
-- Automatic cleanup of containers and services
-- Environment variable management
-
-**Usage:**
-
-```bash
-# Basic usage
-./scripts/test-with-server.sh
-
-# Custom environment
-./scripts/test-with-server.sh --env-file .env.test --redis-url redis://localhost:6379
-
-# Skip server start (assume it's running)
-./scripts/test-with-server.sh --skip-server
-
-# Keep server running after tests
-./scripts/test-with-server.sh --skip-cleanup
-```
-
-### test-simple.sh
-
-Lightweight test runner for existing server environments:
-
-**Features:**
-
-- Assumes server is already running
-- Sets up environment variables for tests
-- Runs crate tests sequentially
-- Minimal dependencies
-
-**Usage:**
-
-```bash
-# Test against default server
-./scripts/test-simple.sh
-
-# Custom server configuration
-./scripts/test-simple.sh --redis-url redis://localhost:6379 --server-url http://localhost:3000
-
-# Verbose output
-./scripts/test-simple.sh --verbose
-```
-
-### test-sequential.sh
-
-Original sequential test runner (no server required):
-
-**Features:**
-
-- Runs tests in dependency order (adapter → api → client)
-- No server setup required
-- Includes TypeScript tests
-- Good for development and pre-publish testing
-
-**Usage:**
-
-```bash
-# Run all tests
-./scripts/test-sequential.sh
-
-# Skip TypeScript tests
-./scripts/test-sequential.sh --skip-typescript
-
-# Verbose output
-./scripts/test-sequential.sh --verbose
-```
-
-## 🔧 Features
-
-### ✅ Optimizations Implemented
-
-1. **Shared Functions** - Common utilities in `common.sh`
-2. **Centralized Configuration** - All settings in `config.sh`
-3. **Environment Variables** - Support for all credentials via env vars
-4. **Better Error Handling** - Comprehensive error recovery and cleanup
-5. **Pre-flight Checks** - Validate tools, files, and credentials
-6. **Retry Logic** - Automatic retries for network operations
-7. **Progress Indicators** - Visual feedback during long operations
-8. **Version Validation** - Semantic versioning validation
-9. **Backup/Restore** - Automatic backup of version files
-10. **Debug/Verbose Modes** - Enhanced logging and troubleshooting
-11. **Server Integration** - Test against running DBX API server
-12. **Container Management** - Automatic Docker container lifecycle
-
-### 🛡️ Safety Features
-
-- **Dry-run mode** - Preview changes without executing
-- **Version conflict detection** - Warns about existing versions
-- **Credential validation** - Ensures required tokens are provided
-- **File validation** - Checks for required files before starting
-- **Tool validation** - Verifies required tools are installed
-- **Automatic cleanup** - Removes temporary files on completion
-- **Server health checks** - Validates server is running before tests
-- **Container cleanup** - Ensures containers are stopped after tests
-
-### 🔍 Debugging
-
-Enable debug and verbose modes for troubleshooting:
-
-```bash
-# Debug mode (shows all commands)
-./scripts/publish-release.sh --version 1.0.0 --debug
-
-# Verbose mode (detailed output)
-./scripts/publish-release.sh --version 1.0.0 --verbose
-
-# Both modes
-./scripts/publish-release.sh --version 1.0.0 --debug --verbose
-
-# Test with verbose output
-./scripts/test-with-server.sh --verbose
-./scripts/test-simple.sh --verbose
-```
-
-## 📋 Script Comparison
-
-| Feature          | Full Release | Docker Only | NPM Only | Quick Publish | Test Sequential | Test with Server | Test Simple |
-| ---------------- | ------------ | ----------- | -------- | ------------- | --------------- | ---------------- | ----------- |
-| Version Updates  | ✅           | ❌          | ✅       | ✅            | ❌              | ❌               | ❌          |
-| Rust Tests       | ✅           | ❌          | ❌       | ✅            | ✅              | ✅               | ✅          |
-| TypeScript Tests | ✅           | ❌          | ✅       | ✅            | ✅              | ❌               | ❌          |
-| Docker Build     | ✅           | ✅          | ❌       | ✅            | ❌              | ✅               | ❌          |
-| NPM Publish      | ✅           | ❌          | ✅       | ✅            | ❌              | ❌               | ❌          |
-| Git Operations   | ✅           | ❌          | ❌       | ✅            | ❌              | ❌               | ❌          |
-| Interactive      | ❌           | ❌          | ❌       | ✅            | ❌              | ❌               | ❌          |
-| Environment Vars | ✅           | ✅          | ✅       | ✅            | ✅              | ✅               | ✅          |
-| Dry Run          | ✅           | ❌          | ✅       | ❌            | ❌              | ❌               | ❌          |
-| Sequential Tests | ✅           | ❌          | ❌       | ✅            | ✅              | ✅               | ✅          |
-| Server Setup     | ❌           | ❌          | ❌       | ❌            | ❌              | ✅               | ❌          |
-| Container Mgmt   | ❌           | ❌          | ❌       | ❌            | ❌              | ✅               | ❌          |
-| CI/CD Ready      | ✅           | ✅          | ✅       | ❌            | ✅              | ✅               | ✅          |
-
-## ⚙️ Configuration
+## Script Configuration
 
 ### Environment Variables
 
-All scripts support these environment variables:
+Scripts use these environment variables (with defaults):
 
 ```bash
+# Database Configuration
+REDIS_URL=redis://localhost:6379
+MONGO_URL=mongodb://localhost:27017/dbx
+POSTGRES_URL=postgresql://localhost:5432/dbx
+
+# Server Configuration
+DBX_HOST=0.0.0.0
+DBX_PORT=3000
+LOG_LEVEL=INFO
+
 # Docker Configuration
-DOCKER_USERNAME="effortlesslabs"           # Docker Hub username
-DOCKER_PASSWORD=""                 # Docker Hub password/token
-DOCKER_REPO="dbx"                  # Docker repository name
-DOCKER_PLATFORMS="linux/amd64,linux/arm64"  # Target platforms
+DOCKER_REGISTRY=effortlesslabs
+DOCKER_IMAGE=dbx
+DOCKER_TAG=latest
 
 # NPM Configuration
-NPM_TOKEN=""                       # NPM authentication token
-NPM_PACKAGE_NAME="dbx-redis-ts-bindings"         # NPM package name
-NPM_PACKAGE_ACCESS="public"        # Package access level
+NPM_PACKAGE=dbx
+NPM_REGISTRY=https://registry.npmjs.org/
 
-# Build Configuration
-TYPESCRIPT_BUILD_DIR="bindings/redis_ts"          # TypeScript build directory
-RUST_BUILD_DIR="."                 # Rust build directory
-
-# Testing Configuration
-ENABLE_SEQUENTIAL_TESTS="true"     # Enable sequential test execution (adapter → api → client)
-RUST_TEST_CMD_ADAPTER="cd crates/adapter && cargo test"  # Adapter test command
-RUST_TEST_CMD_API="cd crates/redis_api && cargo test"    # API test command
-RUST_TEST_CMD_CLIENT="cd crates/redis_client && cargo test"  # Client test command
-TYPESCRIPT_TEST_CMD="npm run test:run"  # TypeScript test command
-
-# Error Handling
-MAX_RETRIES="3"                    # Maximum retry attempts
-RETRY_DELAY="5"                    # Delay between retries
-ENABLE_AUTO_BACKUP="true"          # Auto-backup version files
-ENABLE_AUTO_RESTORE="true"         # Auto-restore on failure
-
-# Logging
-DEBUG="false"                      # Enable debug mode
-VERBOSE="false"                    # Enable verbose output
-LOG_LEVEL="info"                   # Log level (debug, info, warning, error)
+# GitHub Configuration
+GITHUB_REPO=effortlesslabs/dbx
+GITHUB_TOKEN=${GITHUB_TOKEN}
 ```
 
-### Configuration File
+### Configuration Files
 
-You can create a `.env` file in the project root to set these variables:
+#### `.env.development`
+
+Development environment configuration:
 
 ```bash
-# .env
-DOCKER_USERNAME=your-username
-DOCKER_PASSWORD=your-token
-NPM_TOKEN=your-npm-token
-DEBUG=false
-VERBOSE=false
+# Development settings
+REDIS_URL=redis://localhost:6379
+HOST=127.0.0.1
+PORT=3000
+LOG_LEVEL=DEBUG
+RUST_LOG=dbx=debug
+
+# Enable development features
+AUTO_RELOAD=true
+CORS_ORIGINS=*
 ```
 
-## 🔄 Workflow Examples
+#### `.env.production`
+
+Production environment configuration:
+
+```bash
+# Production settings
+REDIS_URL=redis://redis:6379
+HOST=0.0.0.0
+PORT=3000
+LOG_LEVEL=WARN
+
+# Security settings
+CORS_ORIGINS=https://yourdomain.com
+API_KEY_REQUIRED=true
+```
+
+## Usage Examples
 
 ### Development Workflow
 
 ```bash
-# 1. Test changes (sequential order)
+# Start development environment
+./scripts/run.sh
+
+# In another terminal, run tests
+./scripts/test-with-server.sh
+
+# Check system status
+./scripts/check-status.sh
+```
+
+### Testing Workflow
+
+```bash
+# Quick unit tests
+./scripts/test-simple.sh
+
+# Full integration tests
+./scripts/test-with-server.sh
+
+# Sequential tests (for CI)
 ./scripts/test-sequential.sh
+```
 
-# Or test manually in order:
-cd crates/adapter && cargo test && cd ../redis_api && cargo test && cd ../redis_client && cargo test
-cd bindings/redis_ts && npm run test:run && cd ../..
+### Release Workflow
 
-# 2. Quick NPM publish for testing
-./scripts/publish-npm.sh --version 0.1.6 --npm-token $NPM_TOKEN --update-version
-
-# 3. Full release when ready
+```bash
+# Quick release (interactive)
 ./scripts/quick-publish.sh
+
+# Or manual release
+./scripts/publish.sh --version 1.2.0 --docker-tag v1.2.0 --npm-publish --github-release
+
+# Or individual components
+./scripts/publish-docker.sh --tag v1.2.0
+./scripts/publish-npm.sh --version 1.2.0
 ```
 
-### CI/CD Workflow
+### Monitoring Workflow
 
 ```bash
-# Automated release in CI
-./scripts/publish-release.sh \
-  --version $VERSION \
-  --docker-password $DOCKER_TOKEN \
-  --npm-token $NPM_TOKEN
+# Regular health checks
+./scripts/check-status.sh
+
+# Continuous monitoring (every 30 seconds)
+watch -n 30 ./scripts/check-status.sh
 ```
 
-### Railway Deployment
+## CI/CD Integration
 
-```bash
-# Build Railway-compatible image
-./scripts/publish-docker.sh \
-  --tag railway-deploy \
-  --push \
-  --password $DOCKER_TOKEN
+### GitHub Actions
+
+Example workflow using these scripts:
+
+```yaml
+name: DBX CI/CD
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Dependencies
+        run: |
+          source ./scripts/common.sh
+          check_dependencies
+      - name: Run Tests
+        run: ./scripts/test-sequential.sh
+      
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Publish Release
+        env:
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/publish.sh --version auto --docker-tag latest --npm-publish --github-release
 ```
 
-## 🐛 Troubleshooting
+### Docker Compose
+
+Using scripts with Docker Compose:
+
+```yaml
+# docker-compose.dev.yml
+version: "3.8"
+services:
+  dbx-dev:
+    build: .
+    command: ["./scripts/run.sh"]
+    environment:
+      - ENV=development
+    volumes:
+      - .:/app
+      - ./scripts:/app/scripts
+```
+
+## Troubleshooting
 
 ### Common Issues
 
-1. **Permission Denied**
+#### Permission Errors
 
-   ```bash
-   chmod +x scripts/*.sh
-   ```
+```bash
+# Make scripts executable
+chmod +x ./scripts/*.sh
+```
 
-2. **Missing Tools**
+#### Service Connection Issues
 
-   ```bash
-   # Install required tools
-   brew install docker buildx  # macOS
-   npm install -g npm          # Update npm
-   ```
+```bash
+# Check if Redis is running
+./scripts/check-status.sh
 
-3. **Authentication Errors**
+# Start Redis manually
+redis-server --daemonize yes
+```
 
-   ```bash
-   # Verify credentials
-   docker login
-   npm whoami
-   ```
+#### Docker Build Issues
 
-4. **Version Conflicts**
-   ```bash
-   # Check existing versions
-   npm view dbx-redis-ts-bindings versions
-   git tag -l
-   ```
+```bash
+# Clean Docker cache
+docker system prune -a
+
+# Rebuild without cache
+./scripts/publish-docker.sh --no-cache
+```
+
+#### NPM Publishing Issues
+
+```bash
+# Login to NPM
+npm login
+
+# Check package status
+npm view dbx
+
+# Force publish (if needed)
+./scripts/publish-npm.sh --force
+```
+
+### Log Files
+
+Scripts create log files in `./logs/`:
+
+- `development.log`: Development server logs
+- `test.log`: Test execution logs
+- `publish.log`: Publishing operation logs
+- `health.log`: Health check results
 
 ### Debug Mode
 
-Enable debug mode to see exactly what's happening:
+Enable debug mode for detailed output:
 
 ```bash
-DEBUG=true ./scripts/publish-release.sh --version 1.0.0 --dry-run
+export DBX_DEBUG=1
+./scripts/run.sh
 ```
 
-### Verbose Output
+## Contributing
 
-Get detailed information about each step:
+When adding new scripts:
+
+1. Follow the existing naming convention
+2. Include comprehensive error handling
+3. Use functions from `common.sh`
+4. Add documentation to this README
+5. Include usage examples
+6. Test on multiple platforms
+
+### Script Template
 
 ```bash
-./scripts/publish-release.sh --version 1.0.0 --verbose --dry-run
+#!/bin/bash
+
+# Script description
+# Usage: ./script-name.sh [options]
+
+set -e  # Exit on error
+
+# Source common functions
+source "$(dirname "$0")/common.sh"
+
+# Script-specific functions
+function main() {
+    log_info "Starting script..."
+    
+    # Implementation
+    
+    log_info "Script completed successfully"
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --option)
+            OPTION="$2"
+            shift 2
+            ;;
+        *)
+            log_error "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Run main function
+main "$@"
 ```
