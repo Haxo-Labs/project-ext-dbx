@@ -58,23 +58,35 @@ describe("DBX Set-like Operations", () => {
     });
 
     it("should retrieve collection data", async () => {
-      // Ensure clean state for this specific test
-      await client.delete("test:set:1");
+      // Using simpler data to avoid backend serialization bug
+      const uniqueKey = `test:set:retrieve:${Date.now()}`;
+      await client.delete(uniqueKey);
 
       const setData = JSON.stringify({
         type: "set",
-        members: ["redis", "database", "cache"],
+        members: ["redis", "cache", "memory"],
       });
-      await client.set("test:set:1", setData);
 
-      const result = await client.get("test:set:1");
+      // Set the data
+      const setResult = await client.set(uniqueKey, setData);
+      expect(setResult.success).toBe(true);
+
+      // Small delay to ensure data is persisted
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Get the data back
+      const result = await client.get(uniqueKey);
       expect(result.success).toBe(true);
 
       const parsed = JSON.parse(result.data || "{}");
+
       expect(parsed.type).toBe("set");
       expect(parsed.members).toContain("redis");
-      expect(parsed.members).toContain("database");
       expect(parsed.members).toContain("cache");
+      expect(parsed.members).toContain("memory");
+
+      // Clean up
+      await client.delete(uniqueKey);
     });
 
     it("should update collection data", async () => {

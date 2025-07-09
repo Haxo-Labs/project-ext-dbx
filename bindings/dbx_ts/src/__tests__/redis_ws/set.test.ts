@@ -134,7 +134,7 @@ describe("DBX Set Operations (Alternative Protocol Test)", () => {
             if (!existingData.members || !Array.isArray(existingData.members)) {
               existingData.members = [];
             }
-          } catch (error) {
+      } catch (error) {
             // If parsing fails, use default empty set
             existingData = { type: "set", members: [] };
           }
