@@ -224,7 +224,7 @@ impl DbxError {
     pub fn category(&self) -> &'static str {
         match self {
             DbxError::Connection { .. } => "connection",
-            DbxError::UnsupportedOperation { .. } => "unsupported_operation",
+            DbxError::UnsupportedOperation { .. } => "operation",
             DbxError::Routing { .. } => "routing",
             DbxError::Validation { .. } => "validation",
             DbxError::Serialization { .. } => "serialization",
@@ -243,9 +243,11 @@ impl DbxError {
     pub fn is_retryable(&self) -> bool {
         match self {
             DbxError::Connection { .. } => true,
-            DbxError::Timeout { .. } => true,
+            DbxError::Routing { .. } => true,
             DbxError::RateLimit { .. } => true,
-            DbxError::Backend { .. } => false, // Depends on backend, but conservative default
+            DbxError::Timeout { .. } => true,
+            DbxError::Backend { .. } => true,
+            DbxError::Internal { .. } => true,
             _ => false,
         }
     }

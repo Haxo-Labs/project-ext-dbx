@@ -336,7 +336,7 @@ impl Default for DatabaseConfig {
         Self {
             backends: HashMap::new(),
             routing: RoutingConfig {
-                default_backend: "default".to_string(),
+                default_backend: "".to_string(),
                 operation_routing: HashMap::new(),
                 key_routing: vec![],
                 load_balancing: None,

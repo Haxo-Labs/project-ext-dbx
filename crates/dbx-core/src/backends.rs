@@ -417,16 +417,19 @@ mod tests {
             HealthStatus::Unknown,
         ];
 
-        for status in statuses.clone() {
-            let json = serde_json::to_string(&status).unwrap();
+        for (i, status) in statuses.iter().enumerate() {
+            let json = serde_json::to_string(status).unwrap();
             let deserialized: HealthStatus = serde_json::from_str(&json).unwrap();
 
-            // Test PartialEq implementation
-            for other_status in &statuses {
-                if std::ptr::eq(&status as *const _, other_status as *const _) {
-                    assert_eq!(status, *other_status);
+            // Test PartialEq implementation - each status should equal itself
+            assert_eq!(*status, deserialized);
+
+            // Test that different statuses are not equal
+            for (j, other_status) in statuses.iter().enumerate() {
+                if i == j {
+                    assert_eq!(*status, *other_status);
                 } else {
-                    assert_ne!(status, *other_status);
+                    assert_ne!(*status, *other_status);
                 }
             }
         }

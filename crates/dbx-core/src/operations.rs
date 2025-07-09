@@ -163,15 +163,23 @@ pub enum TrimStrategy {
 
 /// Data value that can represent any data type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
+#[serde(tag = "type", content = "value")]
 pub enum DataValue {
+    #[serde(rename = "null")]
     Null,
+    #[serde(rename = "bool")]
     Bool(bool),
+    #[serde(rename = "int")]
     Int(i64),
+    #[serde(rename = "float")]
     Float(f64),
+    #[serde(rename = "string")]
     String(String),
+    #[serde(rename = "bytes")]
     Bytes(Vec<u8>),
+    #[serde(rename = "array")]
     Array(Vec<DataValue>),
+    #[serde(rename = "object")]
     Object(HashMap<String, DataValue>),
 }
 
