@@ -188,36 +188,35 @@ pool_size = 5
 DBX provides backend-agnostic endpoints that adapt to the underlying database:
 
 ```
-GET    /data/{key}              - Get data by key
-POST   /data/{key}              - Set data by key
-DELETE /data/{key}              - Delete data by key
-POST   /query                   - Execute query operation
-POST   /stream                  - Stream operation
-GET    /admin/health            - Health check
-GET    /admin/capabilities      - Backend capabilities
+GET    /api/v1/data/{key}       - Get data by key
+POST   /api/v1/data/{key}       - Set data by key
+PUT    /api/v1/data/{key}       - Update data by key
+DELETE /api/v1/data/{key}       - Delete data by key
+GET    /api/v1/data/{key}/exists - Check if key exists
+POST   /api/v1/query            - Execute query operation
+GET    /health                  - Health check
+GET    /api/v1/admin/system     - System information (admin only)
 ```
 
-### Backend-Specific Endpoints
+### Stream Operations
 
-For backends that support specific operations:
-
-```
-# Redis-specific (when Redis backend is active)
-GET    /redis/string/{key}      - Redis string operations
-POST   /redis/hash/{key}        - Redis hash operations
-GET    /redis/set/{key}         - Redis set operations
-
-# Future: MongoDB-specific
-POST   /mongo/collection/{name} - MongoDB collection operations
-POST   /mongo/aggregate         - MongoDB aggregation pipeline
-```
-
-### WebSocket API
+DBX provides HTTP endpoints for stream operations:
 
 ```
-ws://localhost:3000/data/ws     - Data operations
-ws://localhost:3000/query/ws    - Query operations
-ws://localhost:3000/stream/ws   - Stream operations
+POST   /api/v1/stream/add       - Add entry to stream
+POST   /api/v1/stream/read      - Read from stream
+POST   /api/v1/stream/create    - Create new stream
+POST   /api/v1/stream/subscribe - Subscribe to channel
+POST   /api/v1/stream/publish   - Publish to channel
+```
+
+### Authentication
+
+```
+POST   /auth/login              - User authentication
+POST   /auth/refresh            - Refresh JWT token
+GET    /auth/user               - Get current user info
+POST   /auth/logout             - User logout
 ```
 
 ## TypeScript SDK
@@ -229,29 +228,34 @@ npm install dbx
 ```typescript
 import { DbxClient } from "dbx";
 
-// Create client with auto-detection
-const client = new DbxClient("http://localhost:3000");
-
-// Data operations
-await client.data.set("user:1", { name: "Alice", age: 30 });
-const user = await client.data.get("user:1");
-
-// Query operations
-const results = await client.query.execute({
-  type: "filter",
-  collection: "users",
-  filter: { age: { $gte: 18 } }
+// Create client instance
+const client = new DbxClient({
+  baseUrl: "http://localhost:3000",
+  timeoutMs: 5000
 });
 
-// Backend-specific operations (when available)
-if (client.capabilities.supports("redis_strings")) {
-  await client.redis.string.set("key", "value", 3600);
+// Authenticate
+await client.authenticate("username", "password");
+
+// Data operations
+await client.set("user:1", JSON.stringify({ name: "Alice", age: 30 }));
+const response = await client.get("user:1");
+if (response.success && response.data) {
+  const user = JSON.parse(response.data);
+  console.log(user);
 }
 
-// WebSocket client
-import { DbxWsClient } from "dbx";
-const wsClient = new DbxWsClient("ws://localhost:3000/data/ws");
-await wsClient.data.set("realtime:key", "value");
+// Update data (hash operations)
+await client.update("user:1", JSON.stringify({ age: 31 }));
+
+// Check if key exists
+const exists = await client.exists("user:1");
+
+// Delete data
+await client.delete("user:1");
+
+// Health check
+const health = await client.health();
 ```
 
 ## Development
