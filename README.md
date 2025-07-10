@@ -223,18 +223,4 @@ The easiest way to publish is using GitHub Actions:
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-## License
-
-<sup>
-Licensed under <a href="LICENSE">MIT license</a>.
-</sup>
-
-<br>
-
-<sub>
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in these packages by you, as defined in the MIT license, shall be
-licensed as above, without any additional terms or conditions.
-</sub>
-
 ---
