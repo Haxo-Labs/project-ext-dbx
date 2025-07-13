@@ -231,7 +231,7 @@ import { DbxClient } from "dbx";
 // Create client instance
 const client = new DbxClient({
   baseUrl: "http://localhost:3000",
-  timeoutMs: 5000
+  timeoutMs: 5000,
 });
 
 // Authenticate
@@ -303,7 +303,7 @@ impl UniversalBackend for YourBackendAdapter {
             // Additional operations available
         }
     }
-    
+
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             data_operations: vec![DataOperationType::Get, DataOperationType::Set],
@@ -347,10 +347,10 @@ DBX provides Docker images for multiple architectures:
 
 ## Links
 
-- **Documentation**: [https://dbx.effortlesslabs.com](https://dbx.effortlesslabs.com/)
-- **Docker Hub**: [https://hub.docker.com/r/effortlesslabs/dbx](https://hub.docker.com/r/effortlesslabs/dbx)
-- **NPM Package**: [https://www.npmjs.com/package/dbx](https://www.npmjs.com/package/dbx)
-- **GitHub**: [https://github.com/effortlesslabs/dbx](https://github.com/effortlesslabs/dbx)
+- **📖 Documentation**: [https://dbx.effortlesslabs.com](https://0dbx.vercel.app/)
+- **🐳 Docker Hub**: [https://hub.docker.com/r/effortlesslabs/0dbx_redis](https://hub.docker.com/r/effortlesslabs/0dbx_redis)
+- **📦 NPM Package**: [https://www.npmjs.com/package/@0dbx/redis](https://www.npmjs.com/package/@0dbx/redis)
+- **🐙 GitHub**: [https://github.com/effortlesslabs/dbx](https://github.com/effortlesslabs/dbx)
 
 ## Publishing
 
@@ -360,16 +360,4 @@ To publish new versions of DBX (Docker image and TypeScript SDK), see our compre
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-## License
-
-<sup>
-Licensed under <a href="LICENSE">MIT license</a>.
-</sup>
-
-<br>
-
-<sub>
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in these packages by you, as defined in the MIT license, shall be
-licensed as above, without any additional terms or conditions.
-</sub>
+---
