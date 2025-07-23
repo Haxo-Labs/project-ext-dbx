@@ -92,7 +92,7 @@ async fn execute_query(
                 Ok(Json(ApiResponse::success(response)))
             }
             Err(e) => Ok(Json(ApiResponse::error(format!(
-                "Failed to execute query: {}",
+                "Query execution failed: {}",
                 e
             )))),
         },
@@ -140,12 +140,12 @@ async fn pattern_search(
                 Ok(Json(ApiResponse::success(response)))
             }
             Err(e) => Ok(Json(ApiResponse::error(format!(
-                "Failed to execute pattern search: {}",
+                "Query execution failed: {}",
                 e
             )))),
         },
         Err(e) => Ok(Json(ApiResponse::error(format!(
-            "Failed to route pattern search: {}",
+            "Failed to route query: {}",
             e
         )))),
     }
@@ -189,12 +189,12 @@ async fn text_search(
                 Ok(Json(ApiResponse::success(response)))
             }
             Err(e) => Ok(Json(ApiResponse::error(format!(
-                "Failed to execute text search: {}",
+                "Query execution failed: {}",
                 e
             )))),
         },
         Err(e) => Ok(Json(ApiResponse::error(format!(
-            "Failed to route text search: {}",
+            "Failed to route query: {}",
             e
         )))),
     }
