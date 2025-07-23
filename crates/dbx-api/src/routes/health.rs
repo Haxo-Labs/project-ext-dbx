@@ -8,7 +8,8 @@ use axum::{
 use serde::Serialize;
 use std::sync::Arc;
 
-use crate::models::ApiResponse;
+use crate::auth::permissions::PermissionType;
+use crate::models::{ApiResponse, RbacContext};
 use dbx_core::HealthStatus;
 use dbx_router::BackendRouter;
 
@@ -95,7 +96,30 @@ pub fn create_health_routes() -> Router<Arc<BackendRouter>> {
 
 async fn get_system_health(
     State(router): State<Arc<BackendRouter>>,
+    rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<SystemHealthResponse>>, StatusCode> {
+    // Check admin permission
+    let permission_check = rbac_context
+        .rbac_service
+        .check_permission(
+            &rbac_context.user_id,
+            PermissionType::AdminInfo,
+            crate::models::PermissionCheckContext {
+                user_id: Some(rbac_context.user_id.clone()),
+                username: Some(rbac_context.username.clone()),
+                role: rbac_context.roles.first().cloned(),
+                resource: "system_health".to_string(),
+                action: "get".to_string(),
+                permission_required: "admin:info".to_string(),
+                ip_address: None,
+                user_agent: None,
+            },
+        )
+        .await;
+
+    if !permission_check.unwrap_or(false) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     // Get all configured backends
     let backend_names = router.get_all_backends().await;
     let mut backends = Vec::new();
@@ -188,7 +212,30 @@ async fn get_system_health(
 async fn get_backend_health(
     State(router): State<Arc<BackendRouter>>,
     Path(backend_name): Path<String>,
+    rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<BackendHealthResponse>>, StatusCode> {
+    // Check admin permission
+    let permission_check = rbac_context
+        .rbac_service
+        .check_permission(
+            &rbac_context.user_id,
+            PermissionType::AdminInfo,
+            crate::models::PermissionCheckContext {
+                user_id: Some(rbac_context.user_id.clone()),
+                username: Some(rbac_context.username.clone()),
+                role: rbac_context.roles.first().cloned(),
+                resource: format!("backend_health:{}", backend_name),
+                action: "get".to_string(),
+                permission_required: "admin:info".to_string(),
+                ip_address: None,
+                user_agent: None,
+            },
+        )
+        .await;
+
+    if !permission_check.unwrap_or(false) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     match router.get_backend(&backend_name).await {
         Some(backend) => {
             // Get backend health status
