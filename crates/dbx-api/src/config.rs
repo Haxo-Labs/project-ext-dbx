@@ -4,6 +4,8 @@ use std::env;
 use std::str::FromStr;
 use thiserror::Error;
 
+use crate::auth::RbacConfig;
+
 /// Supported database types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DatabaseType {
@@ -73,6 +75,7 @@ impl JwtConfig {
 pub struct AppConfig {
     pub server: ServerConfig,
     pub jwt: JwtConfig,
+    pub rbac: RbacConfig,
     pub create_default_admin: bool,
     pub default_admin_username: Option<String>,
     pub default_admin_password: Option<String>,
@@ -134,6 +137,49 @@ impl AppConfig {
 
         jwt_config.validate()?;
 
+        // Parse RBAC configuration
+        let rbac_audit_enabled = env::var("RBAC_AUDIT_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let rbac_audit_retention_days = env::var("RBAC_AUDIT_RETENTION_DAYS")
+            .unwrap_or_else(|_| "90".to_string())
+            .parse()
+            .map_err(|e| ConfigError::ParseError {
+                var: "RBAC_AUDIT_RETENTION_DAYS".to_string(),
+                source: e,
+            })?;
+
+        let rbac_max_role_inheritance_depth = env::var("RBAC_MAX_ROLE_INHERITANCE_DEPTH")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse()
+            .map_err(|e| ConfigError::ParseError {
+                var: "RBAC_MAX_ROLE_INHERITANCE_DEPTH".to_string(),
+                source: e,
+            })?;
+
+        let rbac_performance_cache_ttl_seconds = env::var("RBAC_PERFORMANCE_CACHE_TTL_SECONDS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse()
+            .map_err(|e| ConfigError::ParseError {
+                var: "RBAC_PERFORMANCE_CACHE_TTL_SECONDS".to_string(),
+                source: e,
+            })?;
+
+        let rbac_default_assignment_ttl_days = env::var("RBAC_DEFAULT_ASSIGNMENT_TTL_DAYS")
+            .ok()
+            .map(|s| s.parse().unwrap_or(None))
+            .flatten();
+
+        let rbac_config = RbacConfig {
+            audit_enabled: rbac_audit_enabled,
+            audit_retention_days: rbac_audit_retention_days,
+            max_role_inheritance_depth: rbac_max_role_inheritance_depth,
+            performance_cache_ttl_seconds: rbac_performance_cache_ttl_seconds,
+            default_assignment_ttl_days: rbac_default_assignment_ttl_days,
+        };
+
         Ok(AppConfig {
             server: ServerConfig {
                 host,
@@ -141,6 +187,7 @@ impl AppConfig {
                 redis_url,
             },
             jwt: jwt_config,
+            rbac: rbac_config,
             create_default_admin,
             default_admin_username,
             default_admin_password,
