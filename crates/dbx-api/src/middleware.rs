@@ -3,8 +3,8 @@ use crate::{
     config::JwtConfig,
     constants::errors::ErrorMessages,
     models::{
-        ApiKeyContext, ApiResponse, AuthResponse, Claims, CreateUserRequest, TokenType, User,
-        UserInfo, UserRole,
+        ApiKeyContext, ApiResponse, AuthResponse, Claims, CreateUserRequest,
+        PermissionCheckContext, TokenType, User, UserInfo, UserRole,
     },
 };
 use async_trait::async_trait;
@@ -86,11 +86,25 @@ impl JwtService {
         let access_exp = now + Duration::seconds(self.config.access_token_expiration as i64);
         let refresh_exp = now + Duration::seconds(self.config.refresh_token_expiration as i64);
 
+        // Get permissions based on user role
+        use crate::auth::permissions::{Permission, PermissionType};
+        let user_permissions = match user.role {
+            UserRole::Admin => Permission::admin(),
+            UserRole::User => Permission::read_write(),
+            UserRole::ReadOnly => Permission::read_only(),
+        };
+        let permission_names: Vec<String> = user_permissions
+            .permission_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
         // Access token claims
         let access_claims = Claims {
             sub: user.id.clone(),
             username: user.username.clone(),
             role: user.role.clone(),
+            permissions: permission_names.clone(),
             exp: access_exp.timestamp(),
             iat: now.timestamp(),
             iss: self.config.issuer.clone(),
@@ -102,6 +116,7 @@ impl JwtService {
             sub: user.id.clone(),
             username: user.username.clone(),
             role: user.role.clone(),
+            permissions: permission_names,
             exp: refresh_exp.timestamp(),
             iat: now.timestamp(),
             iss: self.config.issuer.clone(),
@@ -410,10 +425,23 @@ pub async fn flexible_auth_middleware(
         match api_key_service.validate_api_key(&api_key).await {
             Ok(api_key_context) => {
                 // Convert API key context to JWT-like claims for compatibility
+                use crate::auth::permissions::Permission;
+                let user_permissions = match api_key_context.user_role {
+                    UserRole::Admin => Permission::admin(),
+                    UserRole::User => Permission::read_write(),
+                    UserRole::ReadOnly => Permission::read_only(),
+                };
+                let permission_names: Vec<String> = user_permissions
+                    .permission_names()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
+
                 let claims = Claims {
                     sub: format!("api_key:{}", api_key_context.api_key.id),
                     username: format!("api_key:{}", api_key_context.api_key.name),
                     role: api_key_context.user_role.clone(),
+                    permissions: permission_names,
                     exp: api_key_context
                         .api_key
                         .expires_at
@@ -760,6 +788,336 @@ impl RedisUserStore {
         Ok(user)
     }
 }
+
+// RBAC (Role-Based Access Control) Middleware
+
+use crate::auth::{
+    permissions::{Permission, PermissionType},
+    RbacService,
+};
+
+// RBAC permission checking with comprehensive authorization
+
+/// Permission checking middleware using RBAC service
+pub async fn permission_check_middleware(
+    mut request: Request,
+    next: Next,
+    required_permission: PermissionType,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // Extract RBAC context from request extensions
+    let rbac_context = request
+        .extensions()
+        .get::<RbacContext>()
+        .cloned()
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiResponse::<()>::error(
+                    "RBAC context not found".to_string(),
+                )),
+            )
+        })?;
+
+    // Create permission check context for auditing
+    let ip_address = request
+        .headers()
+        .get("x-forwarded-for")
+        .or_else(|| request.headers().get("x-real-ip"))
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let user_agent = request
+        .headers()
+        .get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let resource = request
+        .uri()
+        .path()
+        .split('/')
+        .nth(1)
+        .unwrap_or("unknown")
+        .to_string();
+
+    let action = request.method().to_string().to_lowercase();
+
+    let permission_context = PermissionCheckContext {
+        user_id: Some(rbac_context.user_id.clone()),
+        username: Some(rbac_context.username.clone()),
+        role: None,
+        resource: resource.clone(),
+        action: action.clone(),
+        permission_required: required_permission.to_string().to_string(),
+        ip_address: Some(ip_address),
+        user_agent: Some(user_agent),
+    };
+
+    // Check permission using RBAC service
+    match rbac_context
+        .rbac_service
+        .check_permission(
+            &rbac_context.user_id,
+            required_permission.clone(),
+            permission_context,
+        )
+        .await
+    {
+        Ok(true) => {
+            request.extensions_mut().insert(required_permission);
+            Ok(next.run(request).await)
+        }
+        Ok(false) => Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::error(format!(
+                "Permission denied. Required: {}",
+                required_permission.to_string()
+            ))),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::error(format!(
+                "Permission check failed: {}",
+                e
+            ))),
+        )),
+    }
+}
+
+/// Middleware for string operations
+pub async fn require_string_read_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::StringGet).await
+}
+
+pub async fn require_string_write_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::StringSet).await
+}
+
+/// Middleware for hash operations
+pub async fn require_hash_read_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::HashGet).await
+}
+
+pub async fn require_hash_write_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::HashSet).await
+}
+
+/// Middleware for set operations
+pub async fn require_set_read_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::SetMembers).await
+}
+
+pub async fn require_set_write_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::SetAdd).await
+}
+
+/// Middleware for admin operations
+pub async fn require_admin_ping_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::AdminPing).await
+}
+
+pub async fn require_admin_flush_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::AdminFlush).await
+}
+
+/// Middleware for role management operations
+pub async fn require_role_management_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::RoleManage).await
+}
+
+/// Middleware for audit log viewing
+pub async fn require_audit_view_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(request, next, PermissionType::AuditView).await
+}
+
+/// RBAC authentication middleware that creates RBAC context from JWT/API key
+pub async fn rbac_auth_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    mut request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    use crate::models::RbacContext;
+
+    // Extract user information from JWT claims or API key context
+    let (user_id, username, roles) = if let Some(claims) = request.extensions().get::<Claims>() {
+        let user_roles = rbac_service
+            .get_user_role_assignments(&claims.sub)
+            .await
+            .unwrap_or_else(|_| Vec::new())
+            .into_iter()
+            .filter(|a| a.is_active)
+            .map(|a| a.role_name)
+            .collect();
+
+        (claims.sub.clone(), claims.username.clone(), user_roles)
+    } else if let Some(api_key_context) = request.extensions().get::<ApiKeyContext>() {
+        let user_id = format!("api_key:{}", api_key_context.api_key.id);
+        let username = format!("api_key:{}", api_key_context.api_key.name);
+
+        let user_roles = rbac_service
+            .get_user_role_assignments(&user_id)
+            .await
+            .unwrap_or_else(|_| Vec::new())
+            .into_iter()
+            .filter(|a| a.is_active)
+            .map(|a| a.role_name)
+            .collect();
+
+        (user_id, username, user_roles)
+    } else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::error(
+                "Authentication required".to_string(),
+            )),
+        ));
+    };
+
+    // Create RBAC context
+    let rbac_context = RbacContext {
+        user_id,
+        username,
+        roles,
+        rbac_service,
+    };
+
+    // Insert RBAC context into request extensions
+    request.extensions_mut().insert(rbac_context);
+
+    Ok(next.run(request).await)
+}
+
+/// Permission checking middleware that uses RBAC service
+pub async fn rbac_permission_check_middleware(
+    request: Request,
+    next: Next,
+    required_permission: PermissionType,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    use crate::models::PermissionCheckContext;
+
+    let rbac_context = request.extensions().get::<RbacContext>().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::error(
+                "RBAC context not found".to_string(),
+            )),
+        )
+    })?;
+
+    // Extract request context for audit logging
+    let ip_address = request
+        .headers()
+        .get("x-forwarded-for")
+        .or_else(|| request.headers().get("x-real-ip"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let user_agent = request
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let resource = request.uri().path().to_string();
+    let action = request.method().to_string();
+
+    let permission_context = PermissionCheckContext {
+        user_id: Some(rbac_context.user_id.clone()),
+        username: Some(rbac_context.username.clone()),
+        role: None, // Will be filled by RBAC service
+        resource: resource.clone(),
+        action: action.clone(),
+        permission_required: required_permission.to_string().to_string(),
+        ip_address,
+        user_agent,
+    };
+
+    // Check permission using RBAC service
+    match rbac_context
+        .rbac_service
+        .check_permission(
+            &rbac_context.user_id,
+            required_permission.clone(),
+            permission_context,
+        )
+        .await
+    {
+        Ok(true) => Ok(next.run(request).await),
+        Ok(false) => Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::error(format!(
+                "Permission denied. Required: {}",
+                required_permission.to_string()
+            ))),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::error(format!(
+                "Permission check failed: {}",
+                e
+            ))),
+        )),
+    }
+}
+
+// Define RbacContext struct for middleware use
+#[derive(Debug, Clone)]
+pub struct RbacContext {
+    pub user_id: String,
+    pub username: String,
+    pub rbac_service: Arc<RbacService>,
+}
+
+// Additional middleware for data operation permission patterns
+pub async fn require_data_read_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check if user has any read permissions - will be validated by RBAC service
+    permission_check_middleware(request, next, PermissionType::StringGet).await
+}
+
+pub async fn require_data_write_permission(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check if user has any write permissions - will be validated by RBAC service
+    permission_check_middleware(request, next, PermissionType::StringSet).await
+}
+
+// Type definitions for async functions (if needed for future use)
 
 #[cfg(test)]
 mod tests {
@@ -1192,11 +1550,12 @@ mod tests {
         let config = create_test_jwt_config();
         let jwt_service = JwtService::new(config);
 
-        // Create a simple expired token by using jsonwebtoken directly
+        // Create an expired JWT token for testing token validation
         let expired_claims = Claims {
             sub: "test_user_id".to_string(),
             username: "testuser".to_string(),
             role: UserRole::User,
+            permissions: vec!["string:get".to_string(), "string:set".to_string()],
             exp: Utc::now().timestamp() - 3600, // Expired 1 hour ago
             iat: Utc::now().timestamp() - 7200, // Issued 2 hours ago
             iss: "test_issuer".to_string(),
@@ -1591,6 +1950,7 @@ mod tests {
             sub: "test_id".to_string(),
             username: "test_user".to_string(),
             role: UserRole::Admin,
+            permissions: vec!["admin:flush".to_string(), "role:manage".to_string()],
             exp: 1234567890,
             iat: 1234567800,
             iss: "test_issuer".to_string(),
