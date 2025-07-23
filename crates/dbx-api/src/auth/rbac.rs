@@ -818,7 +818,21 @@ impl RbacService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::permissions::Permission;
+    use crate::auth::permissions::{Permission, PermissionType};
+    use crate::models::{AuditEventType, AuditQueryParams, PermissionCheckContext};
+    use redis::{Client, Connection};
+    use std::sync::Arc;
+    use tokio::time::{sleep, Duration};
+
+    fn create_test_rbac_config() -> RbacConfig {
+        RbacConfig {
+            audit_enabled: true,
+            audit_retention_days: 30,
+            max_role_inheritance_depth: 3,
+            performance_cache_ttl_seconds: 60,
+            default_assignment_ttl_days: Some(90),
+        }
+    }
 
     #[tokio::test]
     async fn test_rbac_config_default() {
@@ -832,5 +846,54 @@ mod tests {
     fn test_rbac_error_display() {
         let error = RbacError::RoleNotFound("test".to_string());
         assert_eq!(error.to_string(), "Role not found: test");
+    }
+
+    #[test]
+    fn test_rbac_config_creation() {
+        let config = create_test_rbac_config();
+        assert!(config.audit_enabled);
+        assert_eq!(config.audit_retention_days, 30);
+        assert_eq!(config.max_role_inheritance_depth, 3);
+        assert_eq!(config.performance_cache_ttl_seconds, 60);
+        assert_eq!(config.default_assignment_ttl_days, Some(90));
+    }
+
+    #[test]
+    fn test_permission_context_creation() {
+        let context = PermissionCheckContext {
+            user_id: Some("test_user".to_string()),
+            username: Some("testuser".to_string()),
+            role: Some("admin".to_string()),
+            resource: "test_resource".to_string(),
+            action: "test_action".to_string(),
+            permission_required: "string:get".to_string(),
+            ip_address: Some("192.168.1.1".to_string()),
+            user_agent: Some("test-browser".to_string()),
+        };
+
+        assert_eq!(context.user_id, Some("test_user".to_string()));
+        assert_eq!(context.resource, "test_resource");
+        assert_eq!(context.action, "test_action");
+        assert_eq!(context.ip_address.unwrap(), "192.168.1.1");
+        assert_eq!(context.user_agent.unwrap(), "test-browser");
+    }
+
+    #[test]
+    fn test_audit_query_params_creation() {
+        let params = AuditQueryParams {
+            start_date: Some(chrono::Utc::now() - chrono::Duration::days(7)),
+            end_date: Some(chrono::Utc::now()),
+            user_id: Some("user123".to_string()),
+            event_type: Some(AuditEventType::Authorization),
+            resource: Some("test_resource".to_string()),
+            limit: Some(50),
+            offset: Some(0),
+        };
+
+        assert!(params.start_date.is_some());
+        assert!(params.end_date.is_some());
+        assert_eq!(params.user_id.unwrap(), "user123");
+        assert_eq!(params.limit.unwrap(), 50);
+        assert_eq!(params.offset.unwrap(), 0);
     }
 }
