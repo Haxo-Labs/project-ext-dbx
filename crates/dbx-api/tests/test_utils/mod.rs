@@ -1,6 +1,7 @@
 use anyhow::Result;
 use dbx_adapter::{redis::client::RedisPool, redis::factory::RedisBackendFactory};
 use dbx_api::{
+    auth::ApiKeyService,
     config::{AppConfig, JwtConfig},
     middleware::{JwtService, UserStore},
     models::{CreateUserRequest, UserRole},
@@ -192,10 +193,14 @@ impl TestServer {
             let _ = store.create_user_from_request(readonly_user_request).await;
         }
 
+        // Create API key service
+        let api_key_service = Arc::new(ApiKeyService::new(redis_pool));
+
         Ok(AppState {
             backend_router: Arc::new(backend_router),
             jwt_service,
             user_store,
+            api_key_service,
         })
     }
 
