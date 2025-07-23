@@ -411,6 +411,7 @@ mod tests {
         let claims = Claims {
             sub: "testuser".to_string(),
             username: "testuser".to_string(),
+            permissions: vec!["string:get".to_string(), "string:set".to_string()],
             exp: 0,
             iat: 0,
             iss: "test_issuer".to_string(),
@@ -431,6 +432,7 @@ mod tests {
         let claims = Claims {
             sub: "testuser".to_string(),
             username: "testuser".to_string(),
+            permissions: vec!["string:get".to_string(), "string:set".to_string()],
             exp: 0,
             iat: 0,
             iss: "test_issuer".to_string(),
