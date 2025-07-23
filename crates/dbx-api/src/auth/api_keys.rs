@@ -235,7 +235,7 @@ impl ApiKeyService {
         // Add to user's key set
         let user_keys = format!("api_keys:user:{}", api_key.owner_id);
         dbx_adapter::redis::primitives::set::RedisSet::new(conn_arc.clone())
-            .add(&user_keys, &api_key.id)
+            .sadd(&user_keys, &[&api_key.id])
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
 
         // Add to name index for duplicate checking
@@ -389,7 +389,7 @@ impl ApiKeyService {
         // Get user's API key IDs
         let user_keys = format!("api_keys:user:{}", owner_id);
         let key_ids = dbx_adapter::redis::primitives::set::RedisSet::new(conn_arc)
-            .members(&user_keys)
+            .smembers(&user_keys)
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
 
         // Fetch API keys
@@ -564,7 +564,7 @@ impl ApiKeyService {
 
         // Remove from user's key set
         set_redis
-            .remove(&user_keys, id)
+            .srem(&user_keys, &[id])
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
 
         Ok(true)
