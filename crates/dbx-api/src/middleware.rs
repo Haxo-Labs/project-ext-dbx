@@ -1,14 +1,16 @@
 use crate::{
+    auth::{ApiKeyError, ApiKeyService},
     config::JwtConfig,
     constants::errors::ErrorMessages,
     models::{
-        ApiResponse, AuthResponse, Claims, CreateUserRequest, TokenType, User, UserInfo, UserRole,
+        ApiKeyContext, ApiResponse, AuthResponse, Claims, CreateUserRequest, TokenType, User,
+        UserInfo, UserRole,
     },
 };
 use async_trait::async_trait;
 use axum::{
-    extract::{rejection::JsonRejection, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    extract::{rejection::JsonRejection, Query, Request, State},
+    http::{header, HeaderMap, StatusCode, Uri},
     middleware::Next,
     response::{IntoResponse, Json},
 };
@@ -17,6 +19,8 @@ use chrono::{Duration, Utc};
 use dbx_adapter::redis::client::RedisPool;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use redis;
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -303,6 +307,228 @@ pub async fn require_readonly_role(
     })?;
 
     Ok(next.run(request).await)
+}
+
+// API Key Authentication Middleware
+
+/// Query parameters for API key authentication
+#[derive(Debug, Deserialize)]
+struct ApiKeyQuery {
+    api_key: Option<String>,
+}
+
+/// Extract API key from request headers or query parameters
+fn extract_api_key_from_request(headers: &HeaderMap, uri: &Uri) -> Option<String> {
+    // First, try to get API key from X-API-Key header
+    if let Some(header_value) = headers.get("X-API-Key") {
+        if let Ok(key) = header_value.to_str() {
+            return Some(key.to_string());
+        }
+    }
+
+    // Then try Authorization header with "Bearer" prefix (alternative to JWT)
+    if let Some(header_value) = headers.get(header::AUTHORIZATION) {
+        if let Ok(auth_header) = header_value.to_str() {
+            if auth_header.starts_with("ApiKey ") {
+                return Some(auth_header[7..].to_string());
+            }
+        }
+    }
+
+    // Finally, try query parameter
+    if let Some(query) = uri.query() {
+        let params: HashMap<String, String> = serde_urlencoded::from_str(query).unwrap_or_default();
+        if let Some(api_key) = params.get("api_key") {
+            return Some(api_key.clone());
+        }
+    }
+
+    None
+}
+
+/// API key authentication middleware
+pub async fn api_key_auth_middleware(
+    State(api_key_service): State<Arc<ApiKeyService>>,
+    mut request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    let api_key =
+        extract_api_key_from_request(request.headers(), request.uri()).ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiResponse::<()>::error("Missing API key".to_string())),
+            )
+        })?;
+
+    let api_key_context = api_key_service
+        .validate_api_key(&api_key)
+        .await
+        .map_err(|e| {
+            let (status, message) = match e {
+                ApiKeyError::KeyNotFound => (StatusCode::UNAUTHORIZED, "Invalid API key"),
+                ApiKeyError::InvalidKeyFormat => {
+                    (StatusCode::BAD_REQUEST, "Invalid API key format")
+                }
+                ApiKeyError::KeyExpired => (StatusCode::UNAUTHORIZED, "API key has expired"),
+                ApiKeyError::KeyInactive => (StatusCode::UNAUTHORIZED, "API key is inactive"),
+                ApiKeyError::RateLimitExceeded => {
+                    (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded")
+                }
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "Authentication error"),
+            };
+
+            (status, Json(ApiResponse::<()>::error(message.to_string())))
+        })?;
+
+    // Add API key context to request extensions
+    request.extensions_mut().insert(api_key_context);
+
+    Ok(next.run(request).await)
+}
+
+/// Combined authentication middleware that supports both JWT and API key authentication
+pub async fn flexible_auth_middleware(
+    State((jwt_service, api_key_service)): State<(Arc<JwtService>, Arc<ApiKeyService>)>,
+    mut request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // First, try JWT authentication
+    if let Some(jwt_token) = extract_token_from_header(request.headers()) {
+        match jwt_service.validate_token(&jwt_token) {
+            Ok(claims) => {
+                if claims.token_type == TokenType::Access {
+                    request.extensions_mut().insert(claims);
+                    return Ok(next.run(request).await);
+                }
+            }
+            Err(_) => {} // Fall through to API key authentication
+        }
+    }
+
+    // If JWT fails or is not present, try API key authentication
+    if let Some(api_key) = extract_api_key_from_request(request.headers(), request.uri()) {
+        match api_key_service.validate_api_key(&api_key).await {
+            Ok(api_key_context) => {
+                // Convert API key context to JWT-like claims for compatibility
+                let claims = Claims {
+                    sub: format!("api_key:{}", api_key_context.api_key.id),
+                    username: format!("api_key:{}", api_key_context.api_key.name),
+                    role: api_key_context.user_role.clone(),
+                    exp: api_key_context
+                        .api_key
+                        .expires_at
+                        .map(|exp| exp.timestamp())
+                        .unwrap_or(0),
+                    iat: api_key_context.api_key.created_at.timestamp(),
+                    iss: "api_key".to_string(),
+                    token_type: TokenType::Access, // Treat API keys as access tokens
+                };
+
+                request.extensions_mut().insert(claims);
+                request.extensions_mut().insert(api_key_context);
+                return Ok(next.run(request).await);
+            }
+            Err(_) => {} // Continue to error response
+        }
+    }
+
+    // Neither JWT nor API key authentication succeeded
+    Err((
+        StatusCode::UNAUTHORIZED,
+        Json(ApiResponse::<()>::error(
+            "Authentication required. Provide either a valid JWT token or API key.".to_string(),
+        )),
+    ))
+}
+
+/// Role checking middleware that works with both JWT and API key authentication
+pub async fn require_admin_role_flexible(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check if we have JWT claims
+    if let Some(claims) = request.extensions().get::<Claims>() {
+        if claims.role != UserRole::Admin {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<()>::error("Admin role required".to_string())),
+            ));
+        }
+        return Ok(next.run(request).await);
+    }
+
+    // Check if we have API key context
+    if let Some(api_key_context) = request.extensions().get::<ApiKeyContext>() {
+        if api_key_context.user_role != UserRole::Admin {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<()>::error("Admin role required".to_string())),
+            ));
+        }
+        return Ok(next.run(request).await);
+    }
+
+    Err((
+        StatusCode::UNAUTHORIZED,
+        Json(ApiResponse::<()>::error(
+            "Authentication required".to_string(),
+        )),
+    ))
+}
+
+/// User role checking middleware that works with both JWT and API key authentication
+pub async fn require_user_role_flexible(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check if we have JWT claims
+    if let Some(claims) = request.extensions().get::<Claims>() {
+        if !matches!(claims.role, UserRole::Admin | UserRole::User) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<()>::error("User role required".to_string())),
+            ));
+        }
+        return Ok(next.run(request).await);
+    }
+
+    // Check if we have API key context
+    if let Some(api_key_context) = request.extensions().get::<ApiKeyContext>() {
+        if !matches!(api_key_context.user_role, UserRole::Admin | UserRole::User) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<()>::error("User role required".to_string())),
+            ));
+        }
+        return Ok(next.run(request).await);
+    }
+
+    Err((
+        StatusCode::UNAUTHORIZED,
+        Json(ApiResponse::<()>::error(
+            "Authentication required".to_string(),
+        )),
+    ))
+}
+
+/// ReadOnly role checking middleware that works with both JWT and API key authentication
+pub async fn require_readonly_role_flexible(
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check if we have JWT claims or API key context (any authenticated user can access)
+    if request.extensions().get::<Claims>().is_some()
+        || request.extensions().get::<ApiKeyContext>().is_some()
+    {
+        return Ok(next.run(request).await);
+    }
+
+    Err((
+        StatusCode::UNAUTHORIZED,
+        Json(ApiResponse::<()>::error(
+            "Authentication required".to_string(),
+        )),
+    ))
 }
 
 #[async_trait]

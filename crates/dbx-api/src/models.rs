@@ -121,6 +121,167 @@ pub struct TokenValidationResponse {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+// API Key Authentication Models
+
+/// API Key permission levels
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApiKeyPermission {
+    ReadOnly,
+    ReadWrite,
+    Admin,
+}
+
+impl std::fmt::Display for ApiKeyPermission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiKeyPermission::ReadOnly => write!(f, "readonly"),
+            ApiKeyPermission::ReadWrite => write!(f, "readwrite"),
+            ApiKeyPermission::Admin => write!(f, "admin"),
+        }
+    }
+}
+
+impl From<ApiKeyPermission> for UserRole {
+    fn from(permission: ApiKeyPermission) -> Self {
+        match permission {
+            ApiKeyPermission::ReadOnly => UserRole::ReadOnly,
+            ApiKeyPermission::ReadWrite => UserRole::User,
+            ApiKeyPermission::Admin => UserRole::Admin,
+        }
+    }
+}
+
+/// API Key usage statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyUsageStats {
+    pub total_requests: u64,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub requests_today: u64,
+    pub requests_this_hour: u64,
+}
+
+impl Default for ApiKeyUsageStats {
+    fn default() -> Self {
+        Self {
+            total_requests: 0,
+            last_used_at: None,
+            requests_today: 0,
+            requests_this_hour: 0,
+        }
+    }
+}
+
+/// API Key model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKey {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub key_prefix: String,
+    pub key_hash: String,
+    pub permission: ApiKeyPermission,
+    pub owner_id: String,
+    pub owner_username: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+    pub usage_stats: ApiKeyUsageStats,
+    pub rate_limit_requests: Option<u32>,
+    pub rate_limit_window_seconds: Option<u32>,
+}
+
+/// Create API Key request
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateApiKeyRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub permission: ApiKeyPermission,
+    pub expires_in_days: Option<u32>,
+    pub rate_limit_requests: Option<u32>,
+    pub rate_limit_window_seconds: Option<u32>,
+}
+
+/// API Key response (includes the plaintext key only on creation)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiKeyResponse {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub key_prefix: String,
+    pub permission: ApiKeyPermission,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+    pub usage_stats: ApiKeyUsageStats,
+    pub rate_limit_requests: Option<u32>,
+    pub rate_limit_window_seconds: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>, // Only included on creation
+}
+
+impl From<&ApiKey> for ApiKeyResponse {
+    fn from(api_key: &ApiKey) -> Self {
+        Self {
+            id: api_key.id.clone(),
+            name: api_key.name.clone(),
+            description: api_key.description.clone(),
+            key_prefix: api_key.key_prefix.clone(),
+            permission: api_key.permission.clone(),
+            created_at: api_key.created_at,
+            expires_at: api_key.expires_at,
+            is_active: api_key.is_active,
+            usage_stats: api_key.usage_stats.clone(),
+            rate_limit_requests: api_key.rate_limit_requests,
+            rate_limit_window_seconds: api_key.rate_limit_window_seconds,
+            key: None,
+        }
+    }
+}
+
+/// Update API Key request
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateApiKeyRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub is_active: Option<bool>,
+    pub rate_limit_requests: Option<u32>,
+    pub rate_limit_window_seconds: Option<u32>,
+}
+
+/// API Key rotation response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiKeyRotationResponse {
+    pub id: String,
+    pub new_key: String,
+    pub key_prefix: String,
+    pub rotated_at: DateTime<Utc>,
+}
+
+/// List API Keys request
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListApiKeysRequest {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub active_only: Option<bool>,
+}
+
+/// List API Keys response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListApiKeysResponse {
+    pub keys: Vec<ApiKeyResponse>,
+    pub total: u32,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// API Key validation context
+#[derive(Debug, Clone)]
+pub struct ApiKeyContext {
+    pub api_key: ApiKey,
+    pub user_role: UserRole,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

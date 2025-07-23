@@ -11,12 +11,15 @@ use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
+    auth::ApiKeyService,
     config::{AppConfig, ConfigError},
     middleware::{
-        jwt_auth_middleware, require_admin_role, require_user_role, JwtService, UserStore,
+        flexible_auth_middleware, jwt_auth_middleware, require_admin_role,
+        require_admin_role_flexible, require_user_role, require_user_role_flexible, JwtService,
+        UserStore,
     },
     models::ApiResponse,
-    routes::auth::create_auth_routes,
+    routes::{api_keys::create_api_key_routes, auth::create_auth_routes},
 };
 use dbx_adapter::redis::factory::RedisBackendFactory;
 use dbx_config::{BackendConfig, DbxConfig, LoadBalancingConfig, RoutingConfig};
@@ -30,6 +33,7 @@ pub struct AppState {
     pub backend_router: Arc<BackendRouter>,
     pub jwt_service: Arc<JwtService>,
     pub user_store: Arc<UserStore>,
+    pub api_key_service: Arc<ApiKeyService>,
 }
 
 impl AppState {
@@ -77,17 +81,19 @@ impl AppState {
             )?,
         );
 
-        // Create JWT service and user store
+        // Create JWT service, user store, and API key service
         let jwt_config = app_config.jwt.clone();
         let jwt_service = Arc::new(JwtService::new(jwt_config));
-        let user_store = Arc::new(UserStore::new(redis_pool).await.map_err(|e| {
+        let user_store = Arc::new(UserStore::new(redis_pool.clone()).await.map_err(|e| {
             ServerError::UserStoreInitialization(format!("Failed to initialize user store: {}", e))
         })?);
+        let api_key_service = Arc::new(ApiKeyService::new(redis_pool));
 
         Ok(Self {
             backend_router: Arc::new(backend_router),
             jwt_service,
             user_store,
+            api_key_service,
         })
     }
 
@@ -156,45 +162,51 @@ pub fn create_app(state: AppState) -> Router {
     // Import route modules
     use crate::routes::{data, health, query, stream};
 
-    // Create data routes
+    // Create API key management routes (requires JWT authentication for creating/managing keys)
+    let api_key_routes = create_api_key_routes(state.api_key_service.clone()).layer(
+        from_fn_with_state(state.jwt_service.clone(), jwt_auth_middleware),
+    );
+
+    // Create data routes (supports both JWT and API key authentication)
     let data_routes = data::create_data_routes()
         .with_state(state.backend_router.clone())
-        .layer(from_fn_with_state((), require_user_role))
+        .layer(from_fn_with_state((), require_user_role_flexible))
         .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
+            (state.jwt_service.clone(), state.api_key_service.clone()),
+            flexible_auth_middleware,
         ));
 
-    // Create query routes
+    // Create query routes (supports both JWT and API key authentication)
     let query_routes = query::create_query_routes()
         .with_state(state.backend_router.clone())
-        .layer(from_fn_with_state((), require_user_role))
+        .layer(from_fn_with_state((), require_user_role_flexible))
         .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
+            (state.jwt_service.clone(), state.api_key_service.clone()),
+            flexible_auth_middleware,
         ));
 
-    // Create stream routes
+    // Create stream routes (supports both JWT and API key authentication)
     let stream_routes = stream::create_stream_routes()
         .with_state(state.backend_router.clone())
-        .layer(from_fn_with_state((), require_user_role))
+        .layer(from_fn_with_state((), require_user_role_flexible))
         .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
+            (state.jwt_service.clone(), state.api_key_service.clone()),
+            flexible_auth_middleware,
         ));
 
-    // Create health routes (admin only)
+    // Create health routes (admin only, supports both JWT and API key authentication)
     let health_routes = health::create_health_routes()
         .with_state(state.backend_router.clone())
-        .layer(from_fn_with_state((), require_admin_role))
+        .layer(from_fn_with_state((), require_admin_role_flexible))
         .layer(from_fn_with_state(
-            state.jwt_service.clone(),
-            jwt_auth_middleware,
+            (state.jwt_service.clone(), state.api_key_service.clone()),
+            flexible_auth_middleware,
         ));
 
     Router::new()
         .route("/health", get(health_check))
         .nest("/auth", auth_routes)
+        .nest("/api/v1/api-keys", api_key_routes)
         .nest("/api/v1/data", data_routes)
         .nest("/api/v1/query", query_routes)
         .nest("/api/v1/stream", stream_routes)
