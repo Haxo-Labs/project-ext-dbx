@@ -979,7 +979,7 @@ pub async fn rbac_auth_middleware(
             .into_iter()
             .filter(|a| a.is_active)
             .map(|a| a.role_name)
-            .collect();
+            .collect::<Vec<_>>();
 
         (claims.sub.clone(), claims.username.clone(), user_roles)
     } else if let Some(api_key_context) = request.extensions().get::<ApiKeyContext>() {
