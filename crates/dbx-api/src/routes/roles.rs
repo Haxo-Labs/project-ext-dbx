@@ -38,7 +38,8 @@ pub fn create_role_routes(rbac_service: Arc<RbacService>) -> Router {
 pub async fn list_roles(
     State(rbac_service): State<Arc<RbacService>>,
 ) -> Result<Json<ApiResponse<Vec<RoleResponse>>>, (StatusCode, Json<ApiResponse<()>>)> {
-    let role_registry = rbac_service.role_registry.read().unwrap();
+    let role_registry_arc = rbac_service.get_role_registry();
+    let role_registry = role_registry_arc.read().unwrap();
     let roles = role_registry.list_roles();
 
     let role_responses: Vec<RoleResponse> = roles
@@ -74,7 +75,8 @@ pub async fn get_role(
     State(rbac_service): State<Arc<RbacService>>,
     Path(role_name): Path<String>,
 ) -> Result<Json<ApiResponse<RoleResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
-    let role_registry = rbac_service.role_registry.read().unwrap();
+    let role_registry_arc = rbac_service.get_role_registry();
+    let role_registry = role_registry_arc.read().unwrap();
 
     match role_registry.get_role(&role_name) {
         Some(role) => {
@@ -160,7 +162,8 @@ pub async fn create_role(
         .await
     {
         Ok(role) => {
-            let role_registry = rbac_service.role_registry.read().unwrap();
+            let role_registry_arc = rbac_service.get_role_registry();
+            let role_registry = role_registry_arc.read().unwrap();
             let effective_permissions = role.effective_permissions(&role_registry);
             let role_response = RoleResponse {
                 name: role.name.clone(),
@@ -207,7 +210,8 @@ pub async fn update_role(
 ) -> Result<Json<ApiResponse<RoleResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     // Check if role exists and is not a system role
     {
-        let role_registry = rbac_service.role_registry.read().unwrap();
+        let role_registry_arc = rbac_service.get_role_registry();
+        let role_registry = role_registry_arc.read().unwrap();
         match role_registry.get_role(&role_name) {
             Some(role) if role.is_system => {
                 return Err((
@@ -242,7 +246,8 @@ pub async fn update_role(
         .await
     {
         Ok(role) => {
-            let role_registry = rbac_service.role_registry.read().unwrap();
+            let role_registry_arc = rbac_service.get_role_registry();
+            let role_registry = role_registry_arc.read().unwrap();
             let effective_permissions = role.effective_permissions(&role_registry);
             let role_response = RoleResponse {
                 name: role.name.clone(),
@@ -335,7 +340,8 @@ pub async fn get_role_permissions(
     State(rbac_service): State<Arc<RbacService>>,
     Path(role_name): Path<String>,
 ) -> Result<Json<ApiResponse<Vec<String>>>, (StatusCode, Json<ApiResponse<()>>)> {
-    let role_registry = rbac_service.role_registry.read().unwrap();
+    let role_registry_arc = rbac_service.get_role_registry();
+    let role_registry = role_registry_arc.read().unwrap();
 
     match role_registry.get_effective_permissions(&role_name) {
         Some(permissions) => {
