@@ -20,9 +20,12 @@ dbx-config = { path = "../dbx-config" }
 dbx-router = { path = "../dbx-router" }
 futures = { workspace = true }
 jsonwebtoken = "9.3.0"
+rand = "0.8"
 redis = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_urlencoded = "0.7"
+sha2 = "0.10"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
