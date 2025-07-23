@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// API response wrapper
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,6 +64,7 @@ pub struct Claims {
     pub sub: String,
     pub username: String,
     pub role: UserRole,
+    pub permissions: Vec<String>, // Permission names for RBAC
     pub exp: i64,
     pub iat: i64,
     pub iss: String,
@@ -280,6 +282,161 @@ pub struct ListApiKeysResponse {
 pub struct ApiKeyContext {
     pub api_key: ApiKey,
     pub user_role: UserRole,
+}
+
+// RBAC (Role-Based Access Control) Models
+
+/// User role assignment
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserRoleAssignment {
+    pub user_id: String,
+    pub username: String,
+    pub role_name: String,
+    pub assigned_by: String,
+    pub assigned_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Role assignment request
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AssignRoleRequest {
+    pub user_id: String,
+    pub role_name: String,
+    pub expires_in_days: Option<u32>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Role revocation request
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RevokeRoleRequest {
+    pub user_id: String,
+    pub role_name: String,
+    pub reason: Option<String>,
+}
+
+/// Create custom role request
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRoleRequest {
+    pub name: String,
+    pub description: String,
+    pub permissions: Vec<String>,
+    pub inherits_from: Option<Vec<String>>,
+}
+
+/// Update role request
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateRoleRequest {
+    pub description: Option<String>,
+    pub permissions: Option<Vec<String>>,
+    pub inherits_from: Option<Vec<String>>,
+}
+
+/// Role response for API
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RoleResponse {
+    pub name: String,
+    pub description: String,
+    pub permissions: Vec<String>,
+    pub inherits_from: Vec<String>,
+    pub is_default: bool,
+    pub is_system: bool,
+    pub effective_permissions: Vec<String>,
+}
+
+/// User permissions response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UserPermissionsResponse {
+    pub user_id: String,
+    pub username: String,
+    pub roles: Vec<String>,
+    pub effective_permissions: Vec<String>,
+    pub role_assignments: Vec<UserRoleAssignment>,
+}
+
+/// Audit log entry for authorization events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditLogEntry {
+    pub id: String,
+    pub timestamp: DateTime<Utc>,
+    pub event_type: AuditEventType,
+    pub user_id: Option<String>,
+    pub username: Option<String>,
+    pub resource: String,
+    pub action: String,
+    pub permission_required: Option<String>,
+    pub permission_granted: bool,
+    pub role: Option<String>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Audit event types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AuditEventType {
+    Authorization,
+    Authentication,
+    RoleAssignment,
+    RoleRevocation,
+    RoleCreation,
+    RoleUpdate,
+    RoleDeletion,
+    PermissionCheck,
+    AccessDenied,
+    AccessGranted,
+}
+
+impl std::fmt::Display for AuditEventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuditEventType::Authorization => write!(f, "authorization"),
+            AuditEventType::Authentication => write!(f, "authentication"),
+            AuditEventType::RoleAssignment => write!(f, "role_assignment"),
+            AuditEventType::RoleRevocation => write!(f, "role_revocation"),
+            AuditEventType::RoleCreation => write!(f, "role_creation"),
+            AuditEventType::RoleUpdate => write!(f, "role_update"),
+            AuditEventType::RoleDeletion => write!(f, "role_deletion"),
+            AuditEventType::PermissionCheck => write!(f, "permission_check"),
+            AuditEventType::AccessDenied => write!(f, "access_denied"),
+            AuditEventType::AccessGranted => write!(f, "access_granted"),
+        }
+    }
+}
+
+/// Audit query parameters
+#[derive(Debug, Deserialize)]
+pub struct AuditQueryParams {
+    pub start_date: Option<DateTime<Utc>>,
+    pub end_date: Option<DateTime<Utc>>,
+    pub user_id: Option<String>,
+    pub event_type: Option<AuditEventType>,
+    pub resource: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+/// Permission check context for audit logging
+#[derive(Debug, Clone)]
+pub struct PermissionCheckContext {
+    pub user_id: Option<String>,
+    pub username: Option<String>,
+    pub role: Option<String>,
+    pub resource: String,
+    pub action: String,
+    pub permission_required: String,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+/// RBAC context that contains authenticated user information and RBAC service
+#[derive(Debug, Clone)]
+pub struct RbacContext {
+    pub user_id: String,
+    pub username: String,
+    pub roles: Vec<String>,
+    pub rbac_service: Arc<crate::auth::RbacService>,
 }
 
 #[cfg(test)]
