@@ -439,6 +439,28 @@ pub struct RbacContext {
     pub rbac_service: Arc<crate::auth::RbacService>,
 }
 
+use axum::{
+    async_trait,
+    extract::FromRequestParts,
+    http::{request::Parts, StatusCode},
+};
+
+#[async_trait]
+impl<S> FromRequestParts<S> for RbacContext
+where
+    S: Send + Sync,
+{
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<RbacContext>()
+            .cloned()
+            .ok_or(StatusCode::UNAUTHORIZED)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
