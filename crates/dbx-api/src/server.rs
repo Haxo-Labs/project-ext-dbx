@@ -92,9 +92,8 @@ impl AppState {
         })?);
         let api_key_service = Arc::new(ApiKeyService::new(redis_pool.clone()));
 
-        // Initialize RBAC service with default configuration
-        let rbac_config = RbacConfig::default();
-        let rbac_service = Arc::new(RbacService::new(redis_pool, rbac_config));
+        // Initialize RBAC service with configuration from environment
+        let rbac_service = Arc::new(RbacService::new(redis_pool, app_config.rbac));
 
         Ok(Self {
             backend_router: Arc::new(backend_router),

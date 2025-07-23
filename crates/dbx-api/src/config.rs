@@ -169,8 +169,7 @@ impl AppConfig {
 
         let rbac_default_assignment_ttl_days = env::var("RBAC_DEFAULT_ASSIGNMENT_TTL_DAYS")
             .ok()
-            .map(|s| s.parse().unwrap_or(None))
-            .flatten();
+            .and_then(|s| s.parse().ok());
 
         let rbac_config = RbacConfig {
             audit_enabled: rbac_audit_enabled,
