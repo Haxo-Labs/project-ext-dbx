@@ -4,4 +4,5 @@ pub mod common;
 pub mod data;
 pub mod health;
 pub mod query;
+pub mod roles;
 pub mod stream;
