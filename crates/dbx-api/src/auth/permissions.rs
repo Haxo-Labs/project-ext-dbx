@@ -1045,39 +1045,91 @@ mod tests {
     }
 
     #[test]
-    fn test_circular_inheritance_prevention() {
+    fn test_role_inheritance_chain() {
         let mut registry = RoleRegistry::new();
 
-        // Try to create circular inheritance: A -> B -> A
-        let role_a = Role::new(
-            "role_a".to_string(),
-            "Role A".to_string(),
+        // Create inheritance chain: base -> intermediate -> advanced
+        let base_role = Role::new(
+            "base".to_string(),
+            "Base role".to_string(),
             Permission::single(PermissionType::StringGet),
-        )
-        .inherit_from("role_b".to_string());
-
-        let role_b = Role::new(
-            "role_b".to_string(),
-            "Role B".to_string(),
-            Permission::single(PermissionType::StringSet),
-        )
-        .inherit_from("role_a".to_string());
-
-        registry.register_role(role_a);
-        registry.register_role(role_b);
-
-        // The system should handle this gracefully (implementation dependent)
-        // At minimum, it shouldn't crash and should return some permissions
-        // Note: We limit this test to avoid infinite recursion
-        // In a real implementation, this should have cycle detection
-        let roles_exist = registry.has_role("role_a") && registry.has_role("role_b");
-        assert!(
-            roles_exist,
-            "Both roles should be registered even with circular inheritance"
         );
 
-        // For this test, we just verify the roles exist without checking effective permissions
-        // as that could cause infinite recursion in a naive implementation
+        let intermediate_role = Role::new(
+            "intermediate".to_string(),
+            "Intermediate role".to_string(),
+            Permission::single(PermissionType::StringSet),
+        )
+        .inherit_from("base".to_string());
+
+        let advanced_role = Role::new(
+            "advanced".to_string(),
+            "Advanced role".to_string(),
+            Permission::single(PermissionType::HashGet),
+        )
+        .inherit_from("intermediate".to_string());
+
+        registry.register_role(base_role);
+        registry.register_role(intermediate_role);
+        registry.register_role(advanced_role);
+
+        // Test inheritance chain
+        let advanced = registry.get_role("advanced").unwrap();
+        let effective_perms = advanced.effective_permissions(&registry);
+
+        // Advanced should have all permissions through inheritance chain
+        assert!(effective_perms.contains_type(&PermissionType::HashGet)); // Own
+        assert!(effective_perms.contains_type(&PermissionType::StringSet)); // From intermediate
+        assert!(effective_perms.contains_type(&PermissionType::StringGet)); // From base
+
+        // Test intermediate role doesn't inherit "up" the chain
+        let intermediate = registry.get_role("intermediate").unwrap();
+        let intermediate_perms = intermediate.effective_permissions(&registry);
+        assert!(intermediate_perms.contains_type(&PermissionType::StringSet)); // Own
+        assert!(intermediate_perms.contains_type(&PermissionType::StringGet)); // From base
+        assert!(!intermediate_perms.contains_type(&PermissionType::HashGet)); // Not from advanced
+    }
+
+    #[test]
+    fn test_multiple_inheritance() {
+        let mut registry = RoleRegistry::new();
+
+        // Create multiple parent roles
+        let read_role = Role::new(
+            "read_role".to_string(),
+            "Read permissions".to_string(),
+            Permission::from_types(vec![PermissionType::StringGet, PermissionType::HashGet]),
+        );
+
+        let write_role = Role::new(
+            "write_role".to_string(),
+            "Write permissions".to_string(),
+            Permission::from_types(vec![PermissionType::StringSet, PermissionType::HashSet]),
+        );
+
+        // Create child role that inherits from both
+        let readwrite_role = Role::new(
+            "readwrite_role".to_string(),
+            "Read-write permissions".to_string(),
+            Permission::single(PermissionType::SetAdd),
+        )
+        .inherit_from("read_role".to_string())
+        .inherit_from("write_role".to_string());
+
+        registry.register_role(read_role);
+        registry.register_role(write_role);
+        registry.register_role(readwrite_role);
+
+        // Test multiple inheritance
+        let readwrite = registry.get_role("readwrite_role").unwrap();
+        let effective_perms = readwrite.effective_permissions(&registry);
+
+        // Should have permissions from both parents plus its own
+        assert!(effective_perms.contains_type(&PermissionType::SetAdd)); // Own
+        assert!(effective_perms.contains_type(&PermissionType::StringGet)); // From read_role
+        assert!(effective_perms.contains_type(&PermissionType::HashGet)); // From read_role
+        assert!(effective_perms.contains_type(&PermissionType::StringSet)); // From write_role
+        assert!(effective_perms.contains_type(&PermissionType::HashSet)); // From write_role
     }
 
     #[test]

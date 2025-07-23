@@ -896,4 +896,277 @@ mod tests {
         assert_eq!(params.limit.unwrap(), 50);
         assert_eq!(params.offset.unwrap(), 0);
     }
+
+    #[test]
+    fn test_validate_inheritance_chain_simple_cycle() {
+        let redis_pool = Arc::new(
+            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
+        );
+        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+
+        // Set up roles in registry: A -> B
+        {
+            let mut registry = rbac.role_registry.write().unwrap();
+
+            let role_a = Role::new(
+                "role_a".to_string(),
+                "Role A".to_string(),
+                Permission::single(PermissionType::StringGet),
+            );
+
+            let role_b = Role::new(
+                "role_b".to_string(),
+                "Role B".to_string(),
+                Permission::single(PermissionType::StringSet),
+            )
+            .inherit_from("role_a".to_string());
+
+            registry.register_role(role_a);
+            registry.register_role(role_b);
+        }
+
+        // Test: Try to make A inherit from B (creates cycle A -> B -> A)
+        let result = rbac.validate_inheritance_chain("role_a", &["role_b".to_string()]);
+
+        assert!(
+            matches!(result, Err(RbacError::InheritanceCycle)),
+            "Expected InheritanceCycle error for A -> B -> A cycle, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_inheritance_chain_self_cycle() {
+        let redis_pool = Arc::new(
+            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
+        );
+        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+
+        // Test self-inheritance: A -> A
+        let result = rbac.validate_inheritance_chain("role_a", &["role_a".to_string()]);
+
+        assert!(
+            matches!(result, Err(RbacError::InheritanceCycle)),
+            "Expected InheritanceCycle error for self-inheritance, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_inheritance_chain_deep_cycle() {
+        let redis_pool = Arc::new(
+            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
+        );
+        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+
+        // Set up deep chain: A -> B -> C -> D
+        {
+            let mut registry = rbac.role_registry.write().unwrap();
+
+            let role_a = Role::new(
+                "role_a".to_string(),
+                "Role A".to_string(),
+                Permission::single(PermissionType::StringGet),
+            );
+
+            let role_b = Role::new(
+                "role_b".to_string(),
+                "Role B".to_string(),
+                Permission::single(PermissionType::StringSet),
+            )
+            .inherit_from("role_a".to_string());
+
+            let role_c = Role::new(
+                "role_c".to_string(),
+                "Role C".to_string(),
+                Permission::single(PermissionType::HashGet),
+            )
+            .inherit_from("role_b".to_string());
+
+            let role_d = Role::new(
+                "role_d".to_string(),
+                "Role D".to_string(),
+                Permission::single(PermissionType::HashSet),
+            )
+            .inherit_from("role_c".to_string());
+
+            registry.register_role(role_a);
+            registry.register_role(role_b);
+            registry.register_role(role_c);
+            registry.register_role(role_d);
+        }
+
+        // Test: Try to make A inherit from D (creates cycle A -> B -> C -> D -> A)
+        let result = rbac.validate_inheritance_chain("role_a", &["role_d".to_string()]);
+
+        assert!(
+            matches!(result, Err(RbacError::InheritanceCycle)),
+            "Expected InheritanceCycle error for deep cycle, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_inheritance_chain_depth_limit() {
+        let redis_pool = Arc::new(
+            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
+        );
+        let mut config = create_test_rbac_config();
+        config.max_role_inheritance_depth = 2; // Set low depth limit
+        let rbac = RbacService::new(redis_pool, config);
+
+        // Set up chain that exceeds depth: A -> B -> C
+        {
+            let mut registry = rbac.role_registry.write().unwrap();
+
+            let role_a = Role::new(
+                "role_a".to_string(),
+                "Role A".to_string(),
+                Permission::single(PermissionType::StringGet),
+            );
+
+            let role_b = Role::new(
+                "role_b".to_string(),
+                "Role B".to_string(),
+                Permission::single(PermissionType::StringSet),
+            )
+            .inherit_from("role_a".to_string());
+
+            let role_c = Role::new(
+                "role_c".to_string(),
+                "Role C".to_string(),
+                Permission::single(PermissionType::HashGet),
+            )
+            .inherit_from("role_b".to_string());
+
+            registry.register_role(role_a);
+            registry.register_role(role_b);
+            registry.register_role(role_c);
+        }
+
+        // Test: Try to make D inherit from C (would exceed depth limit of 2)
+        let result = rbac.validate_inheritance_chain("role_d", &["role_c".to_string()]);
+
+        assert!(
+            matches!(result, Err(RbacError::InheritanceCycle)),
+            "Expected InheritanceCycle error for depth limit violation, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_inheritance_chain_multiple_parents() {
+        let redis_pool = Arc::new(
+            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
+        );
+        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+
+        // Set up: A -> B, A -> C, C -> D
+        {
+            let mut registry = rbac.role_registry.write().unwrap();
+
+            let role_a = Role::new(
+                "role_a".to_string(),
+                "Role A".to_string(),
+                Permission::single(PermissionType::StringGet),
+            );
+
+            let role_b = Role::new(
+                "role_b".to_string(),
+                "Role B".to_string(),
+                Permission::single(PermissionType::StringSet),
+            )
+            .inherit_from("role_a".to_string());
+
+            let role_c = Role::new(
+                "role_c".to_string(),
+                "Role C".to_string(),
+                Permission::single(PermissionType::HashGet),
+            )
+            .inherit_from("role_a".to_string());
+
+            let role_d = Role::new(
+                "role_d".to_string(),
+                "Role D".to_string(),
+                Permission::single(PermissionType::HashSet),
+            )
+            .inherit_from("role_c".to_string());
+
+            registry.register_role(role_a);
+            registry.register_role(role_b);
+            registry.register_role(role_c);
+            registry.register_role(role_d);
+        }
+
+        // Test: Try to make A inherit from both B and D (B creates cycle, D is valid)
+        let result = rbac
+            .validate_inheritance_chain("role_a", &["role_b".to_string(), "role_d".to_string()]);
+
+        assert!(
+            matches!(result, Err(RbacError::InheritanceCycle)),
+            "Expected InheritanceCycle error due to B creating cycle, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_inheritance_chain_valid_cases() {
+        let redis_pool = Arc::new(
+            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
+        );
+        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+
+        // Set up valid chain: A -> B -> C
+        {
+            let mut registry = rbac.role_registry.write().unwrap();
+
+            let role_a = Role::new(
+                "role_a".to_string(),
+                "Role A".to_string(),
+                Permission::single(PermissionType::StringGet),
+            );
+
+            let role_b = Role::new(
+                "role_b".to_string(),
+                "Role B".to_string(),
+                Permission::single(PermissionType::StringSet),
+            )
+            .inherit_from("role_a".to_string());
+
+            let role_c = Role::new(
+                "role_c".to_string(),
+                "Role C".to_string(),
+                Permission::single(PermissionType::HashGet),
+            )
+            .inherit_from("role_b".to_string());
+
+            registry.register_role(role_a);
+            registry.register_role(role_b);
+            registry.register_role(role_c);
+        }
+
+        // Test: Valid inheritance - D inheriting from A (no cycle)
+        let result = rbac.validate_inheritance_chain("role_d", &["role_a".to_string()]);
+        assert!(
+            result.is_ok(),
+            "Expected valid inheritance to succeed, got: {:?}",
+            result
+        );
+
+        // Test: Valid inheritance - E inheriting from B (no cycle)
+        let result = rbac.validate_inheritance_chain("role_e", &["role_b".to_string()]);
+        assert!(
+            result.is_ok(),
+            "Expected valid inheritance to succeed, got: {:?}",
+            result
+        );
+
+        // Test: Valid inheritance - F inheriting from non-existent role (should be ok for validation)
+        let result = rbac.validate_inheritance_chain("role_f", &["nonexistent".to_string()]);
+        assert!(
+            result.is_ok(),
+            "Expected inheritance from non-existent role to be valid for validation, got: {:?}",
+            result
+        );
+    }
 }
