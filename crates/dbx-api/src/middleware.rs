@@ -380,13 +380,13 @@ pub async fn api_key_auth_middleware(
             (status, Json(ApiResponse::<()>::error(message.to_string())))
         })?;
 
-    // Add API key context to request extensions
+    // Store API key context in request extensions
     request.extensions_mut().insert(api_key_context);
 
     Ok(next.run(request).await)
 }
 
-/// Combined authentication middleware that supports both JWT and API key authentication
+/// Flexible authentication middleware that accepts JWT tokens or API keys
 pub async fn flexible_auth_middleware(
     State((jwt_service, api_key_service)): State<(Arc<JwtService>, Arc<ApiKeyService>)>,
     mut request: Request,
@@ -441,7 +441,7 @@ pub async fn flexible_auth_middleware(
     ))
 }
 
-/// Role checking middleware that works with both JWT and API key authentication
+/// Role checking middleware for flexible authentication contexts
 pub async fn require_admin_role_flexible(
     request: Request,
     next: Next,
@@ -476,7 +476,7 @@ pub async fn require_admin_role_flexible(
     ))
 }
 
-/// User role checking middleware that works with both JWT and API key authentication
+/// User role checking middleware for flexible authentication contexts
 pub async fn require_user_role_flexible(
     request: Request,
     next: Next,
@@ -511,7 +511,7 @@ pub async fn require_user_role_flexible(
     ))
 }
 
-/// ReadOnly role checking middleware that works with both JWT and API key authentication
+/// ReadOnly role checking middleware for flexible authentication contexts
 pub async fn require_readonly_role_flexible(
     request: Request,
     next: Next,

@@ -162,12 +162,12 @@ pub fn create_app(state: AppState) -> Router {
     // Import route modules
     use crate::routes::{data, health, query, stream};
 
-    // Create API key management routes (requires JWT authentication for creating/managing keys)
+    // Create API key management routes (requires JWT authentication for key management)
     let api_key_routes = create_api_key_routes(state.api_key_service.clone()).layer(
         from_fn_with_state(state.jwt_service.clone(), jwt_auth_middleware),
     );
 
-    // Create data routes (supports both JWT and API key authentication)
+    // Create data routes with flexible authentication
     let data_routes = data::create_data_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state((), require_user_role_flexible))
@@ -176,7 +176,7 @@ pub fn create_app(state: AppState) -> Router {
             flexible_auth_middleware,
         ));
 
-    // Create query routes (supports both JWT and API key authentication)
+    // Create query routes with flexible authentication
     let query_routes = query::create_query_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state((), require_user_role_flexible))
@@ -185,7 +185,7 @@ pub fn create_app(state: AppState) -> Router {
             flexible_auth_middleware,
         ));
 
-    // Create stream routes (supports both JWT and API key authentication)
+    // Create stream routes with flexible authentication
     let stream_routes = stream::create_stream_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state((), require_user_role_flexible))
@@ -194,7 +194,7 @@ pub fn create_app(state: AppState) -> Router {
             flexible_auth_middleware,
         ));
 
-    // Create health routes (admin only, supports both JWT and API key authentication)
+    // Create health routes (admin only) with flexible authentication
     let health_routes = health::create_health_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state((), require_admin_role_flexible))
