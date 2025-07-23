@@ -562,7 +562,7 @@ impl RbacService {
             max_depth: u8,
         ) -> bool {
             if depth > max_depth {
-                return true; // Prevent infinite recursion
+                return true; // Prevent infinite recursion or depth limit exceeded
             }
 
             if current == target {
@@ -587,6 +587,38 @@ impl RbacService {
             false
         }
 
+        // Function to calculate the maximum depth of inheritance from a role
+        fn calculate_max_depth(
+            registry: &RoleRegistry,
+            role_name: &str,
+            visited: &mut std::collections::HashSet<String>,
+            max_depth: u8,
+        ) -> u8 {
+            if visited.contains(role_name) {
+                return 0; // Avoid cycles
+            }
+
+            if let Some(role) = registry.get_role(role_name) {
+                if role.inherits_from.is_empty() {
+                    return 0; // Leaf role
+                }
+
+                visited.insert(role_name.to_string());
+                let mut max_child_depth = 0;
+
+                for parent in &role.inherits_from {
+                    let child_depth = calculate_max_depth(registry, parent, visited, max_depth);
+                    max_child_depth = max_child_depth.max(child_depth);
+                }
+
+                visited.remove(role_name);
+                return max_child_depth + 1;
+            }
+
+            0 // Role doesn't exist
+        }
+
+        // Check for cycles
         for parent in inherits_from {
             let mut visited = std::collections::HashSet::new();
             if check_cycle(
@@ -597,6 +629,20 @@ impl RbacService {
                 0,
                 self.config.max_role_inheritance_depth,
             ) {
+                return Err(RbacError::InheritanceCycle);
+            }
+        }
+
+        // Check depth limit for each parent
+        for parent in inherits_from {
+            let mut visited = std::collections::HashSet::new();
+            let depth = calculate_max_depth(
+                &role_registry,
+                parent,
+                &mut visited,
+                self.config.max_role_inheritance_depth,
+            );
+            if depth >= self.config.max_role_inheritance_depth {
                 return Err(RbacError::InheritanceCycle);
             }
         }
