@@ -386,5 +386,3 @@ Enable debug logging for authentication troubleshooting:
 ```bash
 RUST_LOG=debug cargo run
 ```
-
-This provides detailed JWT validation and role verification information.
