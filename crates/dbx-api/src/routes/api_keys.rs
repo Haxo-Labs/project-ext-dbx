@@ -243,6 +243,7 @@ mod tests {
             sub: "user_123".to_string(),
             username: "testuser".to_string(),
             role: UserRole::User,
+            permissions: vec!["string:get".to_string(), "string:set".to_string()],
             exp: (Utc::now() + chrono::Duration::hours(1)).timestamp(),
             iat: Utc::now().timestamp(),
             iss: "test".to_string(),
@@ -253,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_api_key_endpoint() {
         // This test would require a proper test setup with Redis
-        // For now, it's a placeholder to demonstrate the structure
+        // Implementation structure for API key rotation endpoint
         let request = CreateApiKeyRequest {
             name: "Test API Key".to_string(),
             description: Some("Test description".to_string()),
