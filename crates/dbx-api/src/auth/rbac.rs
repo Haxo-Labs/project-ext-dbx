@@ -36,7 +36,7 @@ pub enum RbacError {
 }
 
 /// RBAC service configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RbacConfig {
     pub audit_enabled: bool,
     pub audit_retention_days: u32,
@@ -83,6 +83,11 @@ impl RbacService {
             role_registry,
             config,
         }
+    }
+
+    /// Get a reference to the role registry for read operations
+    pub fn get_role_registry(&self) -> Arc<std::sync::RwLock<RoleRegistry>> {
+        self.role_registry.clone()
     }
 
     /// Check if user has specific permission
