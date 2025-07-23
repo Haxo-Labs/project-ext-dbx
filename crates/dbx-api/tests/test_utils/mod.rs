@@ -1,7 +1,7 @@
 use anyhow::Result;
 use dbx_adapter::{redis::client::RedisPool, redis::factory::RedisBackendFactory};
 use dbx_api::{
-    auth::ApiKeyService,
+    auth::{ApiKeyService, RbacConfig, RbacService},
     config::{AppConfig, JwtConfig},
     middleware::{JwtService, UserStore},
     models::{CreateUserRequest, UserRole},
@@ -194,13 +194,18 @@ impl TestServer {
         }
 
         // Create API key service
-        let api_key_service = Arc::new(ApiKeyService::new(redis_pool));
+        let api_key_service = Arc::new(ApiKeyService::new(redis_pool.clone()));
+
+        // Create RBAC service
+        let rbac_config = RbacConfig::default();
+        let rbac_service = Arc::new(RbacService::new(redis_pool, rbac_config));
 
         Ok(AppState {
             backend_router: Arc::new(backend_router),
             jwt_service,
             user_store,
             api_key_service,
+            rbac_service,
         })
     }
 
