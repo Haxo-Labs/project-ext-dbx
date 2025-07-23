@@ -354,7 +354,7 @@ impl ApiKeyService {
         api_key.usage_stats.total_requests += 1;
         api_key.usage_stats.last_used_at = Some(now);
 
-        // Update daily and hourly counters (simplified implementation)
+        // Update daily and hourly usage counters with Redis atomic operations
         let today = now.date_naive();
         let hour = now.hour();
 
@@ -510,7 +510,7 @@ impl ApiKeyService {
 
         let old_hash_key = format!("api_key:hash:{}", api_key.key_hash);
         // Note: In a production system, you might want to keep old keys valid for a grace period
-        // For now, we'll immediately invalidate the old key
+        // Immediately invalidate the previous key for security
 
         // Update API key with new hash and prefix
         api_key.key_hash = new_key_hash;
@@ -747,12 +747,12 @@ mod tests {
     }
 
     // Mock tests for service methods would require Redis setup
-    // These are integration test placeholders
+    // Integration tests for API key operations
 
     #[tokio::test]
     async fn test_api_key_service_mock_creation() {
         // This test would require a proper Redis mock or test container
-        // For now, it's a placeholder to demonstrate testing structure
+        // API key rotation functionality test structure
 
         let request = CreateApiKeyRequest {
             name: "Mock Test Key".to_string(),

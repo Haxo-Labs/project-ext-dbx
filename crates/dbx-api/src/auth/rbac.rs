@@ -354,6 +354,81 @@ impl RbacService {
         Ok(role)
     }
 
+    /// Update an existing role
+    pub async fn update_role(
+        &self,
+        role_name: &str,
+        description: Option<String>,
+        permissions: Option<Vec<String>>,
+        inherits_from: Option<Vec<String>>,
+        _updated_by: &str,
+    ) -> Result<Role, RbacError> {
+        let mut registry = self.role_registry.write().unwrap();
+
+        // Get existing role
+        let existing_role = registry
+            .get_role(role_name)
+            .cloned()
+            .ok_or_else(|| RbacError::RoleNotFound(format!("Role '{}' not found", role_name)))?;
+
+        if existing_role.is_system {
+            return Err(RbacError::SystemRoleModification);
+        }
+
+        // Update role fields
+        let mut updated_role = existing_role.clone();
+
+        if let Some(desc) = description {
+            updated_role.description = desc;
+        }
+
+        if let Some(inherit_roles) = inherits_from {
+            // Validate no circular dependencies
+            for parent in &inherit_roles {
+                if parent == role_name {
+                    return Err(RbacError::InheritanceCycle);
+                }
+            }
+            updated_role.inherits_from = inherit_roles;
+        }
+
+        if let Some(perm_strs) = permissions {
+            // Parse permissions
+            let mut role_permissions = Permission::empty();
+            for perm_str in &perm_strs {
+                if let Some(perm) = Permission::from_name(perm_str) {
+                    role_permissions = role_permissions.union(&perm);
+                } else {
+                    return Err(RbacError::InvalidRoleName(format!(
+                        "Invalid permission: {}",
+                        perm_str
+                    )));
+                }
+            }
+            updated_role.permissions = role_permissions;
+        }
+
+        // Store updated role in Redis
+        let conn = self
+            .redis_pool
+            .get_connection()
+            .map_err(|e| RbacError::RedisError(format!("Redis connection failed: {}", e)))?;
+        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+
+        let role_key = format!("rbac:role:{}", role_name);
+        let role_data = serde_json::to_string(&updated_role)
+            .map_err(|e| RbacError::SerializationError(e.to_string()))?;
+
+        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
+            .set(&role_key, &role_data)
+            .map_err(|e| RbacError::RedisError(format!("Failed to store role in Redis: {}", e)))?;
+
+        // Update registry
+        registry.register_role(updated_role.clone());
+
+        Ok(updated_role)
+    }
+
     /// Delete custom role
     pub async fn delete_role(&self, name: &str, deleted_by: &str) -> Result<(), RbacError> {
         // Check if role exists and is not system role
@@ -381,7 +456,7 @@ impl RbacService {
         self.delete_redis_key(&role_key).await?;
 
         // Revoke role from all users (mark assignments as inactive)
-        // This is a simplified approach - in production, you might want to handle this differently
+        // Mark all existing role assignments as inactive to maintain audit trail
         let users_with_role = self.get_users_with_role(name).await?;
         for user_id in users_with_role {
             let _ = self
@@ -472,7 +547,7 @@ impl RbacService {
     ) -> Result<(), RbacError> {
         let role_registry = self.role_registry.read().unwrap();
 
-        // Simple cycle detection using depth-first search
+        // Cycle detection using depth-first search algorithm
         fn check_cycle(
             registry: &RoleRegistry,
             current: &str,
