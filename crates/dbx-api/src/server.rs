@@ -1,26 +1,28 @@
 use axum::{
-    extract::State,
+    extract::ConnectInfo,
     http::{HeaderMap, Method},
     middleware::from_fn_with_state,
-    response::Json,
+    response::IntoResponse,
     routing::get,
-    Router,
+    serve, Router,
 };
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
-    auth::{ApiKeyService, RbacConfig, RbacService},
+    auth::{ApiKeyService, RbacService},
     config::{AppConfig, ConfigError},
     middleware::{
-        flexible_auth_middleware, jwt_auth_middleware, rbac_auth_middleware, require_admin_role,
-        require_admin_role_flexible, require_user_role, require_user_role_flexible, JwtService,
-        UserStore,
+        flexible_auth_middleware, rate_limit_middleware, rbac_auth_middleware, JwtService,
+        RateLimitService, UserStore,
     },
     models::ApiResponse,
     routes::{
-        api_keys::create_api_key_routes, auth::create_auth_routes, roles::create_role_routes,
+        api_keys::create_api_key_routes, auth::create_auth_routes, data::create_data_routes,
+        health::create_health_routes, query::create_query_routes,
+        rate_limit::create_rate_limit_routes, roles::create_role_routes,
+        stream::create_stream_routes,
     },
 };
 use dbx_adapter::redis::factory::RedisBackendFactory;
@@ -37,6 +39,7 @@ pub struct AppState {
     pub user_store: Arc<UserStore>,
     pub api_key_service: Arc<ApiKeyService>,
     pub rbac_service: Arc<RbacService>,
+    pub rate_limit_service: Arc<RateLimitService>,
 }
 
 impl AppState {
@@ -86,14 +89,27 @@ impl AppState {
 
         // Create JWT service, user store, API key service, and RBAC service
         let jwt_config = app_config.jwt.clone();
-        let jwt_service = Arc::new(JwtService::new(jwt_config));
-        let user_store = Arc::new(UserStore::new(redis_pool.clone()).await.map_err(|e| {
-            ServerError::UserStoreInitialization(format!("Failed to initialize user store: {}", e))
-        })?);
+        let user_store = Arc::new(UserStore::new(redis_pool.clone()));
+        let jwt_service = Arc::new(JwtService::new(jwt_config, user_store.clone()));
         let api_key_service = Arc::new(ApiKeyService::new(redis_pool.clone()));
 
         // Initialize RBAC service with configuration from environment
-        let rbac_service = Arc::new(RbacService::new(redis_pool, app_config.rbac));
+        let rbac_service = Arc::new(RbacService::new(redis_pool.clone(), app_config.rbac));
+
+        // Initialize Rate Limit Service
+        let mut rate_limit_service = RateLimitService::new(redis_pool.clone());
+
+        // Configure global rate limiting policy
+        if app_config.rate_limit.enabled {
+            let global_policy = crate::middleware::RateLimitPolicy {
+                requests: app_config.rate_limit.global_requests_per_window,
+                window_seconds: app_config.rate_limit.global_window_seconds,
+                burst_allowance: app_config.rate_limit.global_burst_allowance,
+            };
+            rate_limit_service.set_global_policy(global_policy);
+        }
+
+        let rate_limit_service = Arc::new(rate_limit_service);
 
         Ok(Self {
             backend_router: Arc::new(backend_router),
@@ -101,6 +117,7 @@ impl AppState {
             user_store,
             api_key_service,
             rbac_service,
+            rate_limit_service,
         })
     }
 
@@ -151,46 +168,71 @@ impl AppState {
 }
 
 /// Health check endpoint
-async fn health_check() -> Json<ApiResponse<String>> {
-    Json(ApiResponse::success("Server is running".to_string()))
+async fn health_check() -> axum::Json<ApiResponse<String>> {
+    axum::Json(ApiResponse::success("Server is running".to_string()))
 }
 
 /// Create the application router with BackendRouter
 pub fn create_app(state: AppState) -> Router {
-    // Create authentication routes (public) with CORS for browser access
+    // Create route groups
     let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone())
         .layer(
             CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST])
-                .allow_headers(Any),
+                .allow_methods(vec![Method::GET, Method::POST])
+                .allow_origin(Any),
         );
 
-    // Import route modules
-    use crate::routes::{data, health, query, stream};
-
-    // Create API key management routes (requires JWT authentication for key management)
-    let api_key_routes = create_api_key_routes(state.api_key_service.clone()).layer(
-        from_fn_with_state(state.jwt_service.clone(), jwt_auth_middleware),
-    );
-
-    // Create role management routes (requires admin authentication and RBAC)
-    let role_routes = create_role_routes(state.rbac_service.clone())
-        .layer(from_fn_with_state((), require_admin_role_flexible))
+    // Create API key management routes (JWT authentication required)
+    let api_key_routes = create_api_key_routes(state.api_key_service.clone())
         .layer(from_fn_with_state(
-            state.rbac_service.clone(),
-            rbac_auth_middleware,
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
         ))
         .layer(from_fn_with_state(
             (state.jwt_service.clone(), state.api_key_service.clone()),
             flexible_auth_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
+            rbac_auth_middleware,
+        ));
+
+    // Create role management routes (requires admin authentication and RBAC)
+    let role_routes = create_role_routes(state.rbac_service.clone())
+        .layer(from_fn_with_state(
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (state.jwt_service.clone(), state.api_key_service.clone()),
+            flexible_auth_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
+            rbac_auth_middleware,
         ));
 
     // Create data routes with RBAC permission checking
-    let data_routes = data::create_data_routes()
+    let data_routes = create_data_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state(
-            state.rbac_service.clone(),
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
             rbac_auth_middleware,
         ))
         .layer(from_fn_with_state(
@@ -199,10 +241,18 @@ pub fn create_app(state: AppState) -> Router {
         ));
 
     // Create query routes with RBAC permission checking
-    let query_routes = query::create_query_routes()
+    let query_routes = create_query_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state(
-            state.rbac_service.clone(),
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
             rbac_auth_middleware,
         ))
         .layer(from_fn_with_state(
@@ -211,10 +261,18 @@ pub fn create_app(state: AppState) -> Router {
         ));
 
     // Create stream routes with RBAC permission checking
-    let stream_routes = stream::create_stream_routes()
+    let stream_routes = create_stream_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state(
-            state.rbac_service.clone(),
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
             rbac_auth_middleware,
         ))
         .layer(from_fn_with_state(
@@ -223,10 +281,38 @@ pub fn create_app(state: AppState) -> Router {
         ));
 
     // Create health routes (admin only) with RBAC permission checking
-    let health_routes = health::create_health_routes()
+    let health_routes = create_health_routes()
         .with_state(state.backend_router.clone())
         .layer(from_fn_with_state(
-            state.rbac_service.clone(),
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
+            rbac_auth_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (state.jwt_service.clone(), state.api_key_service.clone()),
+            flexible_auth_middleware,
+        ));
+
+    // Create rate limit management routes (admin only)
+    let rate_limit_routes = create_rate_limit_routes()
+        .with_state(state.rate_limit_service.clone())
+        .layer(from_fn_with_state(
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(from_fn_with_state(
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
             rbac_auth_middleware,
         ))
         .layer(from_fn_with_state(
@@ -243,6 +329,7 @@ pub fn create_app(state: AppState) -> Router {
         .nest("/api/v1/query", query_routes)
         .nest("/api/v1/stream", stream_routes)
         .nest("/api/v1/admin", health_routes)
+        .nest("/api/v1/rate-limits", rate_limit_routes)
 }
 
 /// Start the server with BackendRouter (now the main/default server)
