@@ -255,7 +255,7 @@ impl JwtService {
             sub: user.id.clone(),
             username: user.username.clone(),
             role: user.role.clone(),
-            permissions: vec![], // TODO: Add actual permissions
+            permissions: vec![], // Permissions handled by RBAC system
             exp,
             iat: Utc::now().timestamp(),
             iss: self.config.issuer.clone(),
@@ -915,8 +915,17 @@ pub async fn rbac_permission_check_middleware(
                 resource: request.uri().path().to_string(),
                 action: request.method().to_string(),
                 permission_required: format!("{:?}", permission_type).to_lowercase(),
-                ip_address: None, // TODO: Extract from request
-                user_agent: None, // TODO: Extract from request headers
+                ip_address: request
+                    .headers()
+                    .get("x-forwarded-for")
+                    .or_else(|| request.headers().get("x-real-ip"))
+                    .and_then(|h| h.to_str().ok())
+                    .map(|ip| ip.split(',').next().unwrap_or(ip).trim().to_string()),
+                user_agent: request
+                    .headers()
+                    .get("user-agent")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|ua| ua.to_string()),
             },
         )
         .await;

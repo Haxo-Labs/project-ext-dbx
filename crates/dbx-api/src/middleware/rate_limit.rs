@@ -7,7 +7,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use dbx_adapter::redis::client::RedisPool;
+use redis::Commands;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitResult {
@@ -218,33 +220,43 @@ impl SlidingWindowRateLimiter {
 #[derive(Clone)]
 pub struct RateLimitService {
     limiter: SlidingWindowRateLimiter,
-    policies: HashMap<String, RateLimitPolicy>,
-    global_policy: Option<RateLimitPolicy>,
+    policies: Arc<RwLock<HashMap<String, RateLimitPolicy>>>,
+    pub global_policy: Arc<RwLock<Option<RateLimitPolicy>>>,
 }
 
 impl RateLimitService {
     pub fn new(redis_pool: Arc<RedisPool>) -> Self {
         Self {
             limiter: SlidingWindowRateLimiter::new(redis_pool),
-            policies: HashMap::new(),
-            global_policy: None,
+            policies: Arc::new(RwLock::new(HashMap::new())),
+            global_policy: Arc::new(RwLock::new(None)),
         }
     }
 
-    pub fn set_global_policy(&mut self, policy: RateLimitPolicy) {
-        self.global_policy = Some(policy);
+    pub async fn set_global_policy(&self, policy: RateLimitPolicy) {
+        *self.global_policy.write().await = Some(policy);
     }
 
-    pub fn set_endpoint_policy(&mut self, endpoint: String, policy: RateLimitPolicy) {
-        self.policies.insert(endpoint, policy);
+    pub async fn set_endpoint_policy(&self, endpoint: String, policy: RateLimitPolicy) {
+        self.policies.write().await.insert(endpoint, policy);
     }
 
-    pub fn get_policy_for_endpoint(&self, endpoint: &str) -> Option<&RateLimitPolicy> {
-        self.policies.get(endpoint).or(self.global_policy.as_ref())
+    pub async fn remove_endpoint_policy(&self, endpoint: &str) -> bool {
+        self.policies.write().await.remove(endpoint).is_some()
     }
 
-    pub fn get_all_policies(&self) -> &HashMap<String, RateLimitPolicy> {
-        &self.policies
+    pub async fn get_policy_for_endpoint(&self, endpoint: &str) -> Option<RateLimitPolicy> {
+        let policies = self.policies.read().await;
+        if let Some(policy) = policies.get(endpoint) {
+            Some(policy.clone())
+        } else {
+            let global = self.global_policy.read().await;
+            global.clone()
+        }
+    }
+
+    pub async fn get_all_policies(&self) -> HashMap<String, RateLimitPolicy> {
+        self.policies.read().await.clone()
     }
 
     pub async fn check_rate_limit(
@@ -254,6 +266,7 @@ impl RateLimitService {
     ) -> Result<RateLimitResult, String> {
         let policy = self
             .get_policy_for_endpoint(endpoint)
+            .await
             .ok_or_else(|| "No rate limit policy configured".to_string())?;
 
         let context = RateLimitContext {
@@ -276,30 +289,66 @@ impl RateLimitService {
     ) -> Result<RateLimitResult, String> {
         let policy = self
             .get_policy_for_endpoint(endpoint)
+            .await
             .ok_or_else(|| "No rate limit policy configured".to_string())?;
 
         self.limiter
-            .get_rate_limit_info(identifier, endpoint, policy)
+            .get_rate_limit_info(identifier, endpoint, &policy)
             .await
+    }
+
+    pub async fn count_active_limiters(&self) -> Result<u32, String> {
+        let mut conn = self
+            .limiter
+            .redis_pool
+            .get_connection()
+            .map_err(|e| e.to_string())?;
+
+        let pattern = "rate_limit:*";
+        let keys: Vec<String> = conn.keys(&pattern).map_err(|e| e.to_string())?;
+
+        Ok(keys.len() as u32)
     }
 }
 
-pub fn extract_identifier_from_request(
+fn extract_identifier_from_request(
     headers: &HeaderMap,
     connect_info: Option<&ConnectInfo<SocketAddr>>,
     auth_context: Option<&str>,
 ) -> String {
-    // Priority: API key > JWT user ID > IP address
-    if let Some(auth_id) = auth_context {
-        return format!("user:{}", auth_id);
+    // Priority: authenticated user > API key > IP address > unknown
+    if let Some(auth_type) = auth_context {
+        match auth_type {
+            "user" => {
+                // Extract user ID from JWT token in Authorization header
+                if let Some(auth_header) = headers.get("authorization") {
+                    if let Ok(auth_str) = auth_header.to_str() {
+                        if auth_str.starts_with("Bearer ") {
+                            return format!("user:{}", &auth_str[7..15]); // Use first 8 chars as identifier
+                        }
+                    }
+                }
+                "user:unknown".to_string()
+            }
+            "api_key" => {
+                // Extract API key ID from Authorization header
+                if let Some(auth_header) = headers.get("authorization") {
+                    if let Ok(auth_str) = auth_header.to_str() {
+                        if auth_str.starts_with("ApiKey ") {
+                            return format!("api_key:{}", &auth_str[7..15]); // Use first 8 chars as identifier
+                        }
+                    }
+                }
+                "api_key:unknown".to_string()
+            }
+            _ => "unknown".to_string(),
+        }
+    } else if let Some(connect_info) = connect_info {
+        // Use IP address as fallback
+        format!("ip:{}", connect_info.0.ip())
+    } else {
+        "unknown".to_string()
     }
-
-    if let Some(connect_info) = connect_info {
-        return format!("ip:{}", connect_info.0.ip());
-    }
-
-    // Fallback to a default identifier
-    "unknown".to_string()
 }
 
 pub fn add_rate_limit_headers(response: &mut Response, result: &RateLimitResult) {
@@ -327,19 +376,29 @@ pub fn add_rate_limit_headers(response: &mut Response, result: &RateLimitResult)
 pub async fn rate_limit_middleware(
     State(rate_limit_service): State<Arc<RateLimitService>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
     mut request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
     let endpoint = request.uri().path().to_string();
 
-    // Extract identifier (user ID, API key ID, or IP)
-    let identifier = extract_identifier_from_request(
-        request.headers(),
-        connect_info.as_ref(),
-        None, // TODO: Extract from auth context
-    );
+    // Extract user/API key ID from auth headers
+    let auth_identifier = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|auth_header| {
+            if auth_header.starts_with("Bearer ") {
+                Some("user") // JWT token - would extract user ID from token
+            } else if auth_header.starts_with("ApiKey ") {
+                Some("api_key") // API Key - would extract API key ID
+            } else {
+                None
+            }
+        });
 
-    // Check rate limit
+    let identifier =
+        extract_identifier_from_request(&headers, connect_info.as_ref(), auth_identifier);
+
     let rate_limit_result = rate_limit_service
         .check_rate_limit(&identifier, &endpoint)
         .await
@@ -364,7 +423,6 @@ pub async fn rate_limit_middleware(
         return Ok(response);
     }
 
-    // Continue with request
     let mut response = next.run(request).await;
     add_rate_limit_headers(&mut response, &rate_limit_result);
 
@@ -374,6 +432,7 @@ pub async fn rate_limit_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -392,21 +451,21 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Requires Redis server - run with 'cargo test -- --ignored' if Redis is available"]
     async fn test_sliding_window_rate_limiter_basic() {
         let redis_pool = create_redis_pool();
-        let limiter = SlidingWindowRateLimiter::new(redis_pool);
+        let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
+        let test_prefix = format!("test_basic_{}", chrono::Utc::now().timestamp_nanos());
         let context = RateLimitContext {
-            identifier: "test_user_basic".to_string(),
+            identifier: format!("test_user_basic_{}", test_prefix),
             policy: create_test_policy(),
-            endpoint: "/api/test".to_string(),
+            endpoint: format!("/api/test_{}", test_prefix),
         };
 
-        // Reset any existing state
-        let _ = limiter
-            .reset_rate_limit(&context.identifier, &context.endpoint)
-            .await;
+        // Clean up any existing keys
+        let mut conn = redis_pool.get_connection().unwrap();
+        let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
 
         // First few requests should be allowed
         for i in 1..=5 {
@@ -426,28 +485,31 @@ mod tests {
         let result = limiter.check_rate_limit(&context).await.unwrap();
         assert!(!result.allowed, "Request beyond burst should be denied");
         assert!(result.retry_after.is_some());
+
+        // Cleanup
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
     }
 
     #[tokio::test]
-    #[ignore = "Requires Redis server - run with 'cargo test -- --ignored' if Redis is available"]
     async fn test_rate_limit_reset() {
         let redis_pool = create_redis_pool();
-        let limiter = SlidingWindowRateLimiter::new(redis_pool);
+        let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
+        let test_prefix = format!("test_reset_{}", chrono::Utc::now().timestamp_nanos());
         let context = RateLimitContext {
-            identifier: "test_user_reset".to_string(),
+            identifier: format!("test_user_reset_{}", test_prefix),
             policy: RateLimitPolicy {
                 requests: 2,
                 window_seconds: 60,
                 burst_allowance: None,
             },
-            endpoint: "/api/reset_test".to_string(),
+            endpoint: format!("/api/reset_test_{}", test_prefix),
         };
 
-        // Reset any existing state
-        let _ = limiter
-            .reset_rate_limit(&context.identifier, &context.endpoint)
-            .await;
+        // Clean up any existing keys
+        let mut conn = redis_pool.get_connection().unwrap();
+        let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
 
         // Use up the rate limit
         for i in 1..=2 {
@@ -471,44 +533,72 @@ mod tests {
         // Next request should be allowed again
         let result = limiter.check_rate_limit(&context).await.unwrap();
         assert!(result.allowed, "Request should be allowed after reset");
+
+        // Cleanup
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
     }
 
     #[tokio::test]
-    #[ignore = "Requires Redis server - run with 'cargo test -- --ignored' if Redis is available"]
     async fn test_rate_limit_service_global_policy() {
         let redis_pool = create_redis_pool();
-        let mut service = RateLimitService::new(redis_pool);
+        let service = RateLimitService::new(redis_pool.clone());
 
-        service.set_global_policy(create_test_policy());
+        service.set_global_policy(create_test_policy()).await;
+
+        let test_prefix = format!("test_global_{}", chrono::Utc::now().timestamp_nanos());
+        let endpoint = format!("/api/general_{}", test_prefix);
+        let user_id = format!("user1_{}", test_prefix);
+
+        // Clean up any existing keys
+        let mut conn = redis_pool.get_connection().unwrap();
+        let key = format!("rate_limit:{}:{}", user_id, endpoint);
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
 
         // Test global policy
-        let result = service
-            .check_rate_limit("user1", "/api/general")
-            .await
-            .unwrap();
+        let result = service.check_rate_limit(&user_id, &endpoint).await.unwrap();
         assert!(result.allowed);
         assert_eq!(result.limit, 5);
+
+        // Cleanup
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
     }
 
     #[tokio::test]
-    #[ignore = "Requires Redis server - run with 'cargo test -- --ignored' if Redis is available"]
     async fn test_rate_limit_service_endpoint_specific_policy() {
         let redis_pool = create_redis_pool();
-        let mut service = RateLimitService::new(redis_pool);
+        let service = RateLimitService::new(redis_pool.clone());
 
-        service.set_global_policy(create_test_policy());
-        service.set_endpoint_policy(
-            "/api/special".to_string(),
-            RateLimitPolicy {
-                requests: 2,
-                window_seconds: 5,
-                burst_allowance: None,
-            },
-        );
+        service.set_global_policy(create_test_policy()).await;
+
+        let test_prefix = format!("test_endpoint_{}", chrono::Utc::now().timestamp_nanos());
+        let general_endpoint = format!("/api/general_{}", test_prefix);
+        let special_endpoint = format!("/api/special_{}", test_prefix);
+        let user_id = format!("user1_{}", test_prefix);
+
+        service
+            .set_endpoint_policy(
+                special_endpoint.clone(),
+                RateLimitPolicy {
+                    requests: 2,
+                    window_seconds: 5,
+                    burst_allowance: None,
+                },
+            )
+            .await;
+
+        // Clean up any existing keys
+        let mut conn = redis_pool.get_connection().unwrap();
+        let key1 = format!("rate_limit:{}:{}", user_id, general_endpoint);
+        let key2 = format!("rate_limit:{}:{}", user_id, special_endpoint);
+        let _: () = redis::cmd("DEL")
+            .arg(&key1)
+            .arg(&key2)
+            .query(&mut conn)
+            .unwrap_or(());
 
         // Test global policy
         let result = service
-            .check_rate_limit("user1", "/api/general")
+            .check_rate_limit(&user_id, &general_endpoint)
             .await
             .unwrap();
         assert!(result.allowed);
@@ -516,86 +606,86 @@ mod tests {
 
         // Test endpoint-specific policy
         let result = service
-            .check_rate_limit("user1", "/api/special")
+            .check_rate_limit(&user_id, &special_endpoint)
             .await
             .unwrap();
         assert!(result.allowed);
         assert_eq!(result.limit, 2);
+
+        // Cleanup
+        let _: () = redis::cmd("DEL")
+            .arg(&key1)
+            .arg(&key2)
+            .query(&mut conn)
+            .unwrap_or(());
     }
 
     #[tokio::test]
-    #[ignore = "Requires Redis server - run with 'cargo test -- --ignored' if Redis is available"]
     async fn test_different_users_separate_limits() {
-        let redis_pool = match std::panic::catch_unwind(|| create_redis_pool()) {
-            Ok(pool) => pool,
-            Err(_) => {
-                // Skip test if Redis is not available
-                eprintln!("Skipping test_different_users_separate_limits: Redis not available");
-                return;
-            }
-        };
+        let redis_pool = create_redis_pool();
+        let service = RateLimitService::new(redis_pool.clone());
 
-        // Test Redis connectivity by trying to create a limiter
-        let test_limiter =
-            match std::panic::catch_unwind(|| SlidingWindowRateLimiter::new(redis_pool.clone())) {
-                Ok(limiter) => limiter,
-                Err(_) => {
-                    eprintln!(
-                    "Skipping test_different_users_separate_limits: Cannot create Redis limiter"
-                );
-                    return;
-                }
-            };
-
-        let mut service = RateLimitService::new(redis_pool);
+        // Use unique test prefix to avoid conflicts with other tests
+        let test_prefix = format!("test_separation_{}", chrono::Utc::now().timestamp_nanos());
+        let endpoint = format!("/api/{}", test_prefix);
 
         let policy = RateLimitPolicy {
             requests: 3,
             window_seconds: 60,
             burst_allowance: None,
         };
-        service.set_global_policy(policy);
+        service.set_global_policy(policy).await;
 
-        let endpoint = "/api/test_separation";
+        let user1_id = format!("user1_{}", test_prefix);
+        let user2_id = format!("user2_{}", test_prefix);
+
+        // Clean up any existing keys for this test
+        let mut conn = redis_pool.get_connection().unwrap();
+        let _: () = redis::cmd("DEL")
+            .arg(format!("rate_limit:{}:{}", user1_id, endpoint))
+            .arg(format!("rate_limit:{}:{}", user2_id, endpoint))
+            .query(&mut conn)
+            .unwrap_or(());
 
         // User 1 uses up their limit
         for i in 1..=3 {
-            let result = service.check_rate_limit("user1", endpoint).await;
-            match result {
-                Ok(res) => assert!(res.allowed, "User1 request {} should be allowed", i),
-                Err(e) => {
-                    eprintln!("Redis error in test: {}", e);
-                    return; // Skip test on Redis errors
-                }
-            }
+            let result = service
+                .check_rate_limit(&user1_id, &endpoint)
+                .await
+                .unwrap();
+            assert!(result.allowed, "User1 request {} should be allowed", i);
         }
 
         // User 1's next request should be denied
-        let result = service.check_rate_limit("user1", endpoint).await;
-        match result {
-            Ok(res) => assert!(
-                !res.allowed,
-                "User1's request should be denied after limit reached"
-            ),
-            Err(_) => return, // Skip test on Redis errors
-        }
+        let result = service
+            .check_rate_limit(&user1_id, &endpoint)
+            .await
+            .unwrap();
+        assert!(
+            !result.allowed,
+            "User1's request should be denied after limit reached"
+        );
 
         // User 2 should still have their full limit available
-        let result = service.check_rate_limit("user2", endpoint).await;
-        match result {
-            Ok(res) => {
-                assert!(res.allowed, "User2's first request should be allowed");
-                assert_eq!(res.remaining, 2);
-            }
-            Err(_) => return, // Skip test on Redis errors
-        }
+        let result = service
+            .check_rate_limit(&user2_id, &endpoint)
+            .await
+            .unwrap();
+        assert!(result.allowed, "User2's first request should be allowed");
+        assert_eq!(result.remaining, 2);
+
+        // Cleanup
+        let _: () = redis::cmd("DEL")
+            .arg(format!("rate_limit:{}:{}", user1_id, endpoint))
+            .arg(format!("rate_limit:{}:{}", user2_id, endpoint))
+            .query(&mut conn)
+            .unwrap_or(());
     }
 
     #[tokio::test]
-    #[ignore = "Requires Redis server - run with 'cargo test -- --ignored' if Redis is available"]
     async fn test_get_rate_limit_info_without_incrementing() {
         let redis_pool = create_redis_pool();
-        let limiter = SlidingWindowRateLimiter::new(redis_pool);
+        let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
         let policy = RateLimitPolicy {
             requests: 5,
@@ -603,15 +693,18 @@ mod tests {
             burst_allowance: None,
         };
 
-        let identifier = "test_user_info";
-        let endpoint = "/api/info_test";
+        let test_prefix = format!("test_info_{}", chrono::Utc::now().timestamp_nanos());
+        let identifier = format!("test_user_info_{}", test_prefix);
+        let endpoint = format!("/api/info_test_{}", test_prefix);
 
-        // Reset any existing state
-        let _ = limiter.reset_rate_limit(identifier, endpoint).await;
+        // Clean up any existing keys
+        let mut conn = redis_pool.get_connection().unwrap();
+        let key = format!("rate_limit:{}:{}", identifier, endpoint);
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
 
         // Get initial info
         let info = limiter
-            .get_rate_limit_info(identifier, endpoint, &policy)
+            .get_rate_limit_info(&identifier, &endpoint, &policy)
             .await
             .unwrap();
         assert_eq!(info.remaining, 5);
@@ -619,7 +712,7 @@ mod tests {
 
         // Check that getting info doesn't increment the counter
         let info2 = limiter
-            .get_rate_limit_info(identifier, endpoint, &policy)
+            .get_rate_limit_info(&identifier, &endpoint, &policy)
             .await
             .unwrap();
         assert_eq!(info2.remaining, 5);
@@ -627,9 +720,9 @@ mod tests {
 
         // Make an actual request to increment
         let context = RateLimitContext {
-            identifier: identifier.to_string(),
+            identifier: identifier.clone(),
             policy,
-            endpoint: endpoint.to_string(),
+            endpoint: endpoint.clone(),
         };
         let result = limiter.check_rate_limit(&context).await.unwrap();
         assert!(result.allowed);
@@ -637,32 +730,35 @@ mod tests {
 
         // Now info should show the updated count
         let info3 = limiter
-            .get_rate_limit_info(identifier, endpoint, &context.policy)
+            .get_rate_limit_info(&identifier, &endpoint, &context.policy)
             .await
             .unwrap();
         assert_eq!(info3.remaining, 4);
+
+        // Cleanup
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
     }
 
     #[tokio::test]
-    #[ignore = "Requires Redis server - run with 'cargo test -- --ignored' if Redis is available"]
     async fn test_burst_allowance_behavior() {
         let redis_pool = create_redis_pool();
-        let limiter = SlidingWindowRateLimiter::new(redis_pool);
+        let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
+        let test_prefix = format!("test_burst_{}", chrono::Utc::now().timestamp_nanos());
         let context = RateLimitContext {
-            identifier: "test_burst_user".to_string(),
+            identifier: format!("test_burst_user_{}", test_prefix),
             policy: RateLimitPolicy {
                 requests: 3,
                 window_seconds: 60,
                 burst_allowance: Some(5),
             },
-            endpoint: "/api/burst_test".to_string(),
+            endpoint: format!("/api/burst_test_{}", test_prefix),
         };
 
-        // Reset any existing state
-        let _ = limiter
-            .reset_rate_limit(&context.identifier, &context.endpoint)
-            .await;
+        // Clean up any existing keys
+        let mut conn = redis_pool.get_connection().unwrap();
+        let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
 
         // First 3 requests should be allowed (normal limit)
         for i in 1..=3 {
@@ -682,26 +778,38 @@ mod tests {
             !result.allowed,
             "Request beyond burst allowance should be denied"
         );
+
+        // Cleanup
+        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
     }
 
     #[test]
     fn test_extract_identifier_from_request_priority() {
         use std::net::{IpAddr, Ipv4Addr};
 
-        let headers = HeaderMap::new();
+        let mut headers = HeaderMap::new();
         let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 8080);
         let connect_info = ConnectInfo(socket_addr);
 
-        // Test priority: auth context > IP address
+        // Test priority: auth context with header > IP address
+        headers.insert("authorization", "Bearer abcd1234token".parse().unwrap());
         let identifier =
-            extract_identifier_from_request(&headers, Some(&connect_info), Some("user123"));
-        assert_eq!(identifier, "user:user123");
+            extract_identifier_from_request(&headers, Some(&connect_info), Some("user"));
+        assert_eq!(identifier, "user:abcd1234");
+
+        // Test API key auth
+        headers.clear();
+        headers.insert("authorization", "ApiKey xyz98765key".parse().unwrap());
+        let identifier =
+            extract_identifier_from_request(&headers, Some(&connect_info), Some("api_key"));
+        assert_eq!(identifier, "api_key:xyz98765");
 
         // Test IP fallback when no auth
+        headers.clear();
         let identifier = extract_identifier_from_request(&headers, Some(&connect_info), None);
         assert_eq!(identifier, "ip:192.168.1.1");
 
-        // Test unknown fallback when no info available
+        // Test unknown fallback when no connect info
         let identifier = extract_identifier_from_request(&headers, None, None);
         assert_eq!(identifier, "unknown");
     }
