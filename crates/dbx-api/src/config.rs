@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
 use thiserror::Error;
@@ -72,10 +73,47 @@ impl JwtConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndpointRateLimitConfig {
+    pub requests: u32,
+    pub window_seconds: u32,
+    pub burst_allowance: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    pub enabled: bool,
+    pub global_requests_per_window: u32,
+    pub global_window_seconds: u32,
+    pub global_burst_allowance: Option<u32>,
+    pub per_user_enabled: bool,
+    pub per_ip_enabled: bool,
+    pub endpoint_overrides: HashMap<String, EndpointRateLimitConfig>,
+    pub redis_key_prefix: String,
+    pub graceful_degradation: bool,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            global_requests_per_window: 1000,
+            global_window_seconds: 60,
+            global_burst_allowance: Some(1500),
+            per_user_enabled: true,
+            per_ip_enabled: true,
+            endpoint_overrides: HashMap::new(),
+            redis_key_prefix: "dbx:rate_limit".to_string(),
+            graceful_degradation: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub jwt: JwtConfig,
     pub rbac: RbacConfig,
+    pub rate_limit: RateLimitConfig,
     pub create_default_admin: bool,
     pub default_admin_username: Option<String>,
     pub default_admin_password: Option<String>,
@@ -179,6 +217,62 @@ impl AppConfig {
             default_assignment_ttl_days: rbac_default_assignment_ttl_days,
         };
 
+        // Parse Rate Limit configuration
+        let rate_limit_enabled = env::var("RATE_LIMIT_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let global_requests_per_window = env::var("GLOBAL_REQUESTS_PER_WINDOW")
+            .unwrap_or_else(|_| "1000".to_string())
+            .parse()
+            .map_err(|e| ConfigError::ParseError {
+                var: "GLOBAL_REQUESTS_PER_WINDOW".to_string(),
+                source: e,
+            })?;
+
+        let global_window_seconds = env::var("GLOBAL_WINDOW_SECONDS")
+            .unwrap_or_else(|_| "60".to_string())
+            .parse()
+            .map_err(|e| ConfigError::ParseError {
+                var: "GLOBAL_WINDOW_SECONDS".to_string(),
+                source: e,
+            })?;
+
+        let global_burst_allowance = env::var("GLOBAL_BURST_ALLOWANCE")
+            .ok()
+            .and_then(|s| s.parse().ok());
+
+        let per_user_enabled = env::var("PER_USER_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let per_ip_enabled = env::var("PER_IP_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let redis_key_prefix =
+            env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "dbx:rate_limit".to_string());
+
+        let graceful_degradation = env::var("GRACEFUL_DEGRADATION")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let rate_limit_config = RateLimitConfig {
+            enabled: rate_limit_enabled,
+            global_requests_per_window,
+            global_window_seconds,
+            global_burst_allowance,
+            per_user_enabled,
+            per_ip_enabled,
+            endpoint_overrides: HashMap::new(),
+            redis_key_prefix,
+            graceful_degradation,
+        };
+
         Ok(AppConfig {
             server: ServerConfig {
                 host,
@@ -187,6 +281,7 @@ impl AppConfig {
             },
             jwt: jwt_config,
             rbac: rbac_config,
+            rate_limit: rate_limit_config,
             create_default_admin,
             default_admin_username,
             default_admin_password,
