@@ -101,21 +101,26 @@ pub async fn get_rate_limit_status(
     }
 }
 
-/// List all configured rate limit policies
+/// List all rate limit policies
 pub async fn list_rate_limit_policies(
     State(rate_limit_service): State<Arc<RateLimitService>>,
     _rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<Vec<RateLimitPolicyResponse>>>, (StatusCode, Json<ApiResponse<()>>)> {
-    let policies = rate_limit_service
-        .get_all_policies()
+    let policies = rate_limit_service.get_all_policies().await;
+
+    let policy_responses: Vec<RateLimitPolicyResponse> = policies
         .iter()
         .map(|(endpoint, policy)| RateLimitPolicyResponse {
             endpoint: endpoint.clone(),
-            policy: policy.clone().into(),
+            policy: RateLimitPolicyInfo {
+                requests: policy.requests,
+                window_seconds: policy.window_seconds,
+                burst_allowance: policy.burst_allowance,
+            },
         })
         .collect();
 
-    Ok(Json(ApiResponse::success(policies)))
+    Ok(Json(ApiResponse::success(policy_responses)))
 }
 
 /// Get rate limit policy for a specific endpoint
@@ -124,21 +129,26 @@ pub async fn get_rate_limit_policy(
     Path(endpoint): Path<String>,
     _rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<RateLimitPolicyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
-    let endpoint_path = format!("/{}", endpoint);
+    let policy = rate_limit_service.get_policy_for_endpoint(&endpoint).await;
 
-    match rate_limit_service.get_policy_for_endpoint(&endpoint_path) {
+    match policy {
         Some(policy) => {
             let response = RateLimitPolicyResponse {
-                endpoint: endpoint_path,
-                policy: policy.clone().into(),
+                endpoint,
+                policy: RateLimitPolicyInfo {
+                    requests: policy.requests,
+                    window_seconds: policy.window_seconds,
+                    burst_allowance: policy.burst_allowance,
+                },
             };
             Ok(Json(ApiResponse::success(response)))
         }
         None => Err((
             StatusCode::NOT_FOUND,
-            Json(ApiResponse::<()>::error(
-                "Rate limit policy not found".to_string(),
-            )),
+            Json(ApiResponse::<()>::error(format!(
+                "No rate limit policy found for endpoint '{}'",
+                endpoint
+            ))),
         )),
     }
 }
@@ -158,37 +168,64 @@ pub async fn set_rate_limit_policy(
         ));
     }
 
-    let _policy = RateLimitPolicy {
+    let policy = RateLimitPolicy {
         requests: request.requests,
         window_seconds: request.window_seconds,
         burst_allowance: request.burst_allowance,
     };
 
-    // Note: This would need to be mutable access to the service
-    // For now, we'll return an error indicating this operation isn't supported
-    // In a real implementation, we'd need to redesign the service to allow runtime policy updates
-    Err((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(ApiResponse::<()>::error(
-            "Dynamic policy updates not yet implemented".to_string(),
-        )),
-    ))
+    rate_limit_service
+        .set_endpoint_policy(request.endpoint.clone(), policy.clone())
+        .await;
+
+    let response = RateLimitPolicyResponse {
+        endpoint: request.endpoint,
+        policy: RateLimitPolicyInfo {
+            requests: policy.requests,
+            window_seconds: policy.window_seconds,
+            burst_allowance: policy.burst_allowance,
+        },
+    };
+
+    Ok(Json(ApiResponse::success(response)))
 }
 
 /// Update rate limit policy for an endpoint
 pub async fn update_rate_limit_policy(
     State(rate_limit_service): State<Arc<RateLimitService>>,
-    Path(_endpoint): Path<String>,
+    Path(endpoint): Path<String>,
     _rbac_context: RbacContext,
-    Json(_request): Json<SetRateLimitPolicyRequest>,
+    Json(request): Json<SetRateLimitPolicyRequest>,
 ) -> Result<Json<ApiResponse<RateLimitPolicyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
-    // Same issue as set_rate_limit_policy - would need mutable access
-    Err((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(ApiResponse::<()>::error(
-            "Dynamic policy updates not yet implemented".to_string(),
-        )),
-    ))
+    if request.requests == 0 || request.window_seconds == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::error(
+                "Requests and window_seconds must be greater than 0".to_string(),
+            )),
+        ));
+    }
+
+    let policy = RateLimitPolicy {
+        requests: request.requests,
+        window_seconds: request.window_seconds,
+        burst_allowance: request.burst_allowance,
+    };
+
+    rate_limit_service
+        .set_endpoint_policy(endpoint.clone(), policy.clone())
+        .await;
+
+    let response = RateLimitPolicyResponse {
+        endpoint,
+        policy: RateLimitPolicyInfo {
+            requests: policy.requests,
+            window_seconds: policy.window_seconds,
+            burst_allowance: policy.burst_allowance,
+        },
+    };
+
+    Ok(Json(ApiResponse::success(response)))
 }
 
 /// Delete rate limit policy for an endpoint
@@ -197,13 +234,22 @@ pub async fn delete_rate_limit_policy(
     Path(endpoint): Path<String>,
     _rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
-    // Same issue - would need mutable access
-    Err((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(ApiResponse::<()>::error(
-            "Dynamic policy deletion not yet implemented".to_string(),
-        )),
-    ))
+    let removed = rate_limit_service.remove_endpoint_policy(&endpoint).await;
+
+    if removed {
+        Ok(Json(ApiResponse::success(format!(
+            "Rate limit policy for endpoint '{}' deleted successfully",
+            endpoint
+        ))))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()>::error(format!(
+                "No rate limit policy found for endpoint '{}'",
+                endpoint
+            ))),
+        ))
+    }
 }
 
 /// Reset rate limit for a specific identifier and endpoint
@@ -233,15 +279,31 @@ pub async fn reset_rate_limit(
 
 /// Get rate limiting metrics
 pub async fn get_rate_limit_metrics(
-    State(_rate_limit_service): State<Arc<RateLimitService>>,
+    State(rate_limit_service): State<Arc<RateLimitService>>,
     _rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<RateLimitMetrics>>, (StatusCode, Json<ApiResponse<()>>)> {
-    // TODO: Implement actual metrics collection
+    let policies = rate_limit_service.get_all_policies().await;
+    let policies_count = policies.len() as u32;
+
+    // Add global policy if exists
+    let global_policy = rate_limit_service.global_policy.read().await;
+    let total_policies = if global_policy.is_some() {
+        policies_count + 1
+    } else {
+        policies_count
+    };
+
+    // Count active rate limiters by scanning Redis keys
+    let active_limiters = match rate_limit_service.count_active_limiters().await {
+        Ok(count) => count,
+        Err(_) => 0, // Graceful degradation if Redis is unavailable
+    };
+
     let metrics = RateLimitMetrics {
-        total_requests: 0,
-        rate_limited_requests: 0,
-        policies_count: 0,
-        active_limiters: 0,
+        total_requests: 0,        // Requires additional tracking infrastructure
+        rate_limited_requests: 0, // Requires additional tracking infrastructure
+        policies_count: total_policies,
+        active_limiters,
     };
 
     Ok(Json(ApiResponse::success(metrics)))
