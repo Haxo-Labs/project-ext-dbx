@@ -64,6 +64,7 @@ pub fn create_rate_limit_routes() -> Router<Arc<RateLimitService>> {
         .route("/policies/:endpoint", delete(delete_rate_limit_policy))
         .route("/reset/:identifier/:endpoint", post(reset_rate_limit))
         .route("/metrics", get(get_rate_limit_metrics))
+        .route("/metrics/reset", post(reset_rate_limit_metrics))
 }
 
 /// Get current rate limit status for a specific identifier and endpoint
@@ -299,9 +300,16 @@ pub async fn get_rate_limit_metrics(
         Err(_) => 0, // Graceful degradation if Redis is unavailable
     };
 
+    // Get request tracking metrics
+    let total_requests = rate_limit_service.get_total_requests().await.unwrap_or(0);
+    let rate_limited_requests = rate_limit_service
+        .get_rate_limited_requests()
+        .await
+        .unwrap_or(0);
+
     let metrics = RateLimitMetrics {
-        total_requests: 0,        // Requires additional tracking infrastructure
-        rate_limited_requests: 0, // Requires additional tracking infrastructure
+        total_requests,
+        rate_limited_requests,
         policies_count: total_policies,
         active_limiters,
     };
@@ -315,4 +323,23 @@ pub struct RateLimitMetrics {
     pub rate_limited_requests: u64,
     pub policies_count: u32,
     pub active_limiters: u32,
+}
+
+/// Reset rate limiting metrics
+pub async fn reset_rate_limit_metrics(
+    State(rate_limit_service): State<Arc<RateLimitService>>,
+    _rbac_context: RbacContext,
+) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
+    match rate_limit_service.reset_metrics().await {
+        Ok(_) => Ok(Json(ApiResponse::success(
+            "Metrics reset successfully".to_string(),
+        ))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::error(format!(
+                "Failed to reset metrics: {}",
+                e
+            ))),
+        )),
+    }
 }
