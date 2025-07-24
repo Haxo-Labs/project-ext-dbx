@@ -6,8 +6,7 @@ use std::sync::{Arc, Mutex};
 
 /// Provides administrative operations for Redis.
 ///
-/// This struct offers comprehensive administrative capabilities including
-/// database management, server information, configuration, monitoring,
+/// Supports database management, server information, configuration, monitoring,
 /// and health checks.
 ///
 /// # Examples
@@ -97,8 +96,8 @@ impl AdminOperations {
 
     /// Retrieves the Redis server's information and statistics.
     ///
-    /// Returns comprehensive information about the Redis server including
-    /// version, memory usage, connected clients, and various statistics.
+    /// Returns server information including version, memory usage,
+    /// connected clients, and statistics.
     ///
     /// # Returns
     ///
@@ -451,9 +450,9 @@ impl AdminOperations {
         Ok(stats)
     }
 
-    /// Returns a comprehensive health check of the Redis server.
+    /// Returns a health check of the Redis server.
     ///
-    /// This method performs multiple checks including ping, database size,
+    /// Performs multiple checks including ping, database size,
     /// and basic server information to ensure the Redis server is healthy.
     ///
     /// # Returns
@@ -487,9 +486,9 @@ impl AdminOperations {
         })
     }
 
-    /// Returns a comprehensive server status report.
+    /// Returns a server status report.
     ///
-    /// This method collects various statistics and information about the Redis server
+    /// Collects various statistics and information about the Redis server
     /// and returns them in a structured format.
     ///
     /// # Returns
@@ -573,7 +572,7 @@ pub struct HealthCheck {
     pub memory_usage: HashMap<String, String>,
 }
 
-/// Comprehensive server status information.
+/// Server status information.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ServerStatus {
     /// Unix timestamp of the status check

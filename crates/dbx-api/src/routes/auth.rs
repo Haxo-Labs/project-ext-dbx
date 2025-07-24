@@ -168,38 +168,4 @@ mod tests {
             refresh_token_expiration: 86400,
         }
     }
-
-    // TODO: Fix tests to match actual UserStoreOperations trait methods
-    /*
-    struct MockUserStore {
-        users: Arc<RwLock<HashMap<String, User>>>,
-    }
-
-    impl MockUserStore {
-        fn new() -> Self {
-            Self {
-                users: Arc::new(RwLock::new(HashMap::new())),
-            }
-        }
-
-        async fn add_user(&self, username: &str, password: &str, role: UserRole) -> User {
-            let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).unwrap();
-            let user = User {
-                id: uuid::Uuid::new_v4().to_string(),
-                username: username.to_string(),
-                password_hash,
-                role,
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                is_active: true,
-            };
-
-            let mut users = self.users.write().await;
-            users.insert(username.to_string(), user.clone());
-            user
-        }
-    }
-
-    // Rest of test implementations would go here
-    */
 }
