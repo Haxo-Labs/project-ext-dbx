@@ -245,6 +245,82 @@ impl RateLimitService {
         self.policies.write().await.remove(endpoint).is_some()
     }
 
+    pub async fn increment_total_requests(&self) -> Result<(), String> {
+        let mut conn = self
+            .limiter
+            .redis_pool
+            .get_connection()
+            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
+
+        let _: () = redis::cmd("INCR")
+            .arg("rate_limit:metrics:total_requests")
+            .query(&mut conn)
+            .map_err(|e| format!("Failed to increment total requests: {}", e))?;
+
+        Ok(())
+    }
+
+    pub async fn increment_rate_limited_requests(&self) -> Result<(), String> {
+        let mut conn = self
+            .limiter
+            .redis_pool
+            .get_connection()
+            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
+
+        let _: () = redis::cmd("INCR")
+            .arg("rate_limit:metrics:rate_limited_requests")
+            .query(&mut conn)
+            .map_err(|e| format!("Failed to increment rate limited requests: {}", e))?;
+
+        Ok(())
+    }
+
+    pub async fn get_total_requests(&self) -> Result<u64, String> {
+        let mut conn = self
+            .limiter
+            .redis_pool
+            .get_connection()
+            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
+
+        let count: u64 = redis::cmd("GET")
+            .arg("rate_limit:metrics:total_requests")
+            .query(&mut conn)
+            .unwrap_or(0);
+
+        Ok(count)
+    }
+
+    pub async fn get_rate_limited_requests(&self) -> Result<u64, String> {
+        let mut conn = self
+            .limiter
+            .redis_pool
+            .get_connection()
+            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
+
+        let count: u64 = redis::cmd("GET")
+            .arg("rate_limit:metrics:rate_limited_requests")
+            .query(&mut conn)
+            .unwrap_or(0);
+
+        Ok(count)
+    }
+
+    pub async fn reset_metrics(&self) -> Result<(), String> {
+        let mut conn = self
+            .limiter
+            .redis_pool
+            .get_connection()
+            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
+
+        let _: () = redis::cmd("DEL")
+            .arg("rate_limit:metrics:total_requests")
+            .arg("rate_limit:metrics:rate_limited_requests")
+            .query(&mut conn)
+            .map_err(|e| format!("Failed to reset metrics: {}", e))?;
+
+        Ok(())
+    }
+
     pub async fn get_policy_for_endpoint(&self, endpoint: &str) -> Option<RateLimitPolicy> {
         let policies = self.policies.read().await;
         if let Some(policy) = policies.get(endpoint) {
@@ -382,6 +458,9 @@ pub async fn rate_limit_middleware(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
     let endpoint = request.uri().path().to_string();
 
+    // Track total requests
+    let _ = rate_limit_service.increment_total_requests().await;
+
     // Extract user/API key ID from auth headers
     let auth_identifier = headers
         .get("authorization")
@@ -413,6 +492,9 @@ pub async fn rate_limit_middleware(
         })?;
 
     if !rate_limit_result.allowed {
+        // Track rate-limited requests
+        let _ = rate_limit_service.increment_rate_limited_requests().await;
+
         let mut response = (
             StatusCode::TOO_MANY_REQUESTS,
             Json(ApiResponse::<()>::error("Rate limit exceeded".to_string())),
