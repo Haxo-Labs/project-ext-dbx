@@ -96,19 +96,16 @@ impl AppState {
         // Initialize RBAC service with configuration from environment
         let rbac_service = Arc::new(RbacService::new(redis_pool.clone(), app_config.rbac));
 
-        // Initialize Rate Limit Service
-        let mut rate_limit_service = RateLimitService::new(redis_pool.clone());
-
-        // Configure global rate limiting policy
+        // Initialize rate limiting service
+        let rate_limit_service = RateLimitService::new(redis_pool.clone());
         if app_config.rate_limit.enabled {
             let global_policy = crate::middleware::RateLimitPolicy {
                 requests: app_config.rate_limit.global_requests_per_window,
                 window_seconds: app_config.rate_limit.global_window_seconds,
                 burst_allowance: app_config.rate_limit.global_burst_allowance,
             };
-            rate_limit_service.set_global_policy(global_policy);
+            rate_limit_service.set_global_policy(global_policy).await;
         }
-
         let rate_limit_service = Arc::new(rate_limit_service);
 
         Ok(Self {
