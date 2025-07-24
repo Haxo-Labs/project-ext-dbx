@@ -109,11 +109,97 @@ impl Default for RateLimitConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityHeadersConfig {
+    pub x_content_type_options: String,
+    pub x_frame_options: String,
+    pub x_xss_protection: String,
+    pub strict_transport_security: Option<String>,
+    pub referrer_policy: String,
+    pub content_security_policy: String,
+    pub permissions_policy: Option<String>,
+}
+
+impl Default for SecurityHeadersConfig {
+    fn default() -> Self {
+        Self {
+            x_content_type_options: "nosniff".to_string(),
+            x_frame_options: "DENY".to_string(),
+            x_xss_protection: "1; mode=block".to_string(),
+            strict_transport_security: Some("max-age=31536000; includeSubDomains".to_string()),
+            referrer_policy: "strict-origin-when-cross-origin".to_string(),
+            content_security_policy: "default-src 'self'".to_string(),
+            permissions_policy: Some("geolocation=(), microphone=(), camera=()".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorsConfig {
+    pub enabled: bool,
+    pub allowed_origins: Vec<String>,
+    pub allowed_methods: Vec<String>,
+    pub allowed_headers: Vec<String>,
+    pub exposed_headers: Vec<String>,
+    pub allow_credentials: bool,
+    pub max_age: Option<u32>,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allowed_origins: vec![
+                "http://localhost:3000".to_string(),
+                "http://127.0.0.1:3000".to_string(),
+            ],
+            allowed_methods: vec![
+                "GET".to_string(),
+                "POST".to_string(),
+                "PUT".to_string(),
+                "DELETE".to_string(),
+                "OPTIONS".to_string(),
+            ],
+            allowed_headers: vec![
+                "Authorization".to_string(),
+                "Content-Type".to_string(),
+                "X-API-Key".to_string(),
+            ],
+            exposed_headers: vec![
+                "X-Rate-Limit-Remaining".to_string(),
+                "X-Rate-Limit-Reset".to_string(),
+            ],
+            allow_credentials: true,
+            max_age: Some(3600),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    pub headers: SecurityHeadersConfig,
+    pub cors: CorsConfig,
+    pub development_mode: bool,
+    pub strict_transport_security_enabled: bool,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            headers: SecurityHeadersConfig::default(),
+            cors: CorsConfig::default(),
+            development_mode: false,
+            strict_transport_security_enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub jwt: JwtConfig,
     pub rbac: RbacConfig,
     pub rate_limit: RateLimitConfig,
+    pub security: SecurityConfig,
     pub create_default_admin: bool,
     pub default_admin_username: Option<String>,
     pub default_admin_password: Option<String>,
@@ -273,6 +359,87 @@ impl AppConfig {
             graceful_degradation,
         };
 
+        // Parse Security configuration
+        let development_mode = env::var("DEVELOPMENT_MODE")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+
+        let strict_transport_security_enabled = env::var("STRICT_TRANSPORT_SECURITY_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let cors_enabled = env::var("CORS_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS")
+            .unwrap_or_else(|_| "http://localhost:3000,http://127.0.0.1:3000".to_string())
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        let cors_allowed_methods = env::var("CORS_ALLOWED_METHODS")
+            .unwrap_or_else(|_| "GET,POST,PUT,DELETE,OPTIONS".to_string())
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        let cors_allowed_headers = env::var("CORS_ALLOWED_HEADERS")
+            .unwrap_or_else(|_| "Authorization,Content-Type,X-API-Key".to_string())
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        let cors_allow_credentials = env::var("CORS_ALLOW_CREDENTIALS")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let cors_max_age = env::var("CORS_MAX_AGE").ok().and_then(|s| s.parse().ok());
+
+        let csp_policy = env::var("CONTENT_SECURITY_POLICY")
+            .unwrap_or_else(|_| "default-src 'self'".to_string());
+
+        let referrer_policy = env::var("REFERRER_POLICY")
+            .unwrap_or_else(|_| "strict-origin-when-cross-origin".to_string());
+
+        let security_headers = SecurityHeadersConfig {
+            x_content_type_options: "nosniff".to_string(),
+            x_frame_options: "DENY".to_string(),
+            x_xss_protection: "1; mode=block".to_string(),
+            strict_transport_security: if strict_transport_security_enabled {
+                Some("max-age=31536000; includeSubDomains".to_string())
+            } else {
+                None
+            },
+            referrer_policy,
+            content_security_policy: csp_policy,
+            permissions_policy: Some("geolocation=(), microphone=(), camera=()".to_string()),
+        };
+
+        let cors_config = CorsConfig {
+            enabled: cors_enabled,
+            allowed_origins: cors_allowed_origins,
+            allowed_methods: cors_allowed_methods,
+            allowed_headers: cors_allowed_headers,
+            exposed_headers: vec![
+                "X-Rate-Limit-Remaining".to_string(),
+                "X-Rate-Limit-Reset".to_string(),
+            ],
+            allow_credentials: cors_allow_credentials,
+            max_age: cors_max_age,
+        };
+
+        let security_config = SecurityConfig {
+            headers: security_headers,
+            cors: cors_config,
+            development_mode,
+            strict_transport_security_enabled,
+        };
+
         Ok(AppConfig {
             server: ServerConfig {
                 host,
@@ -282,6 +449,7 @@ impl AppConfig {
             jwt: jwt_config,
             rbac: rbac_config,
             rate_limit: rate_limit_config,
+            security: security_config,
             create_default_admin,
             default_admin_username,
             default_admin_password,
