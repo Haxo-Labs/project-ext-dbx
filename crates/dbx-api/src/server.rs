@@ -8,13 +8,13 @@ use axum::{
 };
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     auth::{ApiKeyService, RbacService},
     config::{AppConfig, ConfigError},
     middleware::{
-        flexible_auth_middleware, rate_limit_middleware, rbac_auth_middleware, JwtService,
+        create_cors_layer, development_security_middleware, flexible_auth_middleware,
+        rate_limit_middleware, rbac_auth_middleware, security_headers_middleware, JwtService,
         RateLimitService, UserStore,
     },
     models::ApiResponse,
@@ -171,13 +171,36 @@ async fn health_check() -> axum::Json<ApiResponse<String>> {
 
 /// Create the application router with BackendRouter
 pub fn create_app(state: AppState) -> Router {
-    // Create route groups
+    // Load configuration for security settings
+    let app_config = AppConfig::from_env().unwrap_or_else(|_| {
+        // Fallback to defaults if config loading fails
+        AppConfig {
+            server: crate::config::ServerConfig {
+                host: "0.0.0.0".to_string(),
+                port: 3000,
+                redis_url: "redis://localhost:6379".to_string(),
+            },
+            jwt: crate::config::JwtConfig {
+                secret: "fallback-secret-key-at-least-32-chars".to_string(),
+                access_token_expiration: 900,
+                refresh_token_expiration: 604800,
+                issuer: "dbx-api".to_string(),
+            },
+            rbac: crate::auth::RbacConfig::default(),
+            rate_limit: crate::config::RateLimitConfig::default(),
+            security: crate::config::SecurityConfig::default(),
+            create_default_admin: false,
+            default_admin_username: None,
+            default_admin_password: None,
+        }
+    });
+
+    let cors_layer = create_cors_layer(&app_config.security.cors);
+    let security_config = app_config.security.clone();
+
+    // Create route groups with security middleware
     let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone())
-        .layer(
-            CorsLayer::new()
-                .allow_methods(vec![Method::GET, Method::POST])
-                .allow_origin(Any),
-        );
+        .layer(cors_layer.clone());
 
     // Create API key management routes (JWT authentication required)
     let api_key_routes = create_api_key_routes(state.api_key_service.clone())
@@ -327,6 +350,10 @@ pub fn create_app(state: AppState) -> Router {
         .nest("/api/v1/stream", stream_routes)
         .nest("/api/v1/admin", health_routes)
         .nest("/api/v1/rate-limits", rate_limit_routes)
+        .layer(axum::middleware::from_fn(move |req, next| {
+            let config = security_config.clone();
+            async move { development_security_middleware(config, req, next).await }
+        }))
 }
 
 /// Start the server with BackendRouter (now the main/default server)
