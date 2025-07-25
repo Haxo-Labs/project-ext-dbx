@@ -82,7 +82,7 @@ pub struct BackendCapabilities {
 docker pull effortlesslabs/dbx:latest
 
 # Run with Redis backend
-docker run -p 3000:3000 -e BACKEND_TYPE=redis -e REDIS_URL=redis://your-redis-server:6379 effortlesslabs/dbx:latest
+docker run -p 3000:3000 -e DBX_BACKEND_1_PROVIDER=redis -e DBX_BACKEND_1_URL=redis://your-redis-server:6379 -e DBX_DEFAULT_BACKEND=backend_1 effortlesslabs/dbx:latest
 
 # Run with auto-discovery
 docker run -p 3000:3000 effortlesslabs/dbx:latest
@@ -99,7 +99,9 @@ services:
       - "3000:3000"
     environment:
       - BACKEND_TYPE=redis
-      - REDIS_URL=redis://redis:6379
+      - DBX_BACKEND_1_PROVIDER=redis
+      - DBX_BACKEND_1_URL=redis://redis:6379
+      - DBX_DEFAULT_BACKEND=backend_1
     depends_on:
       - redis
 
@@ -120,7 +122,7 @@ cd dbx
 cargo build --release
 
 # Run with Redis backend
-BACKEND_TYPE=redis REDIS_URL=redis://localhost:6379 ./target/release/dbx
+DBX_BACKEND_1_PROVIDER=redis DBX_BACKEND_1_URL=redis://localhost:6379 DBX_DEFAULT_BACKEND=backend_1 ./target/release/dbx
 
 # Run with auto-detection
 ./target/release/dbx
@@ -153,9 +155,13 @@ DBX supports multiple configuration methods:
 BACKEND_TYPE=redis
 
 # Backend-specific URLs
-REDIS_URL=redis://localhost:6379
-MONGO_URL=mongodb://localhost:27017/dbx
-POSTGRES_URL=postgresql://localhost:5432/dbx
+DBX_BACKEND_1_PROVIDER=redis
+DBX_BACKEND_1_URL=redis://localhost:6379
+DBX_BACKEND_2_PROVIDER=mongodb  
+DBX_BACKEND_2_URL=mongodb://localhost:27017/dbx
+DBX_BACKEND_3_PROVIDER=postgresql
+DBX_BACKEND_3_URL=postgresql://localhost:5432/dbx
+DBX_DEFAULT_BACKEND=backend_1
 
 # Server configuration
 PORT=3000

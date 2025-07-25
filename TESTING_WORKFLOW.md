@@ -51,7 +51,7 @@ The testing workflow addresses the requirement that all crate tests need to run 
 docker run -d --name test-redis -p 6379:6379 redis:7-alpine
 
 # Start DBX server manually
-BACKEND_TYPE=redis REDIS_URL=redis://localhost:6379 cargo run -p dbx-api --release &
+DBX_BACKEND_1_PROVIDER=redis DBX_BACKEND_1_URL=redis://localhost:6379 DBX_DEFAULT_BACKEND=backend_1 cargo run -p dbx-api --release &
 SERVER_PID=$!
 
 # Wait for server
@@ -97,9 +97,13 @@ DBX_WS_HOST_URL=ws://localhost:3000/ws
 BACKEND_TYPE=redis  # or mongo, postgres, sqlite
 
 # Backend-specific URLs
-REDIS_URL=redis://localhost:6379
-MONGO_URL=mongodb://localhost:27017/test
-POSTGRES_URL=postgresql://localhost:5432/test
+DBX_BACKEND_1_PROVIDER=redis
+DBX_BACKEND_1_URL=redis://localhost:6379
+DBX_BACKEND_2_PROVIDER=mongodb
+DBX_BACKEND_2_URL=mongodb://localhost:27017/test
+DBX_BACKEND_3_PROVIDER=postgresql
+DBX_BACKEND_3_URL=postgresql://localhost:5432/test
+DBX_DEFAULT_BACKEND=backend_1
 SQLITE_PATH=./test.db
 
 # Optional server settings
@@ -114,26 +118,30 @@ LOG_LEVEL=INFO
 Create backend-specific `.env` files:
 
 #### Redis Backend (`.env.redis`)
+
 ```bash
-BACKEND_TYPE=redis
-REDIS_URL=redis://localhost:6379
-POOL_SIZE=10
+DBX_BACKEND_1_PROVIDER=redis
+DBX_BACKEND_1_URL=redis://localhost:6379
+DBX_BACKEND_1_POOL_SIZE=10
+DBX_DEFAULT_BACKEND=backend_1
 ```
 
 #### MongoDB Backend (`.env.mongo`)
+
 ```bash
-BACKEND_TYPE=mongo
-MONGO_URL=mongodb://localhost:27017/dbx_test
-MONGO_DATABASE=dbx_test
-POOL_SIZE=5
+DBX_BACKEND_1_PROVIDER=mongodb
+DBX_BACKEND_1_URL=mongodb://localhost:27017/dbx_test
+DBX_BACKEND_1_POOL_SIZE=5
+DBX_DEFAULT_BACKEND=backend_1
 ```
 
 #### PostgreSQL Backend (`.env.postgres`)
+
 ```bash
-BACKEND_TYPE=postgres
-POSTGRES_URL=postgresql://localhost:5432/dbx_test
-POSTGRES_DATABASE=dbx_test
-POOL_SIZE=8
+DBX_BACKEND_1_PROVIDER=postgresql
+DBX_BACKEND_1_URL=postgresql://localhost:5432/dbx_test
+DBX_BACKEND_1_POOL_SIZE=8
+DBX_DEFAULT_BACKEND=backend_1
 ```
 
 ## Test Execution Order

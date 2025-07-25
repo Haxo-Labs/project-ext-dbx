@@ -25,8 +25,11 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Database configuration - connect to Redis service
-      - REDIS_URL=redis://redis:6379
+      # Backend configuration
+      - DBX_BACKEND_1_NAME=redis_primary
+      - DBX_BACKEND_1_PROVIDER=redis
+      - DBX_BACKEND_1_URL=redis://redis:6379
+      - DBX_DEFAULT_BACKEND=redis_primary
 
       # Server configuration
       - HOST=0.0.0.0

@@ -18,7 +18,9 @@ The fastest way to get started:
 ```bash
 # Run with Docker
 docker run -d --name dbx -p 3000:3000 \
-  -e REDIS_URL=redis://localhost:6379 \
+  -e DBX_BACKEND_1_PROVIDER=redis \
+-e DBX_BACKEND_1_URL=redis://localhost:6379 \
+-e DBX_DEFAULT_BACKEND=backend_1 \
   effortlesslabs/0dbx_redis:latest
 
 # Or use Docker Compose
@@ -43,7 +45,7 @@ docker run -p 3000:3000 effortlesslabs/0dbx_redis:latest
 
 ```bash
 # Run with custom Redis URL
-docker run -p 3000:3000 -e REDIS_URL=redis://your-redis-server:6379 effortlesslabs/0dbx_redis:latest
+docker run -p 3000:3000 -e DBX_BACKEND_1_PROVIDER=redis -e DBX_BACKEND_1_URL=redis://your-redis-server:6379 -e DBX_DEFAULT_BACKEND=backend_1 effortlesslabs/0dbx_redis:latest
 
 # Run with custom port
 docker run -p 8080:3000 effortlesslabs/0dbx_redis:latest
@@ -64,7 +66,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - REDIS_URL=redis://redis:6379
+              - DBX_BACKEND_1_PROVIDER=redis
+        - DBX_BACKEND_1_URL=redis://redis:6379
+        - DBX_DEFAULT_BACKEND=backend_1
     depends_on:
       - redis
 

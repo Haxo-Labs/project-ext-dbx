@@ -31,7 +31,7 @@ source ./scripts/config.sh
 
 **Sets:**
 
-- `REDIS_URL=redis://localhost:6379`
+- `DBX_BACKEND_1_PROVIDER=redis DBX_BACKEND_1_URL=redis://localhost:6379 DBX_DEFAULT_BACKEND=backend_1`
 - `HOST=0.0.0.0`
 - `PORT=3000`
 - `LOG_LEVEL=DEBUG`
@@ -208,9 +208,13 @@ Scripts use these environment variables (with defaults):
 
 ```bash
 # Database Configuration
-REDIS_URL=redis://localhost:6379
-MONGO_URL=mongodb://localhost:27017/dbx
-POSTGRES_URL=postgresql://localhost:5432/dbx
+DBX_BACKEND_1_PROVIDER=redis
+DBX_BACKEND_1_URL=redis://localhost:6379
+DBX_BACKEND_2_PROVIDER=mongodb
+DBX_BACKEND_2_URL=mongodb://localhost:27017/dbx
+DBX_BACKEND_3_PROVIDER=postgresql  
+DBX_BACKEND_3_URL=postgresql://localhost:5432/dbx
+DBX_DEFAULT_BACKEND=backend_1
 
 # Server Configuration
 DBX_HOST=0.0.0.0
@@ -239,7 +243,9 @@ Development environment configuration:
 
 ```bash
 # Development settings
-REDIS_URL=redis://localhost:6379
+DBX_BACKEND_1_PROVIDER=redis
+DBX_BACKEND_1_URL=redis://localhost:6379
+DBX_DEFAULT_BACKEND=backend_1
 HOST=127.0.0.1
 PORT=3000
 LOG_LEVEL=DEBUG
@@ -256,7 +262,9 @@ Production environment configuration:
 
 ```bash
 # Production settings
-REDIS_URL=redis://redis:6379
+DBX_BACKEND_1_PROVIDER=redis
+DBX_BACKEND_1_URL=redis://redis:6379
+DBX_DEFAULT_BACKEND=backend_1
 HOST=0.0.0.0
 PORT=3000
 LOG_LEVEL=WARN
