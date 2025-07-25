@@ -119,7 +119,6 @@ jobs:
           ./scripts/test-simple.sh --verbose
         env:
           REDIS_URL: redis://localhost:6379
-          DBX_BASE_URL: http://localhost:3000
 
       - name: Stop server
         if: always()
