@@ -1,11 +1,8 @@
-use crate::models::{
-    ApiKey, ApiKeyContext, ApiKeyPermission, ApiKeyUsageStats, CreateApiKeyRequest,
-    UpdateApiKeyRequest, UserRole,
-};
+use crate::models::{ApiKey, ApiKeyContext, ApiKeyUsageStats, CreateApiKeyRequest, UserRole};
 use async_trait::async_trait;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Timelike, Utc};
-use dbx_core::UniversalBackend;
+use dbx_core::{DataOperation, DataResult, DataValue, UniversalBackend};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -256,6 +253,45 @@ impl ApiKeyService {
         Ok(())
     }
 
+    /// Add member to a set (simulated with JSON array)
+    async fn add_to_set(&self, key: &str, member: &str) -> Result<(), ApiKeyError> {
+        use dbx_core::{DataOperation, DataResult, DataValue};
+
+        // Get current set members
+        let mut members: Vec<String> = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => serde_json::from_str(&json).unwrap_or_else(|_| Vec::new()),
+            _ => Vec::new(),
+        };
+
+        // Add member if not already present
+        if !members.contains(&member.to_string()) {
+            members.push(member.to_string());
+            let json = serde_json::to_string(&members)
+                .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+
+            self.backend
+                .execute_data(DataOperation::Set {
+                    key: key.to_string(),
+                    value: DataValue::String(json),
+                    ttl: None,
+                })
+                .await
+                .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
     /// Get API key by hash
     async fn get_api_key_by_hash(&self, key_hash: &str) -> Result<ApiKey, ApiKeyError> {
         use dbx_core::{DataOperation, DataResult, DataValue};
@@ -270,12 +306,17 @@ impl ApiKeyService {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(id)),
-                ..
-            }) => id,
-            Ok(DataResult::Get { value: None, .. }) => return Err(ApiKeyError::KeyNotFound),
-            Ok(_) => return Err(ApiKeyError::KeyNotFound),
+            Ok(data_result) => {
+                if let dbx_core::DataResult::Get {
+                    value: Some(DataValue::String(id)),
+                    ..
+                } = data_result
+                {
+                    id
+                } else {
+                    return Err(ApiKeyError::KeyNotFound);
+                }
+            }
             Err(e) => return Err(ApiKeyError::DatabaseError(e.to_string())),
         };
 
@@ -313,19 +354,234 @@ impl ApiKeyService {
 
     /// Check if key name exists for user
     async fn key_name_exists(&self, owner_id: &str, name: &str) -> Result<bool, ApiKeyError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
         let name_key = format!("api_key:name:{}:{}", owner_id, name);
-        let exists = dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .get(&name_key)
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?
-            .is_some();
 
-        Ok(exists)
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: name_key,
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get { value: Some(_), .. }) => Ok(true),
+            Ok(DataResult::Get { value: None, .. }) => Ok(false),
+            Ok(_) => Ok(false),
+            Err(e) => Err(ApiKeyError::DatabaseError(e.to_string())),
+        }
+    }
+
+    /// Get user's API keys with pagination and optional filtering
+    pub async fn get_user_keys_paginated(
+        &self,
+        owner_id: &str,
+        offset: usize,
+        limit: usize,
+        name_filter: Option<&str>,
+    ) -> Result<Vec<ApiKey>, ApiKeyError> {
+        // Get user's key IDs from set
+        let user_keys = format!("api_keys:user:{}", owner_id);
+        let key_ids = self.get_set_members(&user_keys).await?;
+
+        let mut keys = Vec::new();
+        for key_id in key_ids.iter().skip(offset).take(limit) {
+            if let Ok(api_key) = self.get_api_key_by_id(key_id).await {
+                if let Some(filter) = name_filter {
+                    if api_key.name.contains(filter) {
+                        keys.push(api_key);
+                    }
+                } else {
+                    keys.push(api_key);
+                }
+            }
+        }
+
+        Ok(keys)
+    }
+
+    /// Get set members (simulated with JSON array)
+    async fn get_set_members(&self, key: &str) -> Result<Vec<String>, ApiKeyError> {
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => {
+                serde_json::from_str(&json).map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+            }
+            Ok(DataResult::Get { value: None, .. }) => Ok(Vec::new()),
+            Ok(_) => Ok(Vec::new()),
+            Err(e) => Err(ApiKeyError::DatabaseError(e.to_string())),
+        }
+    }
+
+    /// Get API key usage stats by ID
+    pub async fn get_key_usage_stats(&self, key_id: &str) -> Result<ApiKeyUsageStats, ApiKeyError> {
+        let usage_key = format!("api_key:usage:{}", key_id);
+
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: usage_key,
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => {
+                serde_json::from_str(&json).map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+            }
+            Ok(DataResult::Get { value: None, .. }) => {
+                // Return default stats if none exist
+                Ok(ApiKeyUsageStats {
+                    total_requests: 0,
+                    last_used_at: None,
+                    requests_today: 0,
+                    requests_this_hour: 0,
+                })
+            }
+            Ok(_) => Err(ApiKeyError::DatabaseError(
+                "Invalid data format".to_string(),
+            )),
+            Err(e) => Err(ApiKeyError::DatabaseError(e.to_string())),
+        }
+    }
+
+    /// Update API key usage statistics
+    pub async fn update_usage_stats(&self, key_id: &str) -> Result<(), ApiKeyError> {
+        let usage_key = format!("api_key:usage:{}", key_id);
+        let now = Utc::now();
+
+        // Get current stats or create new ones
+        let mut stats =
+            self.get_key_usage_stats(key_id)
+                .await
+                .unwrap_or_else(|_| ApiKeyUsageStats {
+                    total_requests: 0,
+                    last_used_at: None,
+                    requests_today: 0,
+                    requests_this_hour: 0,
+                });
+
+        // Update stats
+        stats.total_requests += 1;
+        stats.last_used_at = Some(now);
+
+        // Simple daily increment (in production this would be more sophisticated)
+        stats.requests_today += 1;
+        stats.requests_this_hour += 1;
+
+        // Store updated stats
+        let stats_json =
+            serde_json::to_string(&stats).map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+
+        self.backend
+            .execute_data(DataOperation::Set {
+                key: usage_key,
+                value: DataValue::String(stats_json),
+                ttl: None,
+            })
+            .await
+            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Delete API key and clean up related data
+    pub async fn delete_api_key(&self, key_id: &str, owner_id: &str) -> Result<(), ApiKeyError> {
+        // Get the API key to get its hash for cleanup
+        let api_key = self.get_api_key_by_id(key_id).await?;
+
+        // Delete main API key record
+        let key_id_key = format!("api_key:id:{}", key_id);
+        self.backend
+            .execute_data(DataOperation::Delete {
+                key: key_id_key,
+                fields: None,
+            })
+            .await
+            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+
+        // Delete hash lookup
+        let hash_key = format!("api_key:hash:{}", api_key.key_hash);
+        self.backend
+            .execute_data(DataOperation::Delete {
+                key: hash_key,
+                fields: None,
+            })
+            .await
+            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+
+        // Remove from user's key set
+        let user_keys = format!("api_keys:user:{}", owner_id);
+        self.remove_from_set(&user_keys, key_id).await?;
+
+        // Delete name index
+        let name_key = format!("api_key:name:{}:{}", owner_id, api_key.name);
+        self.backend
+            .execute_data(DataOperation::Delete {
+                key: name_key,
+                fields: None,
+            })
+            .await
+            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+
+        // Delete usage stats
+        let usage_key = format!("api_key:usage:{}", key_id);
+        self.backend
+            .execute_data(DataOperation::Delete {
+                key: usage_key,
+                fields: None,
+            })
+            .await
+            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Remove member from a set (simulated with JSON array)
+    async fn remove_from_set(&self, key: &str, member: &str) -> Result<(), ApiKeyError> {
+        // Get current set members
+        let mut members: Vec<String> = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => serde_json::from_str(&json).unwrap_or_else(|_| Vec::new()),
+            _ => Vec::new(),
+        };
+
+        // Remove member if present
+        if let Some(pos) = members.iter().position(|x| x == member) {
+            members.remove(pos);
+            let json = serde_json::to_string(&members)
+                .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+
+            self.backend
+                .execute_data(DataOperation::Set {
+                    key: key.to_string(),
+                    value: DataValue::String(json),
+                    ttl: None,
+                })
+                .await
+                .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+        }
+
+        Ok(())
     }
 
     /// Check rate limiting for API key
@@ -339,7 +595,7 @@ impl ApiKeyService {
         };
 
         let conn = self
-            .redis_pool
+            .backend
             .get_connection()
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
         let conn_arc = Arc::new(std::sync::Mutex::new(conn));
@@ -369,230 +625,6 @@ impl ApiKeyService {
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
 
         Ok(())
-    }
-
-    /// Update usage statistics for API key
-    async fn update_usage_stats(&self, api_key_id: &str) -> Result<(), ApiKeyError> {
-        let mut api_key = self.get_api_key_by_id(api_key_id).await?;
-
-        let now = Utc::now();
-        api_key.usage_stats.total_requests += 1;
-        api_key.usage_stats.last_used_at = Some(now);
-
-        // Update daily and hourly usage counters with Redis atomic operations
-        let today = now.date_naive();
-        let hour = now.hour();
-
-        // For this implementation, we'll just increment the counters
-        // In a production system, you might want to use separate Redis keys
-        // to track daily/hourly usage more precisely
-        api_key.usage_stats.requests_today += 1;
-        api_key.usage_stats.requests_this_hour += 1;
-
-        api_key.updated_at = now;
-
-        // Store updated API key
-        self.store_api_key(&api_key).await?;
-
-        Ok(())
-    }
-
-    /// List API keys for a user
-    pub async fn list_user_api_keys(
-        &self,
-        owner_id: &str,
-        limit: u32,
-        offset: u32,
-        active_only: bool,
-    ) -> Result<(Vec<ApiKey>, u32), ApiKeyError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
-        // Get user's API key IDs
-        let user_keys = format!("api_keys:user:{}", owner_id);
-        let key_ids = dbx_adapter::redis::primitives::set::RedisSet::new(conn_arc)
-            .smembers(&user_keys)
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-
-        // Fetch API keys
-        let mut api_keys = Vec::new();
-        for key_id in key_ids {
-            if let Ok(api_key) = self.get_api_key_by_id(&key_id).await {
-                if !active_only || api_key.is_active {
-                    api_keys.push(api_key);
-                }
-            }
-        }
-
-        // Sort by creation date (newest first)
-        api_keys.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-
-        let total = api_keys.len() as u32;
-
-        // Apply pagination
-        let start = offset as usize;
-        let end = std::cmp::min(start + limit as usize, api_keys.len());
-        let paginated_keys = if start < api_keys.len() {
-            api_keys[start..end].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        Ok((paginated_keys, total))
-    }
-
-    /// Update an API key
-    pub async fn update_api_key(
-        &self,
-        id: &str,
-        owner_id: &str,
-        update_request: UpdateApiKeyRequest,
-    ) -> Result<ApiKey, ApiKeyError> {
-        let mut api_key = self.get_api_key_by_id(id).await?;
-
-        // Verify ownership
-        if api_key.owner_id != owner_id {
-            return Err(ApiKeyError::KeyNotFound);
-        }
-
-        // Update fields
-        if let Some(name) = update_request.name {
-            if name.trim().is_empty() {
-                return Err(ApiKeyError::ValidationError(
-                    "Name cannot be empty".to_string(),
-                ));
-            }
-            if name != api_key.name && self.key_name_exists(owner_id, &name).await? {
-                return Err(ApiKeyError::KeyNameExists);
-            }
-            api_key.name = name.trim().to_string();
-        }
-
-        if let Some(description) = update_request.description {
-            api_key.description = if description.trim().is_empty() {
-                None
-            } else {
-                Some(description.trim().to_string())
-            };
-        }
-
-        if let Some(is_active) = update_request.is_active {
-            api_key.is_active = is_active;
-        }
-
-        if let Some(requests) = update_request.rate_limit_requests {
-            if requests == 0 {
-                return Err(ApiKeyError::ValidationError(
-                    "Rate limit requests must be greater than 0".to_string(),
-                ));
-            }
-            api_key.rate_limit_requests = Some(requests);
-        }
-
-        if let Some(window) = update_request.rate_limit_window_seconds {
-            if window == 0 {
-                return Err(ApiKeyError::ValidationError(
-                    "Rate limit window must be greater than 0".to_string(),
-                ));
-            }
-            api_key.rate_limit_window_seconds = Some(window);
-        }
-
-        api_key.updated_at = Utc::now();
-
-        // Store updated API key
-        self.store_api_key(&api_key).await?;
-
-        Ok(api_key)
-    }
-
-    /// Rotate an API key (generate new key, keep same metadata)
-    pub async fn rotate_api_key(
-        &self,
-        id: &str,
-        owner_id: &str,
-    ) -> Result<(ApiKey, String), ApiKeyError> {
-        let mut api_key = self.get_api_key_by_id(id).await?;
-
-        // Verify ownership
-        if api_key.owner_id != owner_id {
-            return Err(ApiKeyError::KeyNotFound);
-        }
-
-        // Generate new key
-        let (new_api_key, new_key_prefix) = Self::generate_api_key()?;
-        let new_key_hash = Self::hash_api_key(&new_api_key)?;
-
-        // Remove old hash mapping
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
-        let old_hash_key = format!("api_key:hash:{}", api_key.key_hash);
-        // Note: In a production system, you might want to keep old keys valid for a grace period
-        // Immediately invalidate the previous key for security
-
-        // Update API key with new hash and prefix
-        api_key.key_hash = new_key_hash;
-        api_key.key_prefix = new_key_prefix;
-        api_key.updated_at = Utc::now();
-
-        // Store updated API key
-        self.store_api_key(&api_key).await?;
-
-        Ok((api_key, new_api_key))
-    }
-
-    /// Delete an API key
-    pub async fn delete_api_key(&self, id: &str, owner_id: &str) -> Result<bool, ApiKeyError> {
-        let api_key = self.get_api_key_by_id(id).await?;
-
-        // Verify ownership
-        if api_key.owner_id != owner_id {
-            return Err(ApiKeyError::KeyNotFound);
-        }
-
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
-        // Remove from all Redis keys
-        let key_id = format!("api_key:id:{}", id);
-        let key_hash = format!("api_key:hash:{}", api_key.key_hash);
-        let user_keys = format!("api_keys:user:{}", owner_id);
-        let name_key = format!("api_key:name:{}:{}", api_key.owner_id, api_key.name);
-
-        // Delete all references
-        let string_redis =
-            dbx_adapter::redis::primitives::string::RedisString::new(conn_arc.clone());
-        let set_redis = dbx_adapter::redis::primitives::set::RedisSet::new(conn_arc);
-
-        // Delete main record and hash mapping
-        // Note: RedisString doesn't have a delete method in the current implementation
-        // We'll set to empty string as a workaround
-        string_redis
-            .set(&key_id, "")
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        string_redis
-            .set(&key_hash, "")
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        string_redis
-            .set(&name_key, "")
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-
-        // Remove from user's key set
-        set_redis
-            .srem(&user_keys, &[&id])
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-
-        Ok(true)
     }
 }
 
