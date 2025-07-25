@@ -266,9 +266,13 @@ impl ApiKeyService {
             })
             .await
         {
-            Ok(data_result) => {
-                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
-                    serde_json::from_str(&json).unwrap_or_else(|_| Vec::new())
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json)) = result.data {
+                        serde_json::from_str(&json).unwrap_or_else(|_| Vec::new())
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
                 }
@@ -297,7 +301,7 @@ impl ApiKeyService {
 
     /// Get API key by hash
     async fn get_api_key_by_hash(&self, key_hash: &str) -> Result<ApiKey, ApiKeyError> {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
         // Get API key ID from hash
         let hash_key = format!("api_key:hash:{}", key_hash);
@@ -309,9 +313,13 @@ impl ApiKeyService {
             })
             .await
         {
-            Ok(data_result) => {
-                if let dbx_core::DataResult::Get { value: Some(DataValue::String(id)), .. } = data_result {
-                    id
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(id)) = result.data {
+                        id
+                    } else {
+                        return Err(ApiKeyError::KeyNotFound);
+                    }
                 } else {
                     return Err(ApiKeyError::KeyNotFound);
                 }
@@ -336,9 +344,13 @@ impl ApiKeyService {
             })
             .await
         {
-            Ok(data_result) => {
-                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
-                    json
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json)) = result.data {
+                        json
+                    } else {
+                        return Err(ApiKeyError::KeyNotFound);
+                    }
                 } else {
                     return Err(ApiKeyError::KeyNotFound);
                 }
@@ -355,14 +367,18 @@ impl ApiKeyService {
     /// Check if key name exists for user
     async fn key_name_exists(&self, owner_id: &str, name: &str) -> Result<bool, ApiKeyError> {
         let name_key = format!("api_key:name:{}:{}", owner_id, name);
-        
-        match self.backend.execute_data(DataOperation::Get {
-            key: name_key,
-            fields: None,
-        }).await {
-            Ok(data_result) => {
-                if let dbx_core::DataResult::Get { value: Some(_), .. } = data_result {
-                    Ok(true)
+
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: name_key,
+                fields: None,
+            })
+            .await
+        {
+            Ok(result) => {
+                if result.success {
+                    Ok(result.data.is_some())
                 } else {
                     Ok(false)
                 }
@@ -399,16 +415,102 @@ impl ApiKeyService {
         Ok(keys)
     }
 
+    /// List API keys for a user with pagination
+    pub async fn list_user_api_keys(
+        &self,
+        owner_id: &str,
+        limit: u32,
+        offset: u32,
+        active_only: bool,
+    ) -> Result<(Vec<ApiKey>, u32), ApiKeyError> {
+        let keys = self.get_user_keys_paginated(owner_id, offset as usize, limit as usize, None).await?;
+        
+        let filtered_keys: Vec<ApiKey> = if active_only {
+            keys.into_iter().filter(|key| key.is_active).collect()
+        } else {
+            keys
+        };
+
+        let total = filtered_keys.len() as u32;
+        Ok((filtered_keys, total))
+    }
+
+    /// Update an API key
+    pub async fn update_api_key(
+        &self,
+        id: &str,
+        owner_id: &str,
+        name: Option<String>,
+    ) -> Result<ApiKey, ApiKeyError> {
+        let mut api_key = self.get_api_key_by_id(id).await?;
+
+        // Verify ownership
+        if api_key.owner_id != owner_id {
+            return Err(ApiKeyError::KeyNotFound);
+        }
+
+        // Update name if provided
+        if let Some(new_name) = name {
+            if new_name.trim().is_empty() {
+                return Err(ApiKeyError::ValidationError("Name cannot be empty".to_string()));
+            }
+            api_key.name = new_name.trim().to_string();
+        }
+
+        api_key.updated_at = Utc::now();
+
+        // Store updated API key
+        self.store_api_key(&api_key).await?;
+
+        Ok(api_key)
+    }
+
+    /// Rotate an API key (generate new key, keep same metadata)
+    pub async fn rotate_api_key(
+        &self,
+        id: &str,
+        owner_id: &str,
+    ) -> Result<(ApiKey, String), ApiKeyError> {
+        let mut api_key = self.get_api_key_by_id(id).await?;
+
+        // Verify ownership
+        if api_key.owner_id != owner_id {
+            return Err(ApiKeyError::KeyNotFound);
+        }
+
+        // Generate new key
+        let (new_api_key_str, new_key_prefix) = Self::generate_api_key()?;
+        let new_key_hash = Self::hash_api_key(&new_api_key_str)?;
+
+        // Update API key with new hash and prefix
+        api_key.key_hash = new_key_hash;
+        api_key.key_prefix = new_key_prefix;
+        api_key.updated_at = Utc::now();
+
+        // Store updated API key
+        self.store_api_key(&api_key).await?;
+
+        Ok((api_key, new_api_key_str))
+    }
+
     /// Get set members (simulated with JSON array)
     async fn get_set_members(&self, key: &str) -> Result<Vec<String>, ApiKeyError> {
-        match self.backend.execute_data(DataOperation::Get {
-            key: key.to_string(),
-            fields: None,
-        }).await {
-            Ok(data_result) => {
-                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
-                    serde_json::from_str(&json)
-                        .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json)) = result.data {
+                        serde_json::from_str(&json)
+                            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+                    } else {
+                        Ok(Vec::new())
+                    }
                 } else {
                     Ok(Vec::new())
                 }
@@ -420,15 +522,28 @@ impl ApiKeyService {
     /// Get API key usage stats by ID
     pub async fn get_key_usage_stats(&self, key_id: &str) -> Result<ApiKeyUsageStats, ApiKeyError> {
         let usage_key = format!("api_key:usage:{}", key_id);
-        
-        match self.backend.execute_data(DataOperation::Get {
-            key: usage_key,
-            fields: None,
-        }).await {
-            Ok(data_result) => {
-                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
-                    serde_json::from_str(&json)
-                        .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: usage_key,
+                fields: None,
+            })
+            .await
+        {
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json)) = result.data {
+                        serde_json::from_str(&json)
+                            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+                    } else {
+                        Ok(ApiKeyUsageStats {
+                            total_requests: 0,
+                            last_used_at: None,
+                            requests_today: 0,
+                            requests_this_hour: 0,
+                        })
+                    }
                 } else {
                     Ok(ApiKeyUsageStats {
                         total_requests: 0,
@@ -545,9 +660,13 @@ impl ApiKeyService {
             })
             .await
         {
-            Ok(data_result) => {
-                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
-                    serde_json::from_str(&json).unwrap_or_else(|_| Vec::new())
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json)) = result.data {
+                        serde_json::from_str(&json).unwrap_or_else(|_| Vec::new())
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
                 }
@@ -574,47 +693,66 @@ impl ApiKeyService {
         Ok(())
     }
 
-    /// Check rate limiting for API key
-    async fn check_rate_limit(&self, api_key: &ApiKey) -> Result<(), ApiKeyError> {
-        let Some(requests) = api_key.rate_limit_requests else {
-            return Ok(()); // No rate limiting configured
+    /// Check rate limits for API key
+    pub async fn check_rate_limit(&self, api_key: &ApiKey) -> Result<bool, ApiKeyError> {
+        // Get rate limit settings
+        let (requests, window_seconds) = match (
+            api_key.rate_limit_requests,
+            api_key.rate_limit_window_seconds,
+        ) {
+            (Some(requests), Some(window)) => (requests, window),
+            _ => {
+                // No rate limits configured, allow request
+                return Ok(true);
+            }
         };
-
-        let Some(window_seconds) = api_key.rate_limit_window_seconds else {
-            return Ok(());
-        };
-
-        let conn = self
-            .backend
-            .get_connection()
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
 
         let now = Utc::now().timestamp();
         let window_start = now - window_seconds as i64;
 
-        // Use sorted set to track requests in time window
         let rate_limit_key = format!("rate_limit:{}:{}", api_key.id, now / window_seconds as i64);
 
-        // Count requests in current window
-        let current_count =
-            dbx_adapter::redis::primitives::string::RedisString::new(conn_arc.clone())
-                .get(&rate_limit_key)
-                .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(0);
+        // Get current request count in window
+        let current_count = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: rate_limit_key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(count_str)) = result.data {
+                        count_str.parse::<u32>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(count)) = result.data {
+                        count as u32
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
+        };
 
         if current_count >= requests {
-            return Err(ApiKeyError::RateLimitExceeded);
+            return Ok(false);
         }
 
         // Increment counter
         let new_count = current_count + 1;
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .set(&rate_limit_key, &new_count.to_string())
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+        let _ = self
+            .backend
+            .execute_data(DataOperation::Set {
+                key: rate_limit_key,
+                value: DataValue::Int(new_count as i64),
+                ttl: Some(window_seconds as u64),
+            })
+            .await;
 
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -701,26 +839,13 @@ mod tests {
     }
 
     #[test]
-    fn test_update_api_key_request() {
-        let update_request = UpdateApiKeyRequest {
-            name: Some("Updated Name".to_string()),
-            description: Some("Updated description".to_string()),
-            is_active: Some(false),
-            rate_limit_requests: Some(500),
-            rate_limit_window_seconds: Some(1800),
-        };
-
-        assert_eq!(update_request.name, Some("Updated Name".to_string()));
-        assert_eq!(update_request.is_active, Some(false));
-    }
-
-    #[test]
     fn test_api_key_usage_stats_default() {
         let stats = ApiKeyUsageStats::default();
+
         assert_eq!(stats.total_requests, 0);
+        assert!(stats.last_used_at.is_none());
         assert_eq!(stats.requests_today, 0);
         assert_eq!(stats.requests_this_hour, 0);
-        assert!(stats.last_used_at.is_none());
     }
 
     #[test]

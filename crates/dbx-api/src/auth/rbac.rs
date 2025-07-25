@@ -238,8 +238,7 @@ impl RbacService {
         assignment.is_active = false;
 
         // Store updated assignment
-        self.set_redis_value(&assignment_key, &assignment, None)
-            .await?;
+        self.set_redis_value(&assignment_key, &assignment).await?;
 
         // Remove from user's active roles set
         let user_roles_key = format!("rbac:user_roles:{}", user_id);
@@ -331,7 +330,7 @@ impl RbacService {
 
         // Store role in Redis
         let role_key = format!("rbac:role:{}", name);
-        self.set_redis_value(&role_key, &role, None).await?;
+        self.set_redis_value(&role_key, &role).await?;
 
         // Audit log the creation
         if self.config.audit_enabled {
@@ -526,8 +525,7 @@ impl RbacService {
         let role_users_key = format!("rbac:role_users:{}", assignment.role_name);
 
         // Store assignment
-        self.set_redis_value(&assignment_key, assignment, assignment.expires_at)
-            .await?;
+        self.set_redis_value(&assignment_key, assignment).await?;
 
         // Add to user's roles set
         self.add_to_redis_set(&user_roles_key, &assignment.role_name)
@@ -652,7 +650,7 @@ impl RbacService {
         let audit_index_key = format!("rbac:audit_index:{}", entry.timestamp.format("%Y%m%d"));
 
         // Store audit entry
-        self.set_redis_value(&audit_key, &entry, None).await?;
+        self.set_redis_value(&audit_key, &entry).await?;
 
         // Add to daily index for efficient querying
         self.add_to_redis_set(&audit_index_key, &entry.id).await?;
@@ -739,7 +737,7 @@ impl RbacService {
     where
         T: for<'de> Deserialize<'de>,
     {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
         match self
             .backend
@@ -749,26 +747,24 @@ impl RbacService {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(value)),
-                ..
-            }) => {
-                let deserialized: T = serde_json::from_str(&value)
-                    .map_err(|e| RbacError::SerializationError(e.to_string()))?;
-                Ok(Some(deserialized))
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(value)) = result.data {
+                        let deserialized: T = serde_json::from_str(&value)
+                            .map_err(|e| RbacError::SerializationError(e.to_string()))?;
+                        Ok(Some(deserialized))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
             }
-            Ok(DataResult::Get { value: None, .. }) => Ok(None),
-            Ok(_) => Ok(None),
             Err(e) => Err(RbacError::RedisError(e.to_string())),
         }
     }
 
-    async fn set_redis_value<T>(
-        &self,
-        key: &str,
-        value: &T,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<(), RbacError>
+    async fn set_redis_value<T>(&self, key: &str, value: &T) -> Result<(), RbacError>
     where
         T: Serialize,
     {
@@ -777,13 +773,11 @@ impl RbacService {
         let serialized = serde_json::to_string(value)
             .map_err(|e| RbacError::SerializationError(e.to_string()))?;
 
-        let ttl = expires_at.map(|exp| ((exp - Utc::now()).num_seconds().max(1)) as u64);
-
         self.backend
             .execute_data(DataOperation::Set {
                 key: key.to_string(),
                 value: DataValue::String(serialized),
-                ttl,
+                ttl: None,
             })
             .await
             .map_err(|e| RbacError::RedisError(e.to_string()))?;
@@ -806,25 +800,10 @@ impl RbacService {
     }
 
     async fn add_to_redis_set(&self, key: &str, member: &str) -> Result<(), RbacError> {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
-        // Get current set members
-        let mut members: Vec<String> = match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: key.to_string(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => serde_json::from_str(&json).unwrap_or_else(|_| Vec::new()),
-            _ => Vec::new(),
-        };
-
-        // Add member if not already present
+        // Simulate set operations using JSON array
+        let mut members = self.get_redis_set_members(key).await?;
         if !members.contains(&member.to_string()) {
             members.push(member.to_string());
             let json = serde_json::to_string(&members)
@@ -844,25 +823,9 @@ impl RbacService {
     }
 
     async fn remove_from_redis_set(&self, key: &str, member: &str) -> Result<(), RbacError> {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
-        // Get current set members
-        let mut members: Vec<String> = match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: key.to_string(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => serde_json::from_str(&json).unwrap_or_else(|_| Vec::new()),
-            _ => Vec::new(),
-        };
-
-        // Remove member if present
+        let mut members = self.get_redis_set_members(key).await?;
         if let Some(pos) = members.iter().position(|x| x == member) {
             members.remove(pos);
             let json = serde_json::to_string(&members)
@@ -882,7 +845,7 @@ impl RbacService {
     }
 
     async fn get_redis_set_members(&self, key: &str) -> Result<Vec<String>, RbacError> {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
         match self
             .backend
@@ -892,13 +855,18 @@ impl RbacService {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => serde_json::from_str(&json)
-                .map_err(|e| RbacError::SerializationError(e.to_string())),
-            Ok(DataResult::Get { value: None, .. }) => Ok(Vec::new()),
-            Ok(_) => Ok(Vec::new()),
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json)) = result.data {
+                        serde_json::from_str(&json)
+                            .map_err(|e| RbacError::SerializationError(e.to_string()))
+                    } else {
+                        Ok(Vec::new())
+                    }
+                } else {
+                    Ok(Vec::new())
+                }
+            }
             Err(e) => Err(RbacError::RedisError(e.to_string())),
         }
     }
