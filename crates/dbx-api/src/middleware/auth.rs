@@ -3,12 +3,13 @@ use crate::{
     config::{AppConfig, JwtConfig},
     constants::errors::ErrorMessages,
     models::{
-        ApiKeyContext, ApiResponse, CreateUserRequest, LoginRequest, PaginationQuery,
-        PermissionCheckContext, RbacContext, User, UserRole,
+        ApiKeyContext, ApiResponse, Claims, CreateUserRequest, LoginRequest,
+        PermissionCheckContext, RbacContext, TokenType, User, UserRole,
     },
 };
 use async_trait::async_trait;
 use axum::{
+    extract::rejection::JsonRejection,
     extract::{Query, Request, State},
     http::{header, HeaderMap, StatusCode, Uri},
     middleware::Next,
@@ -16,8 +17,8 @@ use axum::{
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{DateTime, Duration, Utc};
-use dbx_core::{DataOperation, DataResult, DataValue, UniversalBackend};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use dbx_core::{DataOperation, DataValue, UniversalBackend};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
@@ -58,13 +59,6 @@ pub enum AuthError {
     DatabaseError(String),
     #[error("Internal error: {0}")]
     InternalError(String),
-}
-
-/// Token type for JWT tokens
-#[derive(Debug, Clone)]
-pub enum TokenType {
-    Access,
-    Refresh,
 }
 
 /// User store operations trait
@@ -130,7 +124,7 @@ impl UserStore {
 #[async_trait]
 impl UserStoreOperations for UserStore {
     async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError> {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
         let key = format!("user:username:{}", username);
 
@@ -139,22 +133,26 @@ impl UserStoreOperations for UserStore {
             .execute_data(DataOperation::Get { key, fields: None })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => {
-                let user: User = serde_json::from_str(&json)
-                    .map_err(|e| AuthError::InternalError(format!("JSON parse error: {}", e)))?;
-                Ok(Some(user))
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json)) = result.data {
+                        let user: User = serde_json::from_str(&json).map_err(|e| {
+                            AuthError::InternalError(format!("JSON parse error: {}", e))
+                        })?;
+                        Ok(Some(user))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
             }
-            Ok(DataResult::Get { value: None, .. }) => Ok(None),
-            Ok(_) => Ok(None),
             Err(e) => Err(AuthError::DatabaseError(e.to_string())),
         }
     }
 
     async fn get_user_by_id(&self, user_id: &str) -> Result<Option<User>, AuthError> {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
         let key = format!("user:id:{}", user_id);
 
@@ -163,16 +161,20 @@ impl UserStoreOperations for UserStore {
             .execute_data(DataOperation::Get { key, fields: None })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => {
-                let user: User = serde_json::from_str(&json)
-                    .map_err(|e| AuthError::InternalError(format!("JSON parse error: {}", e)))?;
-                Ok(Some(user))
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json)) = result.data {
+                        let user: User = serde_json::from_str(&json).map_err(|e| {
+                            AuthError::InternalError(format!("JSON parse error: {}", e))
+                        })?;
+                        Ok(Some(user))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
             }
-            Ok(DataResult::Get { value: None, .. }) => Ok(None),
-            Ok(_) => Ok(None),
             Err(e) => Err(AuthError::DatabaseError(e.to_string())),
         }
     }

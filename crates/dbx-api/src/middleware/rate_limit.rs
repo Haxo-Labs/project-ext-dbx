@@ -65,15 +65,20 @@ impl SlidingWindowRateLimiter {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(count_str)),
-                ..
-            }) => count_str.parse::<u32>().unwrap_or(0),
-            Ok(DataResult::Get {
-                value: Some(DataValue::Int(count)),
-                ..
-            }) => count as u32,
-            _ => 0,
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(count_str)) = result.data {
+                        count_str.parse::<u32>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(count)) = result.data {
+                        count as u32
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
         };
 
         let window_start_time = match self
@@ -84,15 +89,20 @@ impl SlidingWindowRateLimiter {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(time_str)),
-                ..
-            }) => time_str.parse::<i64>().unwrap_or(0),
-            Ok(DataResult::Get {
-                value: Some(DataValue::Int(time)),
-                ..
-            }) => time,
-            _ => 0,
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(time_str)) = result.data {
+                        time_str.parse::<i64>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(time)) = result.data {
+                        time
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
         };
 
         // Check if window has expired and reset if needed
@@ -224,15 +234,20 @@ impl SlidingWindowRateLimiter {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(count_str)),
-                ..
-            }) => count_str.parse::<u32>().unwrap_or(0),
-            Ok(DataResult::Get {
-                value: Some(DataValue::Int(count)),
-                ..
-            }) => count as u32,
-            _ => 0,
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(count_str)) = result.data {
+                        count_str.parse::<u32>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(count)) = result.data {
+                        count as u32
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
         };
 
         let window_start_time = match self
@@ -243,15 +258,20 @@ impl SlidingWindowRateLimiter {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(time_str)),
-                ..
-            }) => time_str.parse::<i64>().unwrap_or(0),
-            Ok(DataResult::Get {
-                value: Some(DataValue::Int(time)),
-                ..
-            }) => time,
-            _ => 0,
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(time_str)) = result.data {
+                        time_str.parse::<i64>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(time)) = result.data {
+                        time
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
         };
 
         let remaining = policy.requests.saturating_sub(current_count);
@@ -291,15 +311,20 @@ impl SlidingWindowRateLimiter {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(count_str)),
-                ..
-            }) => count_str.parse::<u32>().unwrap_or(0),
-            Ok(DataResult::Get {
-                value: Some(DataValue::Int(count)),
-                ..
-            }) => count as u32,
-            _ => 0,
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(count_str)) = result.data {
+                        count_str.parse::<u32>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(count)) = result.data {
+                        count as u32
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
         };
 
         let window_start_time = match self
@@ -310,15 +335,20 @@ impl SlidingWindowRateLimiter {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(time_str)),
-                ..
-            }) => time_str.parse::<i64>().unwrap_or(0),
-            Ok(DataResult::Get {
-                value: Some(DataValue::Int(time)),
-                ..
-            }) => time,
-            _ => 0,
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(time_str)) = result.data {
+                        time_str.parse::<i64>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(time)) = result.data {
+                        time
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
         };
 
         let remaining = policy.requests.saturating_sub(current_count);
@@ -404,15 +434,20 @@ impl RateLimitService {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::Int(count)),
-                ..
-            }) => Ok(count),
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(s)),
-                ..
-            }) => s.parse().map_err(|e| format!("Parse error: {}", e)),
-            _ => Ok(0),
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::Int(count)) = result.data {
+                        Ok(count)
+                    } else if let Some(DataValue::String(s)) = result.data {
+                        s.parse().map_err(|e| format!("Parse error: {}", e))
+                    } else {
+                        Ok(0)
+                    }
+                } else {
+                    Err(format!("Failed to get counter value for key: {}", key))
+                }
+            }
+            Err(e) => Err(e.to_string()),
         }
     }
 

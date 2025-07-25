@@ -76,4 +76,4 @@ LABEL version="0.1.6"
 LABEL org.opencontainers.image.source="https://github.com/effortlesslabs/dbx"
 
 # Run the binary
-CMD ["./dbx-api"] 
+CMD ["./dbx-api"]
