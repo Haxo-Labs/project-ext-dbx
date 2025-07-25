@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod rate_limit;
+pub mod security;
 
 pub use crate::auth::{ApiKeyService, RbacService};
 pub use auth::{
@@ -9,4 +10,8 @@ pub use auth::{
 pub use rate_limit::{
     add_rate_limit_headers, rate_limit_middleware, RateLimitPolicy, RateLimitResult,
     RateLimitService, SlidingWindowRateLimiter,
+};
+pub use security::{
+    create_cors_layer, development_security_middleware, security_headers_middleware,
+    security_validation_middleware,
 };
