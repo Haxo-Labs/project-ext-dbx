@@ -51,15 +51,16 @@ impl TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
 
-        // Use a test-specific Redis database (Redis supports databases 0-15)
+        // Use backend agnostic configuration - check for configured backend URL
         let test_db = (port % 16) as usize; // Use port to determine database
-        let redis_url = format!("redis://localhost:6379/{}", test_db);
+        let backend_url = std::env::var("DBX_BACKEND_1_URL")
+            .unwrap_or_else(|_| format!("redis://localhost:6379/{}", test_db));
 
         // Set up test environment
-        Self::setup_test_env(&redis_url, port)?;
+        Self::setup_test_env(&backend_url, port)?;
 
         // Create application state
-        let app_state = Self::create_test_app_state(&redis_url).await?;
+        let app_state = Self::create_test_app_state(&backend_url).await?;
         let app = create_app(app_state);
 
         // Start server
@@ -84,12 +85,16 @@ impl TestServer {
     }
 
     /// Set up test environment variables
-    fn setup_test_env(redis_url: &str, port: u16) -> Result<()> {
+    fn setup_test_env(backend_url: &str, port: u16) -> Result<()> {
         env::set_var(
             "JWT_SECRET",
             "test-jwt-secret-that-is-at-least-32-characters-long-for-security",
         );
-        env::set_var("REDIS_URL", redis_url);
+        // Set backend agnostic configuration
+        env::set_var("DBX_BACKEND_1_NAME", "test_backend");
+        env::set_var("DBX_BACKEND_1_PROVIDER", "redis");
+        env::set_var("DBX_BACKEND_1_URL", backend_url);
+        env::set_var("DBX_DEFAULT_BACKEND", "test_backend");
         env::set_var("HOST", "127.0.0.1");
         env::set_var("PORT", port.to_string());
         env::set_var("CREATE_DEFAULT_ADMIN", "true");
@@ -99,207 +104,12 @@ impl TestServer {
     }
 
     /// Create application state for testing
-    async fn create_test_app_state(redis_url: &str) -> Result<AppState> {
-        // Create backend configuration
-        let mut backends = HashMap::new();
-        backends.insert(
-            "default".to_string(),
-            BackendConfig {
-                provider: "redis".to_string(),
-                url: redis_url.to_string(),
-                pool_size: Some(5),
-                timeout_ms: Some(5000),
-                retry_attempts: Some(3),
-                retry_delay_ms: Some(1000),
-                capabilities: None,
-                additional_config: HashMap::new(),
-            },
-        );
-
-        let routing = RoutingConfig {
-            default_backend: "default".to_string(),
-            key_routing: Vec::new(),
-            operation_routing: HashMap::new(),
-            load_balancing: Some(LoadBalancingConfig {
-                strategy: LoadBalancingStrategy::RoundRobin,
-                backends: vec!["default".to_string()],
-                health_check_interval_ms: 30000,
-                weights: Some({
-                    let mut weights = HashMap::new();
-                    weights.insert("default".to_string(), 1.0);
-                    weights
-                }),
-            }),
-        };
-
-        let config = DbxConfig {
-            backends,
-            routing,
-            consistency: Default::default(),
-            performance: Default::default(),
-            security: Default::default(),
-            server: Default::default(),
-        };
-
-        // Build backend registry
-        let mut registry_builder = BackendRegistryBuilder::new();
-        let redis_factory = RedisBackendFactory::new();
-        registry_builder = registry_builder.with_factory("redis", redis_factory);
-        let registry = registry_builder.build();
-
-        // Initialize backends from configuration
-        registry
-            .initialize_backends(&config)
+    async fn create_test_app_state(backend_url: &str) -> Result<AppState> {
+        let app_state = AppState::new(None)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize backends: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create app state: {}", e))?;
 
-        // Create backend router
-        let backend_router = BackendRouter::new(registry, &config)
-            .map_err(|e| anyhow::anyhow!("Failed to create router: {}", e))?;
-
-        // Create Redis pool for user store
-        let redis_pool = Arc::new(RedisPool::new(redis_url, 5)?);
-
-        // Create JWT config
-        let jwt_config = JwtConfig {
-            secret: "test-jwt-secret-that-is-at-least-32-characters-long-for-security".to_string(),
-            access_token_expiration: 900,
-            refresh_token_expiration: 604800,
-            issuer: "dbx-test-api".to_string(),
-        };
-
-        // Create user store
-        let user_store = Arc::new(UserStore::new(redis_pool.clone()));
-
-        // Create JWT service
-        let jwt_service = Arc::new(JwtService::new(jwt_config, user_store.clone()));
-
-        // Create admin user
-        let admin_request = CreateUserRequest {
-            username: "testadmin".to_string(),
-            password: "testpassword123".to_string(),
-            role: UserRole::Admin,
-        };
-        let admin_user = user_store.create_user(admin_request).await?;
-
-        // Create additional test users
-        let test_user_request = CreateUserRequest {
-            username: "testuser".to_string(),
-            password: "testpassword123".to_string(),
-            role: UserRole::User,
-        };
-
-        let readonly_user_request = CreateUserRequest {
-            username: "testreadonly".to_string(),
-            password: "testpassword123".to_string(),
-            role: UserRole::ReadOnly,
-        };
-
-        // Create test users
-        let test_user_request = CreateUserRequest {
-            username: "testuser".to_string(),
-            password: "testpassword123".to_string(),
-            role: UserRole::User,
-        };
-        let test_user = user_store.create_user(test_user_request).await?;
-
-        let readonly_user_request = CreateUserRequest {
-            username: "testreadonly".to_string(),
-            password: "testpassword123".to_string(),
-            role: UserRole::ReadOnly,
-        };
-        let readonly_user = user_store.create_user(readonly_user_request).await?;
-
-        // Create API key service
-        let api_key_service = Arc::new(ApiKeyService::new(redis_pool.clone()));
-
-        // Create RBAC service
-        let rbac_config = RbacConfig::default();
-        let rbac_service = Arc::new(RbacService::new(redis_pool.clone(), rbac_config));
-
-        // Create rate limit service
-        let rate_limit_service = Arc::new(RateLimitService::new(redis_pool));
-
-        // Set up RBAC roles and assignments for test users
-        let admin_permissions = Permission::admin()
-            .permission_names()
-            .into_iter()
-            .map(|p| p.to_string())
-            .collect();
-        rbac_service
-            .create_role(
-                "admin",
-                "Administrator Role",
-                admin_permissions,
-                None,
-                "system",
-            )
-            .await
-            .ok();
-
-        let user_permissions = Permission::read_write()
-            .permission_names()
-            .into_iter()
-            .map(|p| p.to_string())
-            .collect();
-        rbac_service
-            .create_role(
-                "user",
-                "Standard User Role",
-                user_permissions,
-                None,
-                "system",
-            )
-            .await
-            .ok();
-
-        let readonly_permissions = Permission::read_only()
-            .permission_names()
-            .into_iter()
-            .map(|p| p.to_string())
-            .collect();
-        rbac_service
-            .create_role(
-                "readonly",
-                "Read-Only User Role",
-                readonly_permissions,
-                None,
-                "system",
-            )
-            .await
-            .ok();
-
-        // Assign roles to test users using their actual user IDs
-        rbac_service
-            .assign_role(&admin_user.id, "testadmin", "admin", "system", None, None)
-            .await
-            .ok();
-
-        rbac_service
-            .assign_role(&test_user.id, "testuser", "user", "system", None, None)
-            .await
-            .ok();
-
-        rbac_service
-            .assign_role(
-                &readonly_user.id,
-                "testreadonly",
-                "readonly",
-                "system",
-                None,
-                None,
-            )
-            .await
-            .ok();
-
-        Ok(AppState {
-            backend_router: Arc::new(backend_router),
-            jwt_service,
-            user_store,
-            api_key_service,
-            rbac_service,
-            rate_limit_service,
-        })
+        Ok(app_state)
     }
 
     /// Authenticate as admin and store token

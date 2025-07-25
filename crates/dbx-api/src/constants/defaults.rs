@@ -2,14 +2,11 @@
 pub struct Defaults;
 
 impl Defaults {
-    /// Default Redis URL for connection
-    pub const REDIS_URL: &'static str = "redis://default:redispw@localhost:55000";
-
     /// Default server host address
-    pub const HOST: &'static str = "0.0.0.0";
+    pub const DEFAULT_HOST: &str = "0.0.0.0";
 
     /// Default server port
-    pub const PORT: u16 = 3000;
+    pub const DEFAULT_PORT: u16 = 3000;
 
     /// Default connection pool size
     pub const POOL_SIZE: u32 = 10;
@@ -22,4 +19,7 @@ impl Defaults {
 
     /// Default JWT issuer
     pub const JWT_ISSUER: &'static str = "dbx-api";
+
+    /// Default JWT secret minimum length
+    pub const JWT_SECRET_MIN_LENGTH: usize = 32;
 }
