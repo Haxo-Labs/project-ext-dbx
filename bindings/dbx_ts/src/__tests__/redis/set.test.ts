@@ -58,7 +58,6 @@ describe("DBX Set-like Operations", () => {
     });
 
     it("should retrieve collection data", async () => {
-      // Using simpler data to avoid backend serialization bug
       const uniqueKey = `test:set:retrieve:${Date.now()}`;
       await client.delete(uniqueKey);
 
