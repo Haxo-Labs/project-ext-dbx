@@ -1,11 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env;
 use std::str::FromStr;
 use thiserror::Error;
 
 use crate::auth::RbacConfig;
+use dbx_config::{ConfigLoader, DbxConfig};
 
 /// Supported database types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,6 +46,8 @@ pub enum ConfigError {
         #[source]
         source: std::num::ParseIntError,
     },
+    #[error("Configuration error: {0}")]
+    DbxConfig(#[from] dbx_config::ConfigError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,12 +56,32 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
+impl From<dbx_config::ServerConfig> for ServerConfig {
+    fn from(config: dbx_config::ServerConfig) -> Self {
+        Self {
+            host: config.host,
+            port: config.port,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtConfig {
     pub secret: String,
     pub access_token_expiration: u64,
     pub refresh_token_expiration: u64,
     pub issuer: String,
+}
+
+impl From<dbx_config::JwtConfig> for JwtConfig {
+    fn from(config: dbx_config::JwtConfig) -> Self {
+        Self {
+            secret: config.secret,
+            access_token_expiration: config.expiration_seconds,
+            refresh_token_expiration: config.expiration_seconds * 7, // Default to 7x access token expiration
+            issuer: config.issuer,
+        }
+    }
 }
 
 impl JwtConfig {
@@ -206,246 +228,84 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
-        let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-        let port = env::var("PORT")
-            .unwrap_or_else(|_| "3000".to_string())
-            .parse()
-            .map_err(|e| ConfigError::ParseError {
-                var: "PORT".to_string(),
-                source: e,
-            })?;
+        // Use the runtime to run async function
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(Self::from_env_async())
+    }
 
-        let jwt_secret = env::var("JWT_SECRET")
-            .map_err(|_| ConfigError::MissingEnvironmentVariable("JWT_SECRET".to_string()))?;
+    pub async fn from_env_async() -> Result<Self, ConfigError> {
+        Self::from_dbx_config(None).await
+    }
 
-        let access_token_expiration = env::var("ACCESS_TOKEN_EXPIRATION")
-            .unwrap_or_else(|_| "900".to_string())
-            .parse()
-            .map_err(|e| ConfigError::ParseError {
-                var: "ACCESS_TOKEN_EXPIRATION".to_string(),
-                source: e,
-            })?;
+    pub async fn from_dbx_config(config_path: Option<&str>) -> Result<Self, ConfigError> {
+        // Load configuration using dbx-config
+        let dbx_config = if let Some(path) = config_path {
+            ConfigLoader::load_from_file(path).await?
+        } else {
+            ConfigLoader::load_from_env().await?
+        };
 
-        let refresh_token_expiration = env::var("REFRESH_TOKEN_EXPIRATION")
-            .unwrap_or_else(|_| "604800".to_string())
-            .parse()
-            .map_err(|e| ConfigError::ParseError {
-                var: "REFRESH_TOKEN_EXPIRATION".to_string(),
-                source: e,
-            })?;
+        Self::from_dbx_config_direct(dbx_config)
+    }
 
-        let issuer = env::var("JWT_ISSUER").unwrap_or_else(|_| "dbx-api".to_string());
+    pub fn from_dbx_config_direct(config: DbxConfig) -> Result<Self, ConfigError> {
+        // Get JWT config from security section
+        let jwt_config = config
+            .security
+            .jwt
+            .ok_or(ConfigError::MissingEnvironmentVariable(
+                "JWT_SECRET".to_string(),
+            ))?;
 
-        let create_default_admin = env::var("CREATE_DEFAULT_ADMIN")
-            .unwrap_or_else(|_| "false".to_string())
-            .parse()
-            .unwrap_or(false);
-
-        let default_admin_username = env::var("DEFAULT_ADMIN_USERNAME").ok();
-        let default_admin_password = env::var("DEFAULT_ADMIN_PASSWORD").ok();
+        // Get admin configuration from DbxConfig
+        let admin_config = &config.admin;
 
         // Validate default admin configuration
-        if create_default_admin && default_admin_password.is_none() {
+        if admin_config.create_default_admin && admin_config.default_admin_password.is_none() {
             return Err(ConfigError::MissingDefaultAdminPassword);
         }
 
-        let jwt_config = JwtConfig {
-            secret: jwt_secret,
-            access_token_expiration,
-            refresh_token_expiration,
-            issuer,
-        };
-
+        let jwt_config = JwtConfig::from(jwt_config);
         jwt_config.validate()?;
 
-        // Parse RBAC configuration
-        let rbac_audit_enabled = env::var("RBAC_AUDIT_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
+        // Map rate limiting config (use defaults if not present)
+        let rate_limit_config = config
+            .security
+            .rate_limiting
+            .map(|rl| RateLimitConfig {
+                enabled: true,
+                global_requests_per_window: rl.requests_per_second * (rl.window_ms / 1000) as u32,
+                global_window_seconds: (rl.window_ms / 1000) as u32,
+                global_burst_allowance: Some(rl.burst_size),
+                per_user_enabled: rl.per_user,
+                per_ip_enabled: rl.per_ip,
+                endpoint_overrides: HashMap::new(),
+                redis_key_prefix: "dbx:rate_limit".to_string(),
+                graceful_degradation: true,
+            })
+            .unwrap_or_default();
 
-        let rbac_audit_retention_days = env::var("RBAC_AUDIT_RETENTION_DAYS")
-            .unwrap_or_else(|_| "90".to_string())
-            .parse()
-            .map_err(|e| ConfigError::ParseError {
-                var: "RBAC_AUDIT_RETENTION_DAYS".to_string(),
-                source: e,
-            })?;
+        // Use default security configuration
+        let security_config = SecurityConfig::default();
 
-        let rbac_max_role_inheritance_depth = env::var("RBAC_MAX_ROLE_INHERITANCE_DEPTH")
-            .unwrap_or_else(|_| "5".to_string())
-            .parse()
-            .map_err(|e| ConfigError::ParseError {
-                var: "RBAC_MAX_ROLE_INHERITANCE_DEPTH".to_string(),
-                source: e,
-            })?;
-
-        let rbac_performance_cache_ttl_seconds = env::var("RBAC_PERFORMANCE_CACHE_TTL_SECONDS")
-            .unwrap_or_else(|_| "300".to_string())
-            .parse()
-            .map_err(|e| ConfigError::ParseError {
-                var: "RBAC_PERFORMANCE_CACHE_TTL_SECONDS".to_string(),
-                source: e,
-            })?;
-
-        let rbac_default_assignment_ttl_days = env::var("RBAC_DEFAULT_ASSIGNMENT_TTL_DAYS")
-            .ok()
-            .and_then(|s| s.parse().ok());
-
+        // Map RBAC config from admin configuration
         let rbac_config = RbacConfig {
-            audit_enabled: rbac_audit_enabled,
-            audit_retention_days: rbac_audit_retention_days,
-            max_role_inheritance_depth: rbac_max_role_inheritance_depth,
-            performance_cache_ttl_seconds: rbac_performance_cache_ttl_seconds,
-            default_assignment_ttl_days: rbac_default_assignment_ttl_days,
-        };
-
-        // Parse Rate Limit configuration
-        let rate_limit_enabled = env::var("RATE_LIMIT_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
-
-        let global_requests_per_window = env::var("GLOBAL_REQUESTS_PER_WINDOW")
-            .unwrap_or_else(|_| "1000".to_string())
-            .parse()
-            .map_err(|e| ConfigError::ParseError {
-                var: "GLOBAL_REQUESTS_PER_WINDOW".to_string(),
-                source: e,
-            })?;
-
-        let global_window_seconds = env::var("GLOBAL_WINDOW_SECONDS")
-            .unwrap_or_else(|_| "60".to_string())
-            .parse()
-            .map_err(|e| ConfigError::ParseError {
-                var: "GLOBAL_WINDOW_SECONDS".to_string(),
-                source: e,
-            })?;
-
-        let global_burst_allowance = env::var("GLOBAL_BURST_ALLOWANCE")
-            .ok()
-            .and_then(|s| s.parse().ok());
-
-        let per_user_enabled = env::var("PER_USER_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
-
-        let per_ip_enabled = env::var("PER_IP_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
-
-        let redis_key_prefix =
-            env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "dbx:rate_limit".to_string());
-
-        let graceful_degradation = env::var("GRACEFUL_DEGRADATION")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
-
-        let rate_limit_config = RateLimitConfig {
-            enabled: rate_limit_enabled,
-            global_requests_per_window,
-            global_window_seconds,
-            global_burst_allowance,
-            per_user_enabled,
-            per_ip_enabled,
-            endpoint_overrides: HashMap::new(),
-            redis_key_prefix,
-            graceful_degradation,
-        };
-
-        // Parse Security configuration
-        let development_mode = env::var("DEVELOPMENT_MODE")
-            .unwrap_or_else(|_| "false".to_string())
-            .parse()
-            .unwrap_or(false);
-
-        let strict_transport_security_enabled = env::var("STRICT_TRANSPORT_SECURITY_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
-
-        let cors_enabled = env::var("CORS_ENABLED")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
-
-        let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS")
-            .unwrap_or_else(|_| "http://localhost:3000,http://127.0.0.1:3000".to_string())
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
-
-        let cors_allowed_methods = env::var("CORS_ALLOWED_METHODS")
-            .unwrap_or_else(|_| "GET,POST,PUT,DELETE,OPTIONS".to_string())
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
-
-        let cors_allowed_headers = env::var("CORS_ALLOWED_HEADERS")
-            .unwrap_or_else(|_| "Authorization,Content-Type,X-API-Key".to_string())
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
-
-        let cors_allow_credentials = env::var("CORS_ALLOW_CREDENTIALS")
-            .unwrap_or_else(|_| "true".to_string())
-            .parse()
-            .unwrap_or(true);
-
-        let cors_max_age = env::var("CORS_MAX_AGE").ok().and_then(|s| s.parse().ok());
-
-        let csp_policy = env::var("CONTENT_SECURITY_POLICY")
-            .unwrap_or_else(|_| "default-src 'self'".to_string());
-
-        let referrer_policy = env::var("REFERRER_POLICY")
-            .unwrap_or_else(|_| "strict-origin-when-cross-origin".to_string());
-
-        let security_headers = SecurityHeadersConfig {
-            x_content_type_options: "nosniff".to_string(),
-            x_frame_options: "DENY".to_string(),
-            x_xss_protection: "1; mode=block".to_string(),
-            strict_transport_security: if strict_transport_security_enabled {
-                Some("max-age=31536000; includeSubDomains".to_string())
-            } else {
-                None
-            },
-            referrer_policy,
-            content_security_policy: csp_policy,
-            permissions_policy: Some("geolocation=(), microphone=(), camera=()".to_string()),
-        };
-
-        let cors_config = CorsConfig {
-            enabled: cors_enabled,
-            allowed_origins: cors_allowed_origins,
-            allowed_methods: cors_allowed_methods,
-            allowed_headers: cors_allowed_headers,
-            exposed_headers: vec![
-                "X-Rate-Limit-Remaining".to_string(),
-                "X-Rate-Limit-Reset".to_string(),
-            ],
-            allow_credentials: cors_allow_credentials,
-            max_age: cors_max_age,
-        };
-
-        let security_config = SecurityConfig {
-            headers: security_headers,
-            cors: cors_config,
-            development_mode,
-            strict_transport_security_enabled,
+            audit_enabled: admin_config.rbac.audit_enabled,
+            audit_retention_days: admin_config.rbac.audit_retention_days,
+            max_role_inheritance_depth: admin_config.rbac.max_role_inheritance_depth,
+            performance_cache_ttl_seconds: admin_config.rbac.performance_cache_ttl_seconds,
+            default_assignment_ttl_days: admin_config.rbac.default_assignment_ttl_days,
         };
 
         Ok(AppConfig {
-            server: ServerConfig { host, port },
+            server: ServerConfig::from(config.server),
             jwt: jwt_config,
             rbac: rbac_config,
             rate_limit: rate_limit_config,
             security: security_config,
-            create_default_admin,
-            default_admin_username,
-            default_admin_password,
+            create_default_admin: admin_config.create_default_admin,
+            default_admin_username: admin_config.default_admin_username.clone(),
+            default_admin_password: admin_config.default_admin_password.clone(),
         })
     }
 }
