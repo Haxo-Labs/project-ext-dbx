@@ -299,38 +299,34 @@ pub struct UserRoleAssignment {
     pub metadata: Option<serde_json::Value>,
 }
 
-/// Role assignment request
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AssignRoleRequest {
-    pub user_id: String,
-    pub role_name: String,
-    pub expires_in_days: Option<u32>,
-    pub metadata: Option<serde_json::Value>,
-}
-
-/// Role revocation request
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RevokeRoleRequest {
-    pub user_id: String,
-    pub role_name: String,
-    pub reason: Option<String>,
-}
-
-/// Create custom role request
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CreateRoleRequest {
-    pub name: String,
-    pub description: String,
-    pub permissions: Vec<String>,
-    pub inherits_from: Option<Vec<String>>,
-}
-
-/// Update role request
+/// Request to update an existing role
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateRoleRequest {
     pub description: Option<String>,
     pub permissions: Option<Vec<String>>,
-    pub inherits_from: Option<Vec<String>>,
+}
+
+/// Request to create a new role
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateRoleRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub permissions: Vec<String>,
+}
+
+/// Request to assign a role to a user
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AssignRoleRequest {
+    pub user_id: String,
+    pub role_name: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Request to revoke a role from a user
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RevokeRoleRequest {
+    pub user_id: String,
+    pub role_name: String,
 }
 
 /// Role response for API
@@ -437,6 +433,9 @@ pub struct RbacContext {
     pub username: String,
     pub roles: Vec<String>,
     pub rbac_service: Arc<crate::auth::RbacService>,
+    pub role: Option<String>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 use axum::{
@@ -459,6 +458,13 @@ where
             .cloned()
             .ok_or(StatusCode::UNAUTHORIZED)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct RateLimitPolicy {
+    pub requests: u32,
+    pub window_seconds: u32,
+    pub burst_allowance: Option<u32>,
 }
 
 #[cfg(test)]
