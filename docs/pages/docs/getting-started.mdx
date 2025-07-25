@@ -15,7 +15,9 @@ The fastest way to get started is using Docker:
 ```bash
 # Run DBX with Redis
 docker run -d --name dbx -p 3000:3000 \
-  -e REDIS_URL=redis://localhost:6379 \
+  -e DBX_BACKEND_1_PROVIDER=redis \
+  -e DBX_BACKEND_1_URL=redis://localhost:6379 \
+  -e DBX_DEFAULT_BACKEND=backend_1 \
   effortlesslabs/0dbx_redis:latest
 
 # Or use the convenience script
@@ -32,7 +34,9 @@ docker pull effortlesslabs/0dbx_redis:latest
 
 # Run with custom configuration
 docker run -d --name dbx -p 8080:3000 \
-  -e REDIS_URL=redis://user:pass@redis.com:6379 \
+  -e DBX_BACKEND_1_PROVIDER=redis \
+-e DBX_BACKEND_1_URL=redis://user:pass@redis.com:6379 \
+-e DBX_DEFAULT_BACKEND=backend_1 \
   -e PORT=3000 \
   -e LOG_LEVEL=DEBUG \
   effortlesslabs/0dbx_redis:latest
@@ -152,7 +156,9 @@ wsClient.on("message", (data) => {
 
 | Variable    | Default                  | Description                              |
 | ----------- | ------------------------ | ---------------------------------------- |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL                     |
+| `DBX_BACKEND_1_PROVIDER` | `redis` | Backend provider type |
+| `DBX_BACKEND_1_URL` | `redis://localhost:6379` | Backend connection URL |
+| `DBX_DEFAULT_BACKEND` | `backend_1` | Default backend to use |
 | `PORT`      | `3000`                   | Server port                              |
 | `HOST`      | `0.0.0.0`                | Server host                              |
 | `LOG_LEVEL` | `INFO`                   | Logging level (DEBUG, INFO, WARN, ERROR) |
@@ -164,7 +170,9 @@ When running with Docker, you can pass environment variables:
 
 ```bash
 docker run -d --name dbx -p 3000:3000 \
-  -e REDIS_URL=redis://localhost:6379 \
+  -e DBX_BACKEND_1_PROVIDER=redis \
+  -e DBX_BACKEND_1_URL=redis://localhost:6379 \
+  -e DBX_DEFAULT_BACKEND=backend_1 \
   -e HOST=0.0.0.0 \
   -e PORT=3000 \
   -e POOL_SIZE=10 \
@@ -199,7 +207,9 @@ lsof -i :3000
 
 # Use a different port
 docker run -d --name dbx -p 8080:3000 \
-  -e REDIS_URL=redis://localhost:6379 \
+  -e DBX_BACKEND_1_PROVIDER=redis \
+  -e DBX_BACKEND_1_URL=redis://localhost:6379 \
+  -e DBX_DEFAULT_BACKEND=backend_1 \
   effortlesslabs/0dbx_redis:latest
 ```
 
