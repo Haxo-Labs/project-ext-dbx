@@ -1,12 +1,10 @@
 use crate::models::{ApiKey, ApiKeyContext, ApiKeyUsageStats, CreateApiKeyRequest, UserRole};
-use async_trait::async_trait;
-use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{Duration, Timelike, Utc};
-use dbx_core::{DataOperation, DataResult, DataValue, UniversalBackend};
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use chrono::{Duration, Utc};
+use dbx_core::{DataOperation, DataValue, UniversalBackend};
+use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use thiserror::Error;
 use uuid::Uuid;
 
 /// API Key management errors
@@ -423,8 +421,10 @@ impl ApiKeyService {
         offset: u32,
         active_only: bool,
     ) -> Result<(Vec<ApiKey>, u32), ApiKeyError> {
-        let keys = self.get_user_keys_paginated(owner_id, offset as usize, limit as usize, None).await?;
-        
+        let keys = self
+            .get_user_keys_paginated(owner_id, offset as usize, limit as usize, None)
+            .await?;
+
         let filtered_keys: Vec<ApiKey> = if active_only {
             keys.into_iter().filter(|key| key.is_active).collect()
         } else {
@@ -452,7 +452,9 @@ impl ApiKeyService {
         // Update name if provided
         if let Some(new_name) = name {
             if new_name.trim().is_empty() {
-                return Err(ApiKeyError::ValidationError("Name cannot be empty".to_string()));
+                return Err(ApiKeyError::ValidationError(
+                    "Name cannot be empty".to_string(),
+                ));
             }
             api_key.name = new_name.trim().to_string();
         }

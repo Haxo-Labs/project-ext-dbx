@@ -1,14 +1,14 @@
 use crate::{
-    auth::permissions::{Permission, PermissionType, Role, RoleRegistry},
-    models::{
-        AuditEventType, AuditLogEntry, AuditQueryParams, PermissionCheckContext, UserRoleAssignment,
+    auth::{
+        permissions::{Permission, PermissionType, Role, RoleRegistry},
+        ApiKeyError,
     },
+    models::{AuditEventType, AuditLogEntry, AuditQueryParams, RbacContext, UserRoleAssignment},
 };
-use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
-use dbx_core::UniversalBackend;
+use chrono::{Duration, Utc};
+use dbx_core::{DataOperation, DataValue, UniversalBackend};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -91,14 +91,16 @@ impl RbacService {
     }
 
     /// Check if user has specific permission
-    pub async fn check_permission(
+    pub async fn check_user_permission(
         &self,
         user_id: &str,
         permission: PermissionType,
-        context: PermissionCheckContext,
+        context: RbacContext,
     ) -> Result<bool, RbacError> {
         let user_permissions = self.get_user_effective_permissions(user_id).await?;
-        let has_permission = user_permissions.contains_type(&permission);
+
+        let permission_to_check = Permission::single(permission.clone());
+        let has_permission = user_permissions.contains(&permission_to_check);
 
         // Audit log the permission check
         if self.config.audit_enabled {
@@ -106,15 +108,15 @@ impl RbacService {
                 id: Uuid::new_v4().to_string(),
                 timestamp: Utc::now(),
                 event_type: if has_permission {
-                    AuditEventType::AccessGranted
+                    AuditEventType::Authorization
                 } else {
-                    AuditEventType::AccessDenied
+                    AuditEventType::Authorization
                 },
                 user_id: Some(user_id.to_string()),
-                username: context.username.clone(),
-                resource: context.resource,
-                action: context.action,
-                permission_required: Some(context.permission_required),
+                username: Some(context.username.clone()),
+                resource: format!("{:?}", permission),
+                action: "check".to_string(),
+                permission_required: Some(format!("{:?}", permission)),
                 permission_granted: has_permission,
                 role: context.role,
                 ip_address: context.ip_address,
@@ -157,7 +159,7 @@ impl RbacService {
         Ok(effective_permissions)
     }
 
-    /// Assign role to user
+    /// Assign a role to a user
     pub async fn assign_role(
         &self,
         user_id: &str,
