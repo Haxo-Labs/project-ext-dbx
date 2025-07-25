@@ -1,10 +1,10 @@
 use crate::{
     auth::{permissions::PermissionType, ApiKeyError, ApiKeyService, RbacService},
-    config::{AppConfig, JwtConfig},
+    config::JwtConfig,
     constants::errors::ErrorMessages,
     models::{
-        ApiKeyContext, ApiResponse, Claims, CreateUserRequest, LoginRequest,
-        PermissionCheckContext, RbacContext, TokenType, User, UserRole,
+        ApiKeyContext, ApiResponse, Claims, CreateUserRequest, PermissionCheckContext, RbacContext,
+        TokenType, User, UserRole,
     },
 };
 use async_trait::async_trait;
@@ -16,11 +16,11 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{DateTime, Duration, Utc};
-use dbx_core::{DataOperation, DataValue, UniversalBackend};
+use chrono::{Duration, Utc};
+use dbx_core::{DataOperation, DataValue};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -406,7 +406,7 @@ impl JwtService {
 }
 
 pub async fn jwt_auth_middleware(
-    State(jwt_service): State<Arc<JwtService>>,
+    State((jwt_service, _)): State<(Arc<JwtService>, Arc<UserStore>)>,
     mut request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
@@ -855,7 +855,7 @@ pub async fn rbac_auth_middleware(
         match api_key_service.validate_api_key(&api_key).await {
             Ok(api_key_context) => {
                 // Get user roles via RBAC service
-                let roles = rbac_service
+                let roles: Vec<String> = rbac_service
                     .get_user_role_assignments(&api_key_context.api_key.owner_id)
                     .await
                     .unwrap_or_default()
@@ -866,8 +866,20 @@ pub async fn rbac_auth_middleware(
                 let rbac_context = RbacContext {
                     user_id: api_key_context.api_key.owner_id.clone(),
                     username: api_key_context.api_key.owner_username.clone(),
+                    role: roles.first().cloned(),
                     roles,
                     rbac_service: rbac_service.clone(),
+                    ip_address: request
+                        .headers()
+                        .get("x-forwarded-for")
+                        .or_else(|| request.headers().get("x-real-ip"))
+                        .and_then(|h| h.to_str().ok())
+                        .map(|ip| ip.split(',').next().unwrap_or(ip).trim().to_string()),
+                    user_agent: request
+                        .headers()
+                        .get("user-agent")
+                        .and_then(|h| h.to_str().ok())
+                        .map(|ua| ua.to_string()),
                 };
 
                 request.extensions_mut().insert(api_key_context);
@@ -896,7 +908,7 @@ pub async fn rbac_auth_middleware(
         match jwt_service.get_user_by_token(token).await {
             Ok(user) => {
                 // Get user roles via RBAC service
-                let roles = rbac_service
+                let roles: Vec<String> = rbac_service
                     .get_user_role_assignments(&user.id)
                     .await
                     .unwrap_or_default()
@@ -907,8 +919,20 @@ pub async fn rbac_auth_middleware(
                 let rbac_context = RbacContext {
                     user_id: user.id.clone(),
                     username: user.username.clone(),
+                    role: roles.first().cloned(),
                     roles,
                     rbac_service: rbac_service.clone(),
+                    ip_address: request
+                        .headers()
+                        .get("x-forwarded-for")
+                        .or_else(|| request.headers().get("x-real-ip"))
+                        .and_then(|h| h.to_str().ok())
+                        .map(|ip| ip.split(',').next().unwrap_or(ip).trim().to_string()),
+                    user_agent: request
+                        .headers()
+                        .get("user-agent")
+                        .and_then(|h| h.to_str().ok())
+                        .map(|ua| ua.to_string()),
                 };
 
                 request.extensions_mut().insert(user);
@@ -949,28 +973,10 @@ pub async fn rbac_permission_check_middleware(
     // Check permission using RBAC service
     let permission_check = rbac_context
         .rbac_service
-        .check_permission(
+        .check_user_permission(
             &rbac_context.user_id,
             permission_type.clone(),
-            PermissionCheckContext {
-                user_id: Some(rbac_context.user_id.clone()),
-                username: Some(rbac_context.username.clone()),
-                role: rbac_context.roles.first().cloned(),
-                resource: request.uri().path().to_string(),
-                action: request.method().to_string(),
-                permission_required: format!("{:?}", permission_type).to_lowercase(),
-                ip_address: request
-                    .headers()
-                    .get("x-forwarded-for")
-                    .or_else(|| request.headers().get("x-real-ip"))
-                    .and_then(|h| h.to_str().ok())
-                    .map(|ip| ip.split(',').next().unwrap_or(ip).trim().to_string()),
-                user_agent: request
-                    .headers()
-                    .get("user-agent")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|ua| ua.to_string()),
-            },
+            rbac_context.clone(),
         )
         .await;
 
