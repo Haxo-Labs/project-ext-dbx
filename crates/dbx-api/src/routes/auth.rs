@@ -8,11 +8,8 @@ use axum::{
 use std::sync::Arc;
 
 use crate::{
-    middleware::{AuthError, JwtService, UserStore, UserStoreOperations},
-    models::{
-        ApiResponse, AuthResponse, Claims, LoginRequest, RefreshRequest, TokenValidationResponse,
-        UserInfo,
-    },
+    middleware::{auth::{AuthResponse, UserInfo}, AuthError, JwtService, UserStore},
+    models::{ApiResponse, Claims, LoginRequest, RefreshRequest, TokenValidationResponse, User},
 };
 
 /// Create authentication routes
@@ -30,7 +27,10 @@ pub fn create_auth_routes(jwt_service: Arc<JwtService>, user_store: Arc<UserStor
 pub async fn login(
     State((jwt_service, user_store)): State<(Arc<JwtService>, Arc<UserStore>)>,
     Json(login_request): Json<LoginRequest>,
-) -> Result<Json<ApiResponse<AuthResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+) -> Result<
+    Json<ApiResponse<crate::middleware::auth::AuthResponse>>,
+    (StatusCode, Json<ApiResponse<()>>),
+> {
     let user = user_store
         .verify_password(&login_request.username, &login_request.password)
         .await
@@ -83,7 +83,7 @@ pub async fn login(
 pub async fn refresh_token(
     State((jwt_service, _)): State<(Arc<JwtService>, Arc<UserStore>)>,
     Json(refresh_request): Json<RefreshRequest>,
-) -> Result<Json<ApiResponse<AuthResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+) -> Result<Json<ApiResponse<crate::middleware::auth::AuthResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let auth_response = jwt_service
         .refresh_token(&refresh_request.refresh_token)
         .await

@@ -129,13 +129,18 @@ pub async fn get_api_key(
 
 /// Update an API key
 pub async fn update_api_key(
+    Path(id): Path<String>,
     State(api_key_service): State<Arc<ApiKeyService>>,
     Extension(claims): Extension<Claims>,
-    Path(id): Path<String>,
-    Json(request): Json<UpdateApiKeyRequest>,
+    Json(request): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse<ApiKeyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let name = request
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     let api_key = api_key_service
-        .update_api_key(&id, &claims.sub, request)
+        .update_api_key(&id, &claims.sub, name)
         .await
         .map_err(|e| {
             let (status, message) = match e {
@@ -143,17 +148,12 @@ pub async fn update_api_key(
                     (StatusCode::NOT_FOUND, "API key not found".to_string())
                 }
                 ApiKeyError::ValidationError(msg) => (StatusCode::BAD_REQUEST, msg),
-                ApiKeyError::KeyNameExists => (
-                    StatusCode::CONFLICT,
-                    "API key name already exists".to_string(),
-                ),
                 _ => (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed to update API key".to_string(),
+                    "Internal server error".to_string(),
                 ),
             };
-
-            (status, Json(ApiResponse::<()>::error(message)))
+            (status, Json(ApiResponse::error(message)))
         })?;
 
     let response = ApiKeyResponse::from(&api_key);
@@ -195,11 +195,11 @@ pub async fn rotate_api_key(
 
 /// Delete an API key
 pub async fn delete_api_key(
+    Path(id): Path<String>,
     State(api_key_service): State<Arc<ApiKeyService>>,
     Extension(claims): Extension<Claims>,
-    Path(id): Path<String>,
-) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
-    let deleted = api_key_service
+) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiResponse<()>>)> {
+    api_key_service
         .delete_api_key(&id, &claims.sub)
         .await
         .map_err(|e| {
@@ -209,25 +209,13 @@ pub async fn delete_api_key(
                 }
                 _ => (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed to delete API key".to_string(),
+                    "Internal server error".to_string(),
                 ),
             };
-
-            (status, Json(ApiResponse::<()>::error(message)))
+            (status, Json(ApiResponse::error(message)))
         })?;
 
-    if deleted {
-        Ok(Json(ApiResponse::success(
-            "API key deleted successfully".to_string(),
-        )))
-    } else {
-        Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<()>::error(
-                "Failed to delete API key".to_string(),
-            )),
-        ))
-    }
+    Ok(Json(ApiResponse::success(())))
 }
 
 #[cfg(test)]
