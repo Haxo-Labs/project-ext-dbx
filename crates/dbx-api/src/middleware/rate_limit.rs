@@ -1,14 +1,18 @@
-use crate::models::ApiResponse;
+use crate::{
+    middleware::JwtService,
+    models::{ApiResponse, RateLimitPolicy},
+};
 use axum::{
-    extract::{ConnectInfo, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    extract::{Request, State},
+    http::{HeaderMap, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Json},
 };
 use chrono::{DateTime, Utc};
-use dbx_core::{DataOperation, DataResult, DataValue, UniversalBackend};
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
-use tokio::sync::RwLock;
+use dbx_core::{DataOperation, DataValue, UniversalBackend};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitResult {
@@ -17,13 +21,6 @@ pub struct RateLimitResult {
     pub remaining: u32,
     pub reset_time: DateTime<Utc>,
     pub retry_after: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RateLimitPolicy {
-    pub requests: u32,
-    pub window_seconds: u32,
-    pub burst_allowance: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -369,29 +366,32 @@ impl SlidingWindowRateLimiter {
 #[derive(Clone)]
 pub struct RateLimitService {
     limiter: SlidingWindowRateLimiter,
-    policies: Arc<RwLock<HashMap<String, RateLimitPolicy>>>,
-    pub global_policy: Arc<RwLock<Option<RateLimitPolicy>>>,
+    policies: Arc<std::sync::RwLock<HashMap<String, RateLimitPolicy>>>,
+    pub global_policy: Arc<std::sync::RwLock<Option<RateLimitPolicy>>>,
 }
 
 impl RateLimitService {
     pub fn new(backend: Arc<dyn UniversalBackend>) -> Self {
         Self {
             limiter: SlidingWindowRateLimiter::new(backend),
-            policies: Arc::new(RwLock::new(HashMap::new())),
-            global_policy: Arc::new(RwLock::new(None)),
+            policies: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            global_policy: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
     pub async fn set_global_policy(&self, policy: RateLimitPolicy) {
-        *self.global_policy.write().await = Some(policy);
+        *self.global_policy.write().unwrap() = Some(policy);
     }
 
-    pub async fn set_endpoint_policy(&self, endpoint: String, policy: RateLimitPolicy) {
-        self.policies.write().await.insert(endpoint, policy);
+    pub async fn set_endpoint_policy(&self, endpoint: &str, policy: RateLimitPolicy) {
+        self.policies
+            .write()
+            .unwrap()
+            .insert(endpoint.to_string(), policy);
     }
 
     pub async fn remove_endpoint_policy(&self, endpoint: &str) -> bool {
-        self.policies.write().await.remove(endpoint).is_some()
+        self.policies.write().unwrap().remove(endpoint).is_some()
     }
 
     pub async fn increment_total_requests(&self) -> Result<(), String> {
@@ -486,17 +486,17 @@ impl RateLimitService {
     }
 
     pub async fn get_policy_for_endpoint(&self, endpoint: &str) -> Option<RateLimitPolicy> {
-        let policies = self.policies.read().await;
+        let policies = self.policies.read().unwrap();
         if let Some(policy) = policies.get(endpoint) {
             Some(policy.clone())
         } else {
-            let global = self.global_policy.read().await;
+            let global = self.global_policy.read().unwrap();
             global.clone()
         }
     }
 
     pub async fn get_all_policies(&self) -> HashMap<String, RateLimitPolicy> {
-        self.policies.read().await.clone()
+        self.policies.read().unwrap().clone()
     }
 
     pub async fn check_rate_limit(
@@ -547,7 +547,7 @@ impl RateLimitService {
 
 fn extract_identifier_from_request(
     headers: &HeaderMap,
-    connect_info: Option<&ConnectInfo<SocketAddr>>,
+    connect_info: Option<&std::net::SocketAddr>,
     auth_context: Option<&str>,
 ) -> String {
     // Priority: authenticated user > API key > IP address > unknown
@@ -579,29 +579,30 @@ fn extract_identifier_from_request(
         }
     } else if let Some(connect_info) = connect_info {
         // Use IP address as fallback
-        format!("ip:{}", connect_info.0.ip())
+        format!("ip:{}", connect_info.ip())
     } else {
         "unknown".to_string()
     }
 }
 
-pub fn add_rate_limit_headers(response: &mut Response, result: &RateLimitResult) {
+pub fn add_rate_limit_headers(response: &mut axum::response::Response, result: &RateLimitResult) {
     let headers = response.headers_mut();
 
-    if let Ok(value) = HeaderValue::from_str(&result.limit.to_string()) {
+    if let Ok(value) = axum::http::HeaderValue::from_str(&result.limit.to_string()) {
         headers.insert("X-RateLimit-Limit", value);
     }
 
-    if let Ok(value) = HeaderValue::from_str(&result.remaining.to_string()) {
+    if let Ok(value) = axum::http::HeaderValue::from_str(&result.remaining.to_string()) {
         headers.insert("X-RateLimit-Remaining", value);
     }
 
-    if let Ok(value) = HeaderValue::from_str(&result.reset_time.timestamp().to_string()) {
+    if let Ok(value) = axum::http::HeaderValue::from_str(&result.reset_time.timestamp().to_string())
+    {
         headers.insert("X-RateLimit-Reset", value);
     }
 
     if let Some(retry_after) = result.retry_after {
-        if let Ok(value) = HeaderValue::from_str(&retry_after.to_string()) {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after.to_string()) {
             headers.insert("Retry-After", value);
         }
     }
@@ -609,7 +610,7 @@ pub fn add_rate_limit_headers(response: &mut Response, result: &RateLimitResult)
 
 pub async fn rate_limit_middleware(
     State(rate_limit_service): State<Arc<RateLimitService>>,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
+    connect_info: Option<std::net::SocketAddr>,
     headers: HeaderMap,
     mut request: Request,
     next: Next,
@@ -1045,25 +1046,26 @@ mod tests {
         use std::net::{IpAddr, Ipv4Addr};
 
         let mut headers = HeaderMap::new();
-        let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 8080);
-        let connect_info = ConnectInfo(socket_addr);
+        let socket_addr =
+            std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 8080);
+        let connect_info = Some(socket_addr);
 
         // Test priority: auth context with header > IP address
         headers.insert("authorization", "Bearer abcd1234token".parse().unwrap());
         let identifier =
-            extract_identifier_from_request(&headers, Some(&connect_info), Some("user"));
+            extract_identifier_from_request(&headers, connect_info.as_ref(), Some("user"));
         assert_eq!(identifier, "user:abcd1234");
 
         // Test API key auth
         headers.clear();
         headers.insert("authorization", "ApiKey xyz98765key".parse().unwrap());
         let identifier =
-            extract_identifier_from_request(&headers, Some(&connect_info), Some("api_key"));
+            extract_identifier_from_request(&headers, connect_info.as_ref(), Some("api_key"));
         assert_eq!(identifier, "api_key:xyz98765");
 
         // Test IP fallback when no auth
         headers.clear();
-        let identifier = extract_identifier_from_request(&headers, Some(&connect_info), None);
+        let identifier = extract_identifier_from_request(&headers, connect_info.as_ref(), None);
         assert_eq!(identifier, "ip:192.168.1.1");
 
         // Test unknown fallback when no connect info

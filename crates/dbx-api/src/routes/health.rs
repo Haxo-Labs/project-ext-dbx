@@ -101,19 +101,10 @@ async fn get_system_health(
     // Check admin permission
     let permission_check = rbac_context
         .rbac_service
-        .check_permission(
+        .check_user_permission(
             &rbac_context.user_id,
             PermissionType::AdminInfo,
-            crate::models::PermissionCheckContext {
-                user_id: Some(rbac_context.user_id.clone()),
-                username: Some(rbac_context.username.clone()),
-                role: rbac_context.roles.first().cloned(),
-                resource: "system_health".to_string(),
-                action: "get".to_string(),
-                permission_required: "admin:info".to_string(),
-                ip_address: None,
-                user_agent: None,
-            },
+            rbac_context.clone(),
         )
         .await;
 
@@ -217,19 +208,10 @@ async fn get_backend_health(
     // Check admin permission
     let permission_check = rbac_context
         .rbac_service
-        .check_permission(
+        .check_user_permission(
             &rbac_context.user_id,
             PermissionType::AdminInfo,
-            crate::models::PermissionCheckContext {
-                user_id: Some(rbac_context.user_id.clone()),
-                username: Some(rbac_context.username.clone()),
-                role: rbac_context.roles.first().cloned(),
-                resource: format!("backend_health:{}", backend_name),
-                action: "get".to_string(),
-                permission_required: "admin:info".to_string(),
-                ip_address: None,
-                user_agent: None,
-            },
+            rbac_context.clone(),
         )
         .await;
 
