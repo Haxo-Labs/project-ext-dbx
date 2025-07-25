@@ -52,7 +52,6 @@ pub enum ConfigError {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    pub redis_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,8 +214,7 @@ impl AppConfig {
                 var: "PORT".to_string(),
                 source: e,
             })?;
-        let redis_url =
-            env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+
 
         let jwt_secret = env::var("JWT_SECRET")
             .map_err(|_| ConfigError::MissingEnvironmentVariable("JWT_SECRET".to_string()))?;

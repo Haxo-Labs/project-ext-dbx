@@ -140,57 +140,6 @@ impl ConfigLoader {
 
     /// Load backend configurations from environment variables
     fn load_backends_from_env(config: &mut DbxConfig) -> ConfigResult<()> {
-        // Primary backend configuration
-        if let Ok(url) = env::var("DATABASE_URL") {
-            let provider = Self::detect_provider_from_url(&url)?;
-            let backend_config = BackendConfig {
-                provider,
-                url,
-                pool_size: env::var("DBX_POOL_SIZE").ok().and_then(|s| s.parse().ok()),
-                timeout_ms: env::var("DBX_TIMEOUT_MS").ok().and_then(|s| s.parse().ok()),
-                retry_attempts: env::var("DBX_RETRY_ATTEMPTS")
-                    .ok()
-                    .and_then(|s| s.parse().ok()),
-                retry_delay_ms: env::var("DBX_RETRY_DELAY_MS")
-                    .ok()
-                    .and_then(|s| s.parse().ok()),
-                capabilities: None,
-                additional_config: HashMap::new(),
-            };
-
-            config
-                .backends
-                .insert("default".to_string(), backend_config);
-            config.routing.default_backend = "default".to_string();
-        }
-
-        // Redis-specific configuration (for backward compatibility)
-        if let Ok(redis_url) = env::var("REDIS_URL") {
-            let backend_config = BackendConfig {
-                provider: "redis".to_string(),
-                url: redis_url,
-                pool_size: env::var("REDIS_POOL_SIZE")
-                    .ok()
-                    .and_then(|s| s.parse().ok()),
-                timeout_ms: env::var("REDIS_TIMEOUT_MS")
-                    .ok()
-                    .and_then(|s| s.parse().ok()),
-                retry_attempts: None,
-                retry_delay_ms: None,
-                capabilities: None,
-                additional_config: HashMap::new(),
-            };
-
-            let backend_name = if config.backends.is_empty() {
-                config.routing.default_backend = "redis".to_string();
-                "redis".to_string()
-            } else {
-                "redis".to_string()
-            };
-
-            config.backends.insert(backend_name, backend_config);
-        }
-
         // Load additional backends from numbered environment variables
         for i in 1..=10 {
             let url_var = format!("DBX_BACKEND_{}_URL", i);
