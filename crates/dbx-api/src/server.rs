@@ -1,23 +1,12 @@
-use axum::{
-    extract::ConnectInfo,
-    http::{HeaderMap, Method},
-    middleware::from_fn_with_state,
-    response::IntoResponse,
-    routing::get,
-    serve, Router,
-};
-use std::sync::Arc;
-use tokio::net::TcpListener;
-
 use crate::{
     auth::{ApiKeyService, RbacService},
-    config::{AppConfig, ConfigError},
+    config::{AppConfig, ConfigError, SecurityConfig},
     middleware::{
-        create_cors_layer, development_security_middleware, flexible_auth_middleware,
-        rate_limit_middleware, rbac_auth_middleware, security_headers_middleware, JwtService,
-        RateLimitService, UserStore,
+        flexible_auth_middleware, jwt_auth_middleware, rate_limit_middleware, rbac_auth_middleware,
+        security::{create_cors_layer, development_security_middleware},
+        security_headers_middleware, JwtService, RateLimitService, UserStore,
     },
-    models::ApiResponse,
+    models::{ApiResponse, User},
     routes::{
         api_keys::create_api_key_routes, auth::create_auth_routes, data::create_data_routes,
         health::create_health_routes, query::create_query_routes,
@@ -25,11 +14,15 @@ use crate::{
         stream::create_stream_routes,
     },
 };
+use axum::{middleware::from_fn_with_state, routing::get, Router};
 use dbx_adapter::redis::factory::RedisBackendFactory;
-use dbx_config::DbxConfig;
-use dbx_core::LoadBalancingStrategy;
+use dbx_config::{AdminConfig, BackendConfig, DbxConfig, RoutingConfig};
 use dbx_router::{BackendRegistryBuilder, BackendRouter};
-use std::collections::HashMap;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use tokio::net::TcpListener;
+use tower::ServiceBuilder;
+use tower_http::cors::CorsLayer;
+use tracing::{error, info};
 
 /// Application state for the DBX API
 #[derive(Clone)]
@@ -86,7 +79,7 @@ impl AppState {
 
         // Get default backend configuration for auth services
         let default_backend_name = &config.routing.default_backend;
-        let default_backend = config.backends.get(default_backend_name).ok_or_else(|| {
+        let _default_backend = config.backends.get(default_backend_name).ok_or_else(|| {
             ServerError::Configuration(ConfigError::MissingEnvironmentVariable(format!(
                 "Default backend '{}' not found in configuration",
                 default_backend_name
@@ -138,7 +131,7 @@ impl AppState {
 
         let rate_limit_service = RateLimitService::new(backend.clone());
         if app_config.rate_limit.enabled {
-            let global_policy = crate::middleware::RateLimitPolicy {
+            let global_policy = crate::models::RateLimitPolicy {
                 requests: app_config.rate_limit.global_requests_per_window,
                 window_seconds: app_config.rate_limit.global_window_seconds,
                 burst_allowance: app_config.rate_limit.global_burst_allowance,
@@ -157,7 +150,7 @@ impl AppState {
     }
 
     /// Create configuration - use environment if available, otherwise create test defaults
-    fn create_default_config(app_config: &AppConfig) -> Result<DbxConfig, ServerError> {
+    fn create_default_config(_app_config: &AppConfig) -> Result<DbxConfig, ServerError> {
         // Try to load from environment first (need to handle async)
         // For tests, we'll just use defaults since env vars may not be set
 
@@ -243,153 +236,38 @@ pub fn create_app(state: AppState) -> Router {
         .layer(cors_layer.clone());
 
     // Create API key management routes (JWT authentication required)
-    let api_key_routes = create_api_key_routes(state.api_key_service.clone())
-        .layer(from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            flexible_auth_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ));
+    let api_key_routes =
+        create_api_key_routes(state.api_key_service.clone()).layer(cors_layer.clone());
 
-    // Create role management routes (requires admin authentication and RBAC)
-    let role_routes = create_role_routes(state.rbac_service.clone())
-        .layer(from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            flexible_auth_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ));
+    // Create data operation routes (authentication required)
+    let data_routes = create_data_routes().layer(cors_layer.clone());
 
-    // Create data routes with RBAC permission checking
-    let data_routes = create_data_routes()
-        .with_state(state.backend_router.clone())
-        .layer(from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            flexible_auth_middleware,
-        ));
+    // Create query routes (authentication required)
+    let query_routes = create_query_routes().layer(cors_layer.clone());
 
-    // Create query routes with RBAC permission checking
-    let query_routes = create_query_routes()
-        .with_state(state.backend_router.clone())
-        .layer(from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            flexible_auth_middleware,
-        ));
+    // Create role management routes (admin authentication required)
+    let role_routes = create_role_routes(state.rbac_service.clone()).layer(cors_layer.clone());
 
-    // Create stream routes with RBAC permission checking
-    let stream_routes = create_stream_routes()
-        .with_state(state.backend_router.clone())
-        .layer(from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            flexible_auth_middleware,
-        ));
+    // Create streaming routes (authentication required)
+    let stream_routes = create_stream_routes().layer(cors_layer.clone());
 
-    // Create health routes (admin only) with RBAC permission checking
-    let health_routes = create_health_routes()
-        .with_state(state.backend_router.clone())
-        .layer(from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            flexible_auth_middleware,
-        ));
-
-    // Create rate limit management routes (admin only)
+    // Create rate limiting management routes (admin authentication required)
     let rate_limit_routes = create_rate_limit_routes()
-        .with_state(state.rate_limit_service.clone())
-        .layer(from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ))
-        .layer(from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            flexible_auth_middleware,
-        ));
+        .layer(cors_layer.clone());
+
+    // Create health routes (admin only)
+    let health_routes = create_health_routes()
+        .layer(cors_layer.clone());
 
     Router::new()
-        .route("/health", get(health_check))
         .nest("/auth", auth_routes)
-        .nest("/api/v1/api-keys", api_key_routes)
+        .nest("/api/v1/keys", api_key_routes)
+        .nest("/api/v1/data", data_routes.with_state(state.backend_router.clone()))
+        .nest("/api/v1/query", query_routes.with_state(state.backend_router.clone()))
         .nest("/api/v1/roles", role_routes)
-        .nest("/api/v1/data", data_routes)
-        .nest("/api/v1/query", query_routes)
-        .nest("/api/v1/stream", stream_routes)
-        .nest("/api/v1/admin", health_routes)
-        .nest("/api/v1/rate-limits", rate_limit_routes)
+        .nest("/api/v1/admin", health_routes.with_state(state.backend_router.clone()))
+        .nest("/api/v1/stream", stream_routes.with_state(state.backend_router.clone()))
+        .nest("/api/v1/rate-limit", rate_limit_routes.with_state(state.rate_limit_service.clone()))
         .layer(axum::middleware::from_fn(move |req, next| {
             let config = security_config.clone();
             async move { development_security_middleware(config, req, next).await }
