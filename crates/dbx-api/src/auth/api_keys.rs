@@ -5,7 +5,7 @@ use crate::models::{
 use async_trait::async_trait;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Timelike, Utc};
-use dbx_adapter::redis::client::RedisPool;
+use dbx_core::UniversalBackend;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -40,13 +40,13 @@ pub enum ApiKeyError {
 /// API Key service for generation, validation, and management
 #[derive(Clone)]
 pub struct ApiKeyService {
-    redis_pool: Arc<RedisPool>,
+    backend: Arc<dyn UniversalBackend>,
 }
 
 impl ApiKeyService {
     /// Create a new API key service
-    pub fn new(redis_pool: Arc<RedisPool>) -> Self {
-        Self { redis_pool }
+    pub fn new(backend: Arc<dyn UniversalBackend>) -> Self {
+        Self { backend }
     }
 
     /// Generate a secure API key
@@ -209,39 +209,48 @@ impl ApiKeyService {
         Ok(ApiKeyContext { api_key, user_role })
     }
 
-    /// Store API key in Redis
+    /// Store API key in backend
     async fn store_api_key(&self, api_key: &ApiKey) -> Result<(), ApiKeyError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataValue};
 
         // Store by ID
         let key_id = format!("api_key:id:{}", api_key.id);
         let api_key_json = serde_json::to_string(api_key)
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
 
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc.clone())
-            .set(&key_id, &api_key_json)
+        self.backend
+            .execute_data(DataOperation::Set {
+                key: key_id,
+                value: DataValue::String(api_key_json.clone()),
+                ttl: None,
+            })
+            .await
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
 
         // Store by hash for quick lookup
         let key_hash = format!("api_key:hash:{}", api_key.key_hash);
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc.clone())
-            .set(&key_hash, &api_key.id)
+        self.backend
+            .execute_data(DataOperation::Set {
+                key: key_hash,
+                value: DataValue::String(api_key.id.clone()),
+                ttl: None,
+            })
+            .await
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
 
-        // Add to user's key set
+        // Add to user's key set (simulated with JSON array)
         let user_keys = format!("api_keys:user:{}", api_key.owner_id);
-        dbx_adapter::redis::primitives::set::RedisSet::new(conn_arc.clone())
-            .sadd(&user_keys, &[&api_key.id])
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
+        self.add_to_set(&user_keys, &api_key.id).await?;
 
         // Add to name index for duplicate checking
         let name_key = format!("api_key:name:{}:{}", api_key.owner_id, api_key.name);
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .set(&name_key, &api_key.id)
+        self.backend
+            .execute_data(DataOperation::Set {
+                key: name_key,
+                value: DataValue::String(api_key.id.clone()),
+                ttl: None,
+            })
+            .await
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
 
         Ok(())
@@ -249,18 +258,26 @@ impl ApiKeyService {
 
     /// Get API key by hash
     async fn get_api_key_by_hash(&self, key_hash: &str) -> Result<ApiKey, ApiKeyError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataResult, DataValue};
 
         // Get API key ID from hash
         let hash_key = format!("api_key:hash:{}", key_hash);
-        let api_key_id = dbx_adapter::redis::primitives::string::RedisString::new(conn_arc.clone())
-            .get(&hash_key)
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?
-            .ok_or(ApiKeyError::KeyNotFound)?;
+        let api_key_id = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: hash_key,
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(id)),
+                ..
+            }) => id,
+            Ok(DataResult::Get { value: None, .. }) => return Err(ApiKeyError::KeyNotFound),
+            Ok(_) => return Err(ApiKeyError::KeyNotFound),
+            Err(e) => return Err(ApiKeyError::DatabaseError(e.to_string())),
+        };
 
         // Get API key by ID
         self.get_api_key_by_id(&api_key_id).await
@@ -268,17 +285,25 @@ impl ApiKeyService {
 
     /// Get API key by ID
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<ApiKey, ApiKeyError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataResult, DataValue};
 
         let key_id = format!("api_key:id:{}", id);
-        let api_key_json = dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .get(&key_id)
-            .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?
-            .ok_or(ApiKeyError::KeyNotFound)?;
+        let api_key_json = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key_id,
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => json,
+            Ok(DataResult::Get { value: None, .. }) => return Err(ApiKeyError::KeyNotFound),
+            Ok(_) => return Err(ApiKeyError::KeyNotFound),
+            Err(e) => return Err(ApiKeyError::DatabaseError(e.to_string())),
+        };
 
         let api_key: ApiKey = serde_json::from_str(&api_key_json)
             .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))?;

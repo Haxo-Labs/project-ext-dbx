@@ -6,7 +6,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use dbx_adapter::redis::client::RedisPool;
+use dbx_core::UniversalBackend;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
@@ -60,7 +60,7 @@ impl Default for RbacConfig {
 /// RBAC service for role management and permission checking
 #[derive(Clone)]
 pub struct RbacService {
-    redis_pool: Arc<RedisPool>,
+    backend: Arc<dyn UniversalBackend>,
     role_registry: Arc<std::sync::RwLock<RoleRegistry>>,
     config: RbacConfig,
 }
@@ -76,10 +76,10 @@ impl std::fmt::Debug for RbacService {
 
 impl RbacService {
     /// Create a new RBAC service
-    pub fn new(redis_pool: Arc<RedisPool>, config: RbacConfig) -> Self {
+    pub fn new(backend: Arc<dyn UniversalBackend>, config: RbacConfig) -> Self {
         let role_registry = Arc::new(std::sync::RwLock::new(RoleRegistry::new()));
         Self {
-            redis_pool,
+            backend,
             role_registry,
             config,
         }
@@ -743,19 +743,26 @@ impl RbacService {
     where
         T: for<'de> Deserialize<'de>,
     {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataResult, DataValue};
 
-        match dbx_adapter::redis::primitives::string::RedisString::new(conn_arc).get(key) {
-            Ok(Some(value)) => {
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(value)),
+                ..
+            }) => {
                 let deserialized: T = serde_json::from_str(&value)
                     .map_err(|e| RbacError::SerializationError(e.to_string()))?;
                 Ok(Some(deserialized))
             }
-            Ok(None) => Ok(None),
+            Ok(DataResult::Get { value: None, .. }) => Ok(None),
+            Ok(_) => Ok(None),
             Err(e) => Err(RbacError::RedisError(e.to_string())),
         }
     }
@@ -769,79 +776,135 @@ impl RbacService {
     where
         T: Serialize,
     {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataValue};
 
         let serialized = serde_json::to_string(value)
             .map_err(|e| RbacError::SerializationError(e.to_string()))?;
 
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .set(key, &serialized)
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
+        let ttl = expires_at.map(|exp| ((exp - Utc::now()).num_seconds().max(1)) as u64);
 
-        // Set TTL if expires_at is provided
-        if let Some(exp) = expires_at {
-            let ttl_seconds = (exp - Utc::now()).num_seconds().max(1);
-            self.set_redis_ttl(key, ttl_seconds).await?;
-        }
+        self.backend
+            .execute_data(DataOperation::Set {
+                key: key.to_string(),
+                value: DataValue::String(serialized),
+                ttl,
+            })
+            .await
+            .map_err(|e| RbacError::RedisError(e.to_string()))?;
 
         Ok(())
     }
 
     async fn delete_redis_key(&self, key: &str) -> Result<(), RbacError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::DataOperation;
 
-        let mut conn = conn_arc.lock().unwrap();
-        redis::cmd("DEL").arg(key).execute(&mut *conn);
+        self.backend
+            .execute_data(DataOperation::Delete {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+            .map_err(|e| RbacError::RedisError(e.to_string()))?;
 
         Ok(())
     }
 
     async fn add_to_redis_set(&self, key: &str, member: &str) -> Result<(), RbacError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataResult, DataValue};
 
-        dbx_adapter::redis::primitives::set::RedisSet::new(conn_arc)
-            .sadd(key, &[member])
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
+        // Get current set members
+        let mut members: Vec<String> = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => serde_json::from_str(&json).unwrap_or_else(|_| Vec::new()),
+            _ => Vec::new(),
+        };
+
+        // Add member if not already present
+        if !members.contains(&member.to_string()) {
+            members.push(member.to_string());
+            let json = serde_json::to_string(&members)
+                .map_err(|e| RbacError::SerializationError(e.to_string()))?;
+
+            self.backend
+                .execute_data(DataOperation::Set {
+                    key: key.to_string(),
+                    value: DataValue::String(json),
+                    ttl: None,
+                })
+                .await
+                .map_err(|e| RbacError::RedisError(e.to_string()))?;
+        }
 
         Ok(())
     }
 
     async fn remove_from_redis_set(&self, key: &str, member: &str) -> Result<(), RbacError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataResult, DataValue};
 
-        dbx_adapter::redis::primitives::set::RedisSet::new(conn_arc)
-            .srem(key, &[member])
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
+        // Get current set members
+        let mut members: Vec<String> = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => serde_json::from_str(&json).unwrap_or_else(|_| Vec::new()),
+            _ => Vec::new(),
+        };
+
+        // Remove member if present
+        if let Some(pos) = members.iter().position(|x| x == member) {
+            members.remove(pos);
+            let json = serde_json::to_string(&members)
+                .map_err(|e| RbacError::SerializationError(e.to_string()))?;
+
+            self.backend
+                .execute_data(DataOperation::Set {
+                    key: key.to_string(),
+                    value: DataValue::String(json),
+                    ttl: None,
+                })
+                .await
+                .map_err(|e| RbacError::RedisError(e.to_string()))?;
+        }
 
         Ok(())
     }
 
     async fn get_redis_set_members(&self, key: &str) -> Result<Vec<String>, RbacError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataResult, DataValue};
 
-        dbx_adapter::redis::primitives::set::RedisSet::new(conn_arc)
-            .smembers(key)
-            .map_err(|e| RbacError::RedisError(e.to_string()))
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => serde_json::from_str(&json)
+                .map_err(|e| RbacError::SerializationError(e.to_string())),
+            Ok(DataResult::Get { value: None, .. }) => Ok(Vec::new()),
+            Ok(_) => Ok(Vec::new()),
+            Err(e) => Err(RbacError::RedisError(e.to_string())),
+        }
     }
 
     async fn set_redis_ttl(&self, key: &str, ttl_seconds: i64) -> Result<(), RbacError> {
