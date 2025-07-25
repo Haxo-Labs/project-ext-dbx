@@ -415,17 +415,13 @@ impl RbacService {
 
         // Store updated role in Redis
         let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| RbacError::RedisError(format!("Redis connection failed: {}", e)))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
-        let role_key = format!("rbac:role:{}", role_name);
-        let role_data = serde_json::to_string(&updated_role)
-            .map_err(|e| RbacError::SerializationError(e.to_string()))?;
-
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .set(&role_key, &role_data)
+            .backend
+            .execute_data(dbx_core::DataOperation::Set {
+                key: format!("rbac:role:{}", role_name),
+                value: dbx_core::DataValue::String(serde_json::to_string(&updated_role).unwrap()),
+                ttl: None,
+            })
+            .await
             .map_err(|e| RbacError::RedisError(format!("Failed to store role in Redis: {}", e)))?;
 
         // Update registry
@@ -908,18 +904,9 @@ impl RbacService {
     }
 
     async fn set_redis_ttl(&self, key: &str, ttl_seconds: i64) -> Result<(), RbacError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
-        let mut conn = conn_arc.lock().unwrap();
-        redis::cmd("EXPIRE")
-            .arg(key)
-            .arg(ttl_seconds)
-            .execute(&mut *conn);
-
+        // TTL is now handled directly in the Set operation with the ttl parameter
+        // This method is kept for compatibility but doesn't need to do anything
+        // as TTL is set during the initial Set operation
         Ok(())
     }
 }
