@@ -2,17 +2,20 @@ use crate::{
     auth::{permissions::PermissionType, ApiKeyError, ApiKeyService, RbacService},
     config::{AppConfig, JwtConfig},
     constants::errors::ErrorMessages,
-    models::{ApiResponse, CreateUserRequest, LoginRequest, User, UserRole},
+    models::{
+        ApiKeyContext, ApiResponse, CreateUserRequest, LoginRequest, PaginationQuery,
+        PermissionCheckContext, RbacContext, User, UserRole,
+    },
 };
 use async_trait::async_trait;
 use axum::{
-    extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Query, Request, State},
+    http::{header, HeaderMap, StatusCode, Uri},
     middleware::Next,
-    response::Json,
+    response::{IntoResponse, Json},
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use dbx_core::{DataOperation, DataResult, DataValue, UniversalBackend};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -20,7 +23,61 @@ use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use uuid::Uuid;
 
-/// Handle Redis errors and convert them to HTTP responses
+/// User information for responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserInfo {
+    pub id: String,
+    pub username: String,
+    pub role: UserRole,
+}
+
+/// Authentication response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
+    pub user: UserInfo,
+}
+
+/// Authentication errors
+#[derive(Debug, Error)]
+pub enum AuthError {
+    #[error("User already exists")]
+    UserAlreadyExists,
+    #[error("Invalid credentials")]
+    InvalidCredentials,
+    #[error("User not found")]
+    UserNotFound,
+    #[error("Token expired")]
+    TokenExpired,
+    #[error("Invalid token")]
+    InvalidToken,
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+    #[error("Internal error: {0}")]
+    InternalError(String),
+}
+
+/// Token type for JWT tokens
+#[derive(Debug, Clone)]
+pub enum TokenType {
+    Access,
+    Refresh,
+}
+
+/// User store operations trait
+#[async_trait]
+pub trait UserStoreOperations {
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError>;
+    async fn get_user_by_id(&self, user_id: &str) -> Result<Option<User>, AuthError>;
+    async fn create_user(&self, request: CreateUserRequest) -> Result<User, AuthError>;
+    async fn verify_password(&self, username: &str, password: &str) -> Result<bool, AuthError>;
+    async fn update_last_login(&self, user_id: &str) -> Result<(), AuthError>;
+}
+
+/// Handle database errors and convert them to HTTP responses
 pub fn handle_redis_error(_error: impl std::fmt::Display) -> (StatusCode, Json<ApiResponse<()>>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -49,33 +106,6 @@ pub async fn handle_json_rejection(rejection: JsonRejection) -> impl IntoRespons
         status,
         Json(ApiResponse::<()>::error(error_message.to_string())),
     )
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum AuthError {
-    #[error("Invalid credentials")]
-    InvalidCredentials,
-    #[error("User not found")]
-    UserNotFound,
-    #[error("User already exists")]
-    UserAlreadyExists,
-    #[error("Token expired")]
-    TokenExpired,
-    #[error("Invalid token")]
-    InvalidToken,
-    #[error("Database error: {0}")]
-    DatabaseError(String),
-    #[error("Internal error: {0}")]
-    InternalError(String),
-}
-
-#[async_trait]
-pub trait UserStoreOperations {
-    async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError>;
-    async fn get_user_by_id(&self, user_id: &str) -> Result<Option<User>, AuthError>;
-    async fn create_user(&self, user: CreateUserRequest) -> Result<User, AuthError>;
-    async fn verify_password(&self, username: &str, password: &str) -> Result<bool, AuthError>;
-    async fn update_last_login(&self, user_id: &str) -> Result<(), AuthError>;
 }
 
 #[derive(Clone)]
@@ -124,23 +154,26 @@ impl UserStoreOperations for UserStore {
     }
 
     async fn get_user_by_id(&self, user_id: &str) -> Result<Option<User>, AuthError> {
-        let conn = self
-            .backend
-            .get_connection()
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataResult, DataValue};
 
         let key = format!("user:id:{}", user_id);
-        let user_json = dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .get(&key)
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        if let Some(json) = user_json {
-            let user: User = serde_json::from_str(&json)
-                .map_err(|e| AuthError::InternalError(format!("JSON parse error: {}", e)))?;
-            Ok(Some(user))
-        } else {
-            Ok(None)
+        match self
+            .backend
+            .execute_data(DataOperation::Get { key, fields: None })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => {
+                let user: User = serde_json::from_str(&json)
+                    .map_err(|e| AuthError::InternalError(format!("JSON parse error: {}", e)))?;
+                Ok(Some(user))
+            }
+            Ok(DataResult::Get { value: None, .. }) => Ok(None),
+            Ok(_) => Ok(None),
+            Err(e) => Err(AuthError::DatabaseError(e.to_string())),
         }
     }
 
@@ -210,24 +243,28 @@ impl UserStoreOperations for UserStore {
         if let Some(mut user) = self.get_user_by_id(user_id).await? {
             user.updated_at = Utc::now();
 
-            let conn = self
-                .backend
-                .get_connection()
-                .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-            let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
             let user_json = serde_json::to_string(&user)
                 .map_err(|e| AuthError::InternalError(format!("JSON serialize error: {}", e)))?;
 
             // Update both keys
             let id_key = format!("user:id:{}", user_id);
-            dbx_adapter::redis::primitives::string::RedisString::new(conn_arc.clone())
-                .set(&id_key, &user_json)
+            self.backend
+                .execute_data(DataOperation::Set {
+                    key: id_key,
+                    value: DataValue::String(user_json.clone()),
+                    ttl: None,
+                })
+                .await
                 .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
             let username_key = format!("user:username:{}", user.username);
-            dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-                .set(&username_key, &user_json)
+            self.backend
+                .execute_data(DataOperation::Set {
+                    key: username_key,
+                    value: DataValue::String(user_json),
+                    ttl: None,
+                })
+                .await
                 .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
         }
 

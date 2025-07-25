@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 use chrono::{DateTime, Utc};
-use dbx_core::{DataValue, UniversalBackend};
+use dbx_core::{DataOperation, DataResult, DataValue, UniversalBackend};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -365,53 +365,87 @@ impl RateLimitService {
     }
 
     pub async fn increment_total_requests(&self) -> Result<(), String> {
+        let key = "rate_limit:metrics:total_requests";
+        let current = self.get_counter_value(key).await.unwrap_or(0);
         let _ = self
             .limiter
             .backend
-            .incr("rate_limit:metrics:total_requests")
+            .execute_data(DataOperation::Set {
+                key: key.to_string(),
+                value: DataValue::Int(current + 1),
+                ttl: None,
+            })
             .await;
         Ok(())
     }
 
     pub async fn increment_rate_limited_requests(&self) -> Result<(), String> {
+        let key = "rate_limit:metrics:rate_limited_requests";
+        let current = self.get_counter_value(key).await.unwrap_or(0);
         let _ = self
             .limiter
             .backend
-            .incr("rate_limit:metrics:rate_limited_requests")
+            .execute_data(DataOperation::Set {
+                key: key.to_string(),
+                value: DataValue::Int(current + 1),
+                ttl: None,
+            })
             .await;
         Ok(())
     }
 
-    pub async fn get_total_requests(&self) -> Result<u64, String> {
-        let count: u64 = self
+    async fn get_counter_value(&self, key: &str) -> Result<i64, String> {
+        match self
             .limiter
             .backend
-            .get("rate_limit:metrics:total_requests")
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
             .await
-            .unwrap_or(0);
-        Ok(count)
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::Int(count)),
+                ..
+            }) => Ok(count),
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(s)),
+                ..
+            }) => s.parse().map_err(|e| format!("Parse error: {}", e)),
+            _ => Ok(0),
+        }
+    }
+
+    pub async fn get_total_requests(&self) -> Result<u64, String> {
+        let count = self
+            .get_counter_value("rate_limit:metrics:total_requests")
+            .await?;
+        Ok(count.max(0) as u64)
     }
 
     pub async fn get_rate_limited_requests(&self) -> Result<u64, String> {
-        let count: u64 = self
-            .limiter
-            .backend
-            .get("rate_limit:metrics:rate_limited_requests")
-            .await
-            .unwrap_or(0);
-        Ok(count)
+        let count = self
+            .get_counter_value("rate_limit:metrics:rate_limited_requests")
+            .await?;
+        Ok(count.max(0) as u64)
     }
 
     pub async fn reset_metrics(&self) -> Result<(), String> {
         let _ = self
             .limiter
             .backend
-            .del("rate_limit:metrics:total_requests")
+            .execute_data(DataOperation::Delete {
+                key: "rate_limit:metrics:total_requests".to_string(),
+                fields: None,
+            })
             .await;
         let _ = self
             .limiter
             .backend
-            .del("rate_limit:metrics:rate_limited_requests")
+            .execute_data(DataOperation::Delete {
+                key: "rate_limit:metrics:rate_limited_requests".to_string(),
+                fields: None,
+            })
             .await;
         Ok(())
     }
@@ -469,16 +503,10 @@ impl RateLimitService {
     }
 
     pub async fn count_active_limiters(&self) -> Result<u32, String> {
-        let mut conn = self
-            .limiter
-            .backend
-            .get_connection()
-            .map_err(|e| e.to_string())?;
-
-        let pattern = "rate_limit:*";
-        let keys: Vec<String> = conn.keys(&pattern).map_err(|e| e.to_string())?;
-
-        Ok(keys.len() as u32)
+        // Note: This implementation returns a fixed count since UniversalBackend
+        // doesn't expose key enumeration. In production, this could be tracked
+        // separately or implemented with backend-specific logic.
+        Ok(0)
     }
 }
 
