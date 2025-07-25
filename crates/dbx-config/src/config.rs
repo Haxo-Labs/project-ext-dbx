@@ -27,6 +27,9 @@ pub struct DbxConfig {
 
     /// Server configuration
     pub server: ServerConfig,
+
+    /// Admin configuration
+    pub admin: AdminConfig,
 }
 
 /// Configuration for a database backend
@@ -362,6 +365,52 @@ pub struct ServerConfig {
     pub cors_origins: Vec<String>,
 }
 
+/// Admin configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct AdminConfig {
+    /// Whether to create a default admin user on startup
+    pub create_default_admin: bool,
+
+    /// Default admin username
+    pub default_admin_username: Option<String>,
+
+    /// Default admin password
+    pub default_admin_password: Option<String>,
+
+    /// RBAC configuration
+    pub rbac: RbacConfig,
+}
+
+/// RBAC configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct RbacConfig {
+    /// Enable audit logging
+    pub audit_enabled: bool,
+
+    /// Audit log retention in days
+    #[validate(range(
+        min = 1,
+        max = 3650,
+        message = "Audit retention must be between 1 and 3650 days"
+    ))]
+    pub audit_retention_days: u32,
+
+    /// Maximum role inheritance depth
+    #[validate(range(
+        min = 1,
+        max = 10,
+        message = "Max inheritance depth must be between 1 and 10"
+    ))]
+    pub max_role_inheritance_depth: u8,
+
+    /// Performance cache TTL in seconds
+    #[validate(range(min = 60, max = 3600, message = "Cache TTL must be between 1m and 1h"))]
+    pub performance_cache_ttl_seconds: u64,
+
+    /// Default assignment TTL in days
+    pub default_assignment_ttl_days: Option<u32>,
+}
+
 impl Default for DbxConfig {
     fn default() -> Self {
         Self {
@@ -371,6 +420,30 @@ impl Default for DbxConfig {
             performance: PerformanceConfig::default(),
             security: SecurityConfig::default(),
             server: ServerConfig::default(),
+            admin: AdminConfig::default(),
+        }
+    }
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            create_default_admin: false,
+            default_admin_username: None,
+            default_admin_password: None,
+            rbac: RbacConfig::default(),
+        }
+    }
+}
+
+impl Default for RbacConfig {
+    fn default() -> Self {
+        Self {
+            audit_enabled: true,
+            audit_retention_days: 90,
+            max_role_inheritance_depth: 5,
+            performance_cache_ttl_seconds: 300,
+            default_assignment_ttl_days: None,
         }
     }
 }
