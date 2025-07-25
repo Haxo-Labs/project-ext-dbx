@@ -8,8 +8,13 @@ use axum::{
 use std::sync::Arc;
 
 use crate::{
-    middleware::{auth::{AuthResponse, UserInfo}, AuthError, JwtService, UserStore},
-    models::{ApiResponse, Claims, LoginRequest, RefreshRequest, TokenValidationResponse, User},
+    middleware::{
+        auth::{AuthResponse, UserStoreOperations},
+        AuthError, JwtService, UserStore,
+    },
+    models::{
+        ApiResponse, Claims, LoginRequest, RefreshRequest, TokenValidationResponse, User, UserInfo,
+    },
 };
 
 /// Create authentication routes
@@ -32,29 +37,12 @@ pub async fn login(
     (StatusCode, Json<ApiResponse<()>>),
 > {
     let user = user_store
-        .verify_password(&login_request.username, &login_request.password)
+        .get_user_by_username(&login_request.username)
         .await
         .map_err(|_| {
             (
                 StatusCode::UNAUTHORIZED,
                 Json(ApiResponse::<()>::error("Invalid credentials".to_string())),
-            )
-        })?;
-
-    if !user {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ApiResponse::<()>::error("Invalid credentials".to_string())),
-        ));
-    }
-
-    let user = user_store
-        .get_user_by_username(&login_request.username)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()>::error("Database error".to_string())),
             )
         })?
         .ok_or_else(|| {
@@ -63,6 +51,25 @@ pub async fn login(
                 Json(ApiResponse::<()>::error("User not found".to_string())),
             )
         })?;
+
+    // Verify password
+    if !user_store
+        .verify_password(&login_request.username, &login_request.password)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "Authentication failed".to_string(),
+                )),
+            )
+        })?
+    {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<()>::error("Invalid credentials".to_string())),
+        ));
+    }
 
     let auth_response = jwt_service
         .authenticate_user(&login_request.username, &login_request.password)
@@ -83,7 +90,10 @@ pub async fn login(
 pub async fn refresh_token(
     State((jwt_service, _)): State<(Arc<JwtService>, Arc<UserStore>)>,
     Json(refresh_request): Json<RefreshRequest>,
-) -> Result<Json<ApiResponse<crate::middleware::auth::AuthResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+) -> Result<
+    Json<ApiResponse<crate::middleware::auth::AuthResponse>>,
+    (StatusCode, Json<ApiResponse<()>>),
+> {
     let auth_response = jwt_service
         .refresh_token(&refresh_request.refresh_token)
         .await

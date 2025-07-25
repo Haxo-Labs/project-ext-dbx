@@ -2,21 +2,21 @@ name: DBX Crates Tests
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
     paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/crates-tests.yml"
-      - "scripts/test-with-server.sh"
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/crates-tests.yml
+      - scripts/test-with-server.sh
   pull_request:
-    branches: [master]
+    branches: [master, main]
     paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/crates-tests.yml"
-      - "scripts/test-with-server.sh"
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/crates-tests.yml
+      - scripts/test-with-server.sh
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,7 +29,7 @@ jobs:
     strategy:
       matrix:
         rust: [stable]
-        features: [default, "async", "connection-pool", "all"]
+        backend: [redis]
 
     services:
       redis:
@@ -58,65 +58,67 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ matrix.backend }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ matrix.features }}-
+            ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ matrix.backend }}-
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
             ${{ runner.os }}-cargo-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # - name: Run clippy
-      #   run: |
-      #     if [ "${{ matrix.features }}" = "all" ]; then
-      #       cargo clippy --workspace --features "async,connection-pool" -- -D warnings
-      #     else
-      #       cargo clippy --workspace --features "${{ matrix.features }}" -- -D warnings
-      #     fi
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        continue-on-error: true
 
-      - name: Build crates package
+      - name: Build all crates
+        run: cargo build --workspace --all-targets
+
+      - name: Set up test environment
         run: |
-          if [ "${{ matrix.features }}" = "all" ]; then
-            cargo build --workspace --features "async,connection-pool" --verbose
-          else
-            cargo build --workspace --features "${{ matrix.features }}" --verbose
-          fi
-
-      - name: Make script executable
-        run: chmod +x scripts/test-with-server.sh
-
-      - name: Run tests with server
-        run: |
-          # Create .env file for testing
+          # Create test environment configuration
           cat > .env << EOF
-          REDIS_URL=redis://localhost:6379
+          DBX_BACKEND_1_NAME=test_backend
+          DBX_BACKEND_1_PROVIDER=redis
+          DBX_BACKEND_1_URL=redis://localhost:6379
+          DBX_DEFAULT_BACKEND=test_backend
+          JWT_SECRET=test-jwt-secret-that-is-at-least-32-characters-long-for-security
+          CREATE_DEFAULT_ADMIN=true
+          DEFAULT_ADMIN_USERNAME=testadmin
+          DEFAULT_ADMIN_PASSWORD=testpassword123
           HOST=0.0.0.0
           PORT=3000
-          POOL_SIZE=10
           LOG_LEVEL=INFO
           EOF
 
-          # Run tests using the script (skip Redis since it's provided as service)
-          ./scripts/test-with-server.sh --verbose --skip-redis
+      - name: Run core crate tests
+        run: |
+          cd crates/dbx-core
+          cargo test --lib
+
+      - name: Run config crate tests
+        run: |
+          cd crates/dbx-config
+          cargo test --lib
+
+      - name: Run router crate tests
+        run: |
+          cd crates/dbx-router
+          cargo test --lib
+
+      - name: Run adapter crate tests
+        run: |
+          cd crates/adapter
+          cargo test --lib
+
+      - name: Run API crate unit tests
+        run: |
+          cd crates/dbx-api
+          cargo test --lib
+
+      - name: Run integration tests
+        run: |
+          cd crates/dbx-api
+          cargo test --test integration_tests
         env:
-          REDIS_URL: redis://localhost:6379
-
-  crates-basic-check:
-    name: Crates Basic Checks
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Check if crates compile
-        run: cargo check --workspace --all-features
-
-      - name: Build crates documentation
-        run: cargo doc --workspace --all-features --no-deps
-
-      # - name: Check crates package
-      #   run: cargo package --workspace --allow-dirty
+          DBX_BACKEND_1_URL: redis://localhost:6379
