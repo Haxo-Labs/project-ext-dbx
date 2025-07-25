@@ -191,6 +191,7 @@ impl AppState {
         let performance = dbx_config::PerformanceConfig::default();
         let security = dbx_config::SecurityConfig::default();
         let server = dbx_config::ServerConfig::default();
+        let admin = dbx_config::AdminConfig::default();
 
         Ok(dbx_config::DbxConfig {
             backends,
@@ -199,6 +200,7 @@ impl AppState {
             performance,
             security,
             server,
+            admin,
         })
     }
 }
