@@ -215,7 +215,6 @@ impl AppConfig {
                 source: e,
             })?;
 
-
         let jwt_secret = env::var("JWT_SECRET")
             .map_err(|_| ConfigError::MissingEnvironmentVariable("JWT_SECRET".to_string()))?;
 
@@ -439,11 +438,7 @@ impl AppConfig {
         };
 
         Ok(AppConfig {
-            server: ServerConfig {
-                host,
-                port,
-                redis_url,
-            },
+            server: ServerConfig { host, port },
             jwt: jwt_config,
             rbac: rbac_config,
             rate_limit: rate_limit_config,
@@ -464,7 +459,7 @@ mod tests {
     fn clear_env_vars() {
         env::remove_var("HOST");
         env::remove_var("PORT");
-        env::remove_var("REDIS_URL");
+
         env::remove_var("JWT_SECRET");
         env::remove_var("ACCESS_TOKEN_EXPIRATION");
         env::remove_var("REFRESH_TOKEN_EXPIRATION");
@@ -529,7 +524,7 @@ mod tests {
         let config = AppConfig::from_env().unwrap();
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 3000);
-        assert_eq!(config.server.redis_url, "redis://localhost:6379");
+
         assert_eq!(config.jwt.access_token_expiration, 900);
         assert_eq!(config.jwt.refresh_token_expiration, 604800);
         assert_eq!(config.jwt.issuer, "dbx-api");
@@ -544,7 +539,7 @@ mod tests {
         clear_env_vars();
         env::set_var("HOST", "127.0.0.1");
         env::set_var("PORT", "8080");
-        env::set_var("REDIS_URL", "redis://127.0.0.1:6380");
+
         env::set_var(
             "JWT_SECRET",
             "custom-jwt-secret-that-is-at-least-32-characters-long",
@@ -559,7 +554,7 @@ mod tests {
         let config = AppConfig::from_env().unwrap();
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8080);
-        assert_eq!(config.server.redis_url, "redis://127.0.0.1:6380");
+
         assert_eq!(config.jwt.access_token_expiration, 1800);
         assert_eq!(config.jwt.refresh_token_expiration, 86400);
         assert_eq!(config.jwt.issuer, "custom-api");
