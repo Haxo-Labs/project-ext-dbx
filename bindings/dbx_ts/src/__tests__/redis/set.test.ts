@@ -3,9 +3,9 @@ const { DbxClient } = require("../../../index.js");
 
 describe("DBX Set-like Operations", () => {
   let client: any;
-  const TEST_BASE_URL = process.env.DBX_HTTP_URL || "http://localhost:3000";
-  const TEST_USERNAME = process.env.DBX_USERNAME || "testuser";
-  const TEST_PASSWORD = process.env.DBX_PASSWORD || "testpassword123";
+  const TEST_BASE_URL = process.env.TEST_BASE_URL || "http://localhost:3000";
+  const TEST_USERNAME = process.env.TEST_USERNAME || "testuser";
+  const TEST_PASSWORD = process.env.TEST_PASSWORD || "testpassword123";
 
   beforeAll(async () => {
     client = new DbxClient({
