@@ -41,6 +41,9 @@ impl ConfigLoader {
         // Load security configuration
         Self::load_security_from_env(&mut config)?;
 
+        // Load admin configuration
+        Self::load_admin_from_env(&mut config)?;
+
         ConfigValidator::validate_config(&config)?;
 
         Ok(config)
@@ -263,6 +266,81 @@ impl ConfigLoader {
                 issuer: env::var("JWT_ISSUER").unwrap_or_else(|_| "dbx".to_string()),
                 audience: env::var("JWT_AUDIENCE").ok(),
             });
+        }
+
+        Ok(())
+    }
+
+    /// Load admin configuration from environment variables
+    fn load_admin_from_env(config: &mut DbxConfig) -> ConfigResult<()> {
+        if let Ok(create_admin_str) = env::var("CREATE_DEFAULT_ADMIN") {
+            config.admin.create_default_admin = create_admin_str.parse().map_err(|e| {
+                ConfigError::environment_error(
+                    format!(
+                        "Invalid create default admin value '{}': {}",
+                        create_admin_str, e
+                    ),
+                    Some("CREATE_DEFAULT_ADMIN".to_string()),
+                )
+            })?;
+        }
+
+        if let Ok(username) = env::var("DEFAULT_ADMIN_USERNAME") {
+            config.admin.default_admin_username = Some(username);
+        }
+
+        if let Ok(password) = env::var("DEFAULT_ADMIN_PASSWORD") {
+            config.admin.default_admin_password = Some(password);
+        }
+
+        // Load RBAC configuration
+        if let Ok(audit_str) = env::var("RBAC_AUDIT_ENABLED") {
+            config.admin.rbac.audit_enabled = audit_str.parse().map_err(|e| {
+                ConfigError::environment_error(
+                    format!("Invalid RBAC audit enabled value '{}': {}", audit_str, e),
+                    Some("RBAC_AUDIT_ENABLED".to_string()),
+                )
+            })?;
+        }
+
+        if let Ok(retention_str) = env::var("RBAC_AUDIT_RETENTION_DAYS") {
+            config.admin.rbac.audit_retention_days = retention_str.parse().map_err(|e| {
+                ConfigError::environment_error(
+                    format!("Invalid audit retention days '{}': {}", retention_str, e),
+                    Some("RBAC_AUDIT_RETENTION_DAYS".to_string()),
+                )
+            })?;
+        }
+
+        if let Ok(depth_str) = env::var("RBAC_MAX_ROLE_INHERITANCE_DEPTH") {
+            config.admin.rbac.max_role_inheritance_depth = depth_str.parse().map_err(|e| {
+                ConfigError::environment_error(
+                    format!("Invalid max role inheritance depth '{}': {}", depth_str, e),
+                    Some("RBAC_MAX_ROLE_INHERITANCE_DEPTH".to_string()),
+                )
+            })?;
+        }
+
+        if let Ok(ttl_str) = env::var("RBAC_PERFORMANCE_CACHE_TTL_SECONDS") {
+            config.admin.rbac.performance_cache_ttl_seconds = ttl_str.parse().map_err(|e| {
+                ConfigError::environment_error(
+                    format!("Invalid performance cache TTL '{}': {}", ttl_str, e),
+                    Some("RBAC_PERFORMANCE_CACHE_TTL_SECONDS".to_string()),
+                )
+            })?;
+        }
+
+        if let Ok(assignment_ttl_str) = env::var("RBAC_DEFAULT_ASSIGNMENT_TTL_DAYS") {
+            config.admin.rbac.default_assignment_ttl_days =
+                Some(assignment_ttl_str.parse().map_err(|e| {
+                    ConfigError::environment_error(
+                        format!(
+                            "Invalid default assignment TTL days '{}': {}",
+                            assignment_ttl_str, e
+                        ),
+                        Some("RBAC_DEFAULT_ASSIGNMENT_TTL_DAYS".to_string()),
+                    )
+                })?);
         }
 
         Ok(())
