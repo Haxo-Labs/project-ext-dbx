@@ -11,12 +11,6 @@ async fn main() {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    // Check if JWT secret is provided
-    if env::var("JWT_SECRET").is_err() {
-        error!("JWT_SECRET environment variable is required!");
-        error!("   Set a secure secret: export JWT_SECRET='dbx-jwt-secret'");
-        std::process::exit(1);
-    }
 
     // Get configuration file path if provided
     let args: Vec<String> = env::args().collect();
@@ -27,27 +21,27 @@ async fn main() {
         .map(|s| s.as_str());
 
     info!("Starting DBX Server");
-        if let Some(path) = config_path {
-            info!("Using configuration file: {}", path);
-        } else {
-            info!("Using default configuration from environment variables");
-        }
+    if let Some(path) = config_path {
+        info!("Using configuration file: {}", path);
+    } else {
+        info!("Using default configuration from environment variables");
+    }
 
     if let Err(e) = run_server(config_path).await {
-            match e {
-                ServerError::Configuration(config_err) => {
-                    error!("Configuration error: {}", config_err);
-                    error!("Make sure all required environment variables are set or provide a valid config file");
-                }
-                ServerError::DatabaseConnection(db_err) => {
-                    error!("Database connection error: {}", db_err);
-                    error!("Make sure all configured backends are accessible");
-                }
-                _ => {
-                    error!("Server error: {}", e);
-                }
+        match e {
+            ServerError::Configuration(config_err) => {
+                error!("Configuration error: {}", config_err);
+                error!("Make sure all required environment variables are set or provide a valid config file");
             }
-            std::process::exit(1);
+            ServerError::DatabaseConnection(db_err) => {
+                error!("Database connection error: {}", db_err);
+                error!("Make sure all configured backends are accessible");
+            }
+            _ => {
+                error!("Server error: {}", e);
+            }
+        }
+        std::process::exit(1);
     }
 }
 
