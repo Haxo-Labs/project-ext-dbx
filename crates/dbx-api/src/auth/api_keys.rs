@@ -266,11 +266,14 @@ impl ApiKeyService {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => serde_json::from_str(&json).unwrap_or_else(|_| Vec::new()),
-            _ => Vec::new(),
+            Ok(data_result) => {
+                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
+                    serde_json::from_str(&json).unwrap_or_else(|_| Vec::new())
+                } else {
+                    Vec::new()
+                }
+            }
+            Err(e) => return Err(ApiKeyError::DatabaseError(e.to_string())),
         };
 
         // Add member if not already present
@@ -307,11 +310,7 @@ impl ApiKeyService {
             .await
         {
             Ok(data_result) => {
-                if let dbx_core::DataResult::Get {
-                    value: Some(DataValue::String(id)),
-                    ..
-                } = data_result
-                {
+                if let dbx_core::DataResult::Get { value: Some(DataValue::String(id)), .. } = data_result {
                     id
                 } else {
                     return Err(ApiKeyError::KeyNotFound);
@@ -326,7 +325,7 @@ impl ApiKeyService {
 
     /// Get API key by ID
     pub async fn get_api_key_by_id(&self, id: &str) -> Result<ApiKey, ApiKeyError> {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
         let key_id = format!("api_key:id:{}", id);
         let api_key_json = match self
@@ -337,12 +336,13 @@ impl ApiKeyService {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => json,
-            Ok(DataResult::Get { value: None, .. }) => return Err(ApiKeyError::KeyNotFound),
-            Ok(_) => return Err(ApiKeyError::KeyNotFound),
+            Ok(data_result) => {
+                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
+                    json
+                } else {
+                    return Err(ApiKeyError::KeyNotFound);
+                }
+            }
             Err(e) => return Err(ApiKeyError::DatabaseError(e.to_string())),
         };
 
@@ -355,18 +355,18 @@ impl ApiKeyService {
     /// Check if key name exists for user
     async fn key_name_exists(&self, owner_id: &str, name: &str) -> Result<bool, ApiKeyError> {
         let name_key = format!("api_key:name:{}:{}", owner_id, name);
-
-        match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: name_key,
-                fields: None,
-            })
-            .await
-        {
-            Ok(DataResult::Get { value: Some(_), .. }) => Ok(true),
-            Ok(DataResult::Get { value: None, .. }) => Ok(false),
-            Ok(_) => Ok(false),
+        
+        match self.backend.execute_data(DataOperation::Get {
+            key: name_key,
+            fields: None,
+        }).await {
+            Ok(data_result) => {
+                if let dbx_core::DataResult::Get { value: Some(_), .. } = data_result {
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
             Err(e) => Err(ApiKeyError::DatabaseError(e.to_string())),
         }
     }
@@ -401,22 +401,18 @@ impl ApiKeyService {
 
     /// Get set members (simulated with JSON array)
     async fn get_set_members(&self, key: &str) -> Result<Vec<String>, ApiKeyError> {
-        match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: key.to_string(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => {
-                serde_json::from_str(&json).map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+        match self.backend.execute_data(DataOperation::Get {
+            key: key.to_string(),
+            fields: None,
+        }).await {
+            Ok(data_result) => {
+                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
+                    serde_json::from_str(&json)
+                        .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+                } else {
+                    Ok(Vec::new())
+                }
             }
-            Ok(DataResult::Get { value: None, .. }) => Ok(Vec::new()),
-            Ok(_) => Ok(Vec::new()),
             Err(e) => Err(ApiKeyError::DatabaseError(e.to_string())),
         }
     }
@@ -424,33 +420,24 @@ impl ApiKeyService {
     /// Get API key usage stats by ID
     pub async fn get_key_usage_stats(&self, key_id: &str) -> Result<ApiKeyUsageStats, ApiKeyError> {
         let usage_key = format!("api_key:usage:{}", key_id);
-
-        match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: usage_key,
-                fields: None,
-            })
-            .await
-        {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => {
-                serde_json::from_str(&json).map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+        
+        match self.backend.execute_data(DataOperation::Get {
+            key: usage_key,
+            fields: None,
+        }).await {
+            Ok(data_result) => {
+                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
+                    serde_json::from_str(&json)
+                        .map_err(|e| ApiKeyError::DatabaseError(e.to_string()))
+                } else {
+                    Ok(ApiKeyUsageStats {
+                        total_requests: 0,
+                        last_used_at: None,
+                        requests_today: 0,
+                        requests_this_hour: 0,
+                    })
+                }
             }
-            Ok(DataResult::Get { value: None, .. }) => {
-                // Return default stats if none exist
-                Ok(ApiKeyUsageStats {
-                    total_requests: 0,
-                    last_used_at: None,
-                    requests_today: 0,
-                    requests_this_hour: 0,
-                })
-            }
-            Ok(_) => Err(ApiKeyError::DatabaseError(
-                "Invalid data format".to_string(),
-            )),
             Err(e) => Err(ApiKeyError::DatabaseError(e.to_string())),
         }
     }
@@ -558,11 +545,14 @@ impl ApiKeyService {
             })
             .await
         {
-            Ok(DataResult::Get {
-                value: Some(DataValue::String(json)),
-                ..
-            }) => serde_json::from_str(&json).unwrap_or_else(|_| Vec::new()),
-            _ => Vec::new(),
+            Ok(data_result) => {
+                if let dbx_core::DataResult::Get { value: Some(DataValue::String(json)), .. } = data_result {
+                    serde_json::from_str(&json).unwrap_or_else(|_| Vec::new())
+                } else {
+                    Vec::new()
+                }
+            }
+            Err(e) => return Err(ApiKeyError::DatabaseError(e.to_string())),
         };
 
         // Remove member if present
