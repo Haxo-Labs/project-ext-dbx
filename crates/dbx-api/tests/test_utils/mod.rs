@@ -3,7 +3,7 @@ use dbx_adapter::{redis::client::RedisPool, redis::factory::RedisBackendFactory}
 use dbx_api::{
     auth::{permissions::Permission, ApiKeyService, RbacConfig, RbacService},
     config::{AppConfig, JwtConfig},
-    middleware::{JwtService, UserStore, UserStoreOperations},
+    middleware::{JwtService, RateLimitService, UserStore, UserStoreOperations},
     models::{CreateUserRequest, UserRole},
     server::{create_app, AppState},
 };
@@ -160,26 +160,27 @@ impl TestServer {
         // Create Redis pool for user store
         let redis_pool = Arc::new(RedisPool::new(redis_url, 5)?);
 
-        // Create JWT service
+        // Create JWT config
         let jwt_config = JwtConfig {
             secret: "test-jwt-secret-that-is-at-least-32-characters-long-for-security".to_string(),
             access_token_expiration: 900,
             refresh_token_expiration: 604800,
             issuer: "dbx-test-api".to_string(),
         };
-        let jwt_service = Arc::new(JwtService::new(jwt_config));
 
-        // Create user store with test admin
-        let user_store = Arc::new(
-            UserStore::new_with_admin(redis_pool.clone(), "testadmin", "testpassword123").await?,
-        );
+        // Create user store
+        let user_store = Arc::new(UserStore::new(redis_pool.clone()));
 
-        // Get the admin user ID for role assignment
-        let admin_user = if let UserStore::Redis(store) = user_store.as_ref() {
-            store.get_user("testadmin").await.ok().flatten()
-        } else {
-            None
+        // Create JWT service
+        let jwt_service = Arc::new(JwtService::new(jwt_config, user_store.clone()));
+
+        // Create admin user
+        let admin_request = CreateUserRequest {
+            username: "testadmin".to_string(),
+            password: "testpassword123".to_string(),
+            role: UserRole::Admin,
         };
+        let admin_user = user_store.create_user(admin_request).await?;
 
         // Create additional test users
         let test_user_request = CreateUserRequest {
@@ -194,24 +195,30 @@ impl TestServer {
             role: UserRole::ReadOnly,
         };
 
-        // Add test users to store and collect their IDs
-        let (test_user, readonly_user) = if let UserStore::Redis(store) = user_store.as_ref() {
-            let test_user = store.create_user_from_request(test_user_request).await.ok();
-            let readonly_user = store
-                .create_user_from_request(readonly_user_request)
-                .await
-                .ok();
-            (test_user, readonly_user)
-        } else {
-            (None, None)
+        // Create test users
+        let test_user_request = CreateUserRequest {
+            username: "testuser".to_string(),
+            password: "testpassword123".to_string(),
+            role: UserRole::User,
         };
+        let test_user = user_store.create_user(test_user_request).await?;
+
+        let readonly_user_request = CreateUserRequest {
+            username: "testreadonly".to_string(),
+            password: "testpassword123".to_string(),
+            role: UserRole::ReadOnly,
+        };
+        let readonly_user = user_store.create_user(readonly_user_request).await?;
 
         // Create API key service
         let api_key_service = Arc::new(ApiKeyService::new(redis_pool.clone()));
 
         // Create RBAC service
         let rbac_config = RbacConfig::default();
-        let rbac_service = Arc::new(RbacService::new(redis_pool, rbac_config));
+        let rbac_service = Arc::new(RbacService::new(redis_pool.clone(), rbac_config));
+
+        // Create rate limit service
+        let rate_limit_service = Arc::new(RateLimitService::new(redis_pool));
 
         // Set up RBAC roles and assignments for test users
         let admin_permissions = Permission::admin()
@@ -263,33 +270,27 @@ impl TestServer {
             .ok();
 
         // Assign roles to test users using their actual user IDs
-        if let Some(admin) = admin_user.as_ref() {
-            rbac_service
-                .assign_role(&admin.id, "testadmin", "admin", "system", None, None)
-                .await
-                .ok();
-        }
+        rbac_service
+            .assign_role(&admin_user.id, "testadmin", "admin", "system", None, None)
+            .await
+            .ok();
 
-        if let Some(user) = test_user.as_ref() {
-            rbac_service
-                .assign_role(&user.id, "testuser", "user", "system", None, None)
-                .await
-                .ok();
-        }
+        rbac_service
+            .assign_role(&test_user.id, "testuser", "user", "system", None, None)
+            .await
+            .ok();
 
-        if let Some(readonly) = readonly_user.as_ref() {
-            rbac_service
-                .assign_role(
-                    &readonly.id,
-                    "testreadonly",
-                    "readonly",
-                    "system",
-                    None,
-                    None,
-                )
-                .await
-                .ok();
-        }
+        rbac_service
+            .assign_role(
+                &readonly_user.id,
+                "testreadonly",
+                "readonly",
+                "system",
+                None,
+                None,
+            )
+            .await
+            .ok();
 
         Ok(AppState {
             backend_router: Arc::new(backend_router),
@@ -297,6 +298,7 @@ impl TestServer {
             user_store,
             api_key_service,
             rbac_service,
+            rate_limit_service,
         })
     }
 

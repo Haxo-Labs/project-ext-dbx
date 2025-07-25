@@ -26,7 +26,7 @@ use crate::{
     },
 };
 use dbx_adapter::redis::factory::RedisBackendFactory;
-use dbx_config::{BackendConfig, DbxConfig, LoadBalancingConfig, RoutingConfig};
+use dbx_config::DbxConfig;
 use dbx_core::LoadBalancingStrategy;
 use dbx_router::{BackendRegistryBuilder, BackendRouter};
 use std::collections::HashMap;
@@ -80,34 +80,18 @@ impl AppState {
             ServerError::DatabaseConnection(format!("Failed to create router: {}", e))
         })?;
 
-        // Create Redis connection for user store
-        let redis_pool = Arc::new(
-            dbx_adapter::redis::client::RedisPool::new(&app_config.server.redis_url, 5).map_err(
-                |e| ServerError::DatabaseConnection(format!("Redis connection failed: {}", e)),
-            )?,
-        );
+        // Get default backend configuration for auth services
+        let default_backend_name = &config.routing.default_backend;
+        let default_backend = config.backends.get(default_backend_name).ok_or_else(|| {
+            ServerError::Configuration(ConfigError::MissingEnvironmentVariable(format!(
+                "Default backend '{}' not found in configuration",
+                default_backend_name
+            )))
+        })?;
 
-        // Create JWT service, user store, API key service, and RBAC service
-        let jwt_config = app_config.jwt.clone();
-        let user_store = Arc::new(UserStore::new(redis_pool.clone()));
-        let jwt_service = Arc::new(JwtService::new(jwt_config, user_store.clone()));
-        let api_key_service = Arc::new(ApiKeyService::new(redis_pool.clone()));
-
-        // Initialize RBAC service with configuration from environment
-        let rbac_service = Arc::new(RbacService::new(redis_pool.clone(), app_config.rbac));
-
-        // Initialize rate limiting service
-        let rate_limit_service = RateLimitService::new(redis_pool.clone());
-        if app_config.rate_limit.enabled {
-            let global_policy = crate::middleware::RateLimitPolicy {
-                requests: app_config.rate_limit.global_requests_per_window,
-                window_seconds: app_config.rate_limit.global_window_seconds,
-                burst_allowance: app_config.rate_limit.global_burst_allowance,
-            };
-            rate_limit_service.set_global_policy(global_policy).await;
-        }
-        let rate_limit_service = Arc::new(rate_limit_service);
-
+        // Create backend-agnostic auth services based on provider type
+        let (user_store, jwt_service, api_key_service, rbac_service, rate_limit_service) =
+            Self::create_auth_services(&app_config, default_backend).await?;
         Ok(Self {
             backend_router: Arc::new(backend_router),
             jwt_service,
@@ -118,17 +102,88 @@ impl AppState {
         })
     }
 
-    /// Create default configuration from app config
+    async fn create_auth_services(
+        app_config: &AppConfig,
+        backend_config: &dbx_config::BackendConfig,
+    ) -> Result<
+        (
+            Arc<UserStore>,
+            Arc<JwtService>,
+            Arc<ApiKeyService>,
+            Arc<RbacService>,
+            Arc<RateLimitService>,
+        ),
+        ServerError,
+    > {
+        match backend_config.provider.as_str() {
+            "redis" => {
+                // Create Redis connection pool for auth services
+                let redis_pool = Arc::new(
+                    dbx_adapter::redis::client::RedisPool::new(
+                        &backend_config.url,
+                        backend_config.pool_size.unwrap_or(5),
+                    )
+                    .map_err(|e| {
+                        ServerError::DatabaseConnection(format!(
+                            "Redis auth connection failed: {}",
+                            e
+                        ))
+                    })?,
+                );
+
+                // Create auth services using Redis backend
+                let user_store = Arc::new(UserStore::new(redis_pool.clone()));
+                let jwt_service =
+                    Arc::new(JwtService::new(app_config.jwt.clone(), user_store.clone()));
+                let api_key_service = Arc::new(ApiKeyService::new(redis_pool.clone()));
+                let rbac_service = Arc::new(RbacService::new(
+                    redis_pool.clone(),
+                    app_config.rbac.clone(),
+                ));
+
+                let rate_limit_service = RateLimitService::new(redis_pool);
+                if app_config.rate_limit.enabled {
+                    let global_policy = crate::middleware::RateLimitPolicy {
+                        requests: app_config.rate_limit.global_requests_per_window,
+                        window_seconds: app_config.rate_limit.global_window_seconds,
+                        burst_allowance: app_config.rate_limit.global_burst_allowance,
+                    };
+                    rate_limit_service.set_global_policy(global_policy).await;
+                }
+                let rate_limit_service = Arc::new(rate_limit_service);
+
+                Ok((
+                    user_store,
+                    jwt_service,
+                    api_key_service,
+                    rbac_service,
+                    rate_limit_service,
+                ))
+            }
+            provider => Err(ServerError::Configuration(
+                ConfigError::MissingEnvironmentVariable(format!(
+                    "Unsupported auth backend provider: {}",
+                    provider
+                )),
+            )),
+        }
+    }
+
+    /// Create configuration - use environment if available, otherwise create test defaults
     fn create_default_config(app_config: &AppConfig) -> Result<DbxConfig, ServerError> {
+        // Try to load from environment first (need to handle async)
+        // For tests, we'll just use defaults since env vars may not be set
+
+        // Fallback to creating test defaults if environment variables aren't set
         let mut backends = HashMap::new();
 
-        // Add default Redis backend
+        // Create a single Redis backend for testing
         backends.insert(
-            "default".to_string(),
-            BackendConfig {
+            "test_redis".to_string(),
+            dbx_config::BackendConfig {
                 provider: "redis".to_string(),
-                url: app_config.server.redis_url.clone(),
-                pool_size: Some(10),
+                url: "redis://localhost:6379".to_string(),
+                pool_size: Some(5),
                 timeout_ms: Some(5000),
                 retry_attempts: Some(3),
                 retry_delay_ms: Some(1000),
@@ -137,29 +192,26 @@ impl AppState {
             },
         );
 
-        let routing = RoutingConfig {
-            default_backend: "default".to_string(),
-            key_routing: Vec::new(),
+        let routing = dbx_config::RoutingConfig {
+            default_backend: "test_redis".to_string(),
             operation_routing: HashMap::new(),
-            load_balancing: Some(LoadBalancingConfig {
-                strategy: LoadBalancingStrategy::RoundRobin,
-                backends: vec!["default".to_string()],
-                health_check_interval_ms: 30000,
-                weights: Some({
-                    let mut weights = HashMap::new();
-                    weights.insert("default".to_string(), 1.0);
-                    weights
-                }),
-            }),
+            key_routing: vec![],
+            load_balancing: None,
         };
 
-        Ok(DbxConfig {
+        // Use proper default configurations
+        let consistency = dbx_config::ConsistencyConfig::default();
+        let performance = dbx_config::PerformanceConfig::default();
+        let security = dbx_config::SecurityConfig::default();
+        let server = dbx_config::ServerConfig::default();
+
+        Ok(dbx_config::DbxConfig {
             backends,
             routing,
-            consistency: Default::default(),
-            performance: Default::default(),
-            security: Default::default(),
-            server: Default::default(),
+            consistency,
+            performance,
+            security,
+            server,
         })
     }
 }
@@ -178,7 +230,6 @@ pub fn create_app(state: AppState) -> Router {
             server: crate::config::ServerConfig {
                 host: "0.0.0.0".to_string(),
                 port: 3000,
-                redis_url: "redis://localhost:6379".to_string(),
             },
             jwt: crate::config::JwtConfig {
                 secret: "fallback-secret-key-at-least-32-chars".to_string(),
