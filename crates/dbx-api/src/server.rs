@@ -45,20 +45,24 @@ pub struct AppState {
 impl AppState {
     /// Create new application state with backend router
     pub async fn new(config_path: Option<&str>) -> Result<Self, ServerError> {
-        let app_config = AppConfig::from_env().map_err(ServerError::Configuration)?;
-
-        // Load or create configuration
+        // Load DbxConfig
         let config = if let Some(path) = config_path {
             dbx_config::ConfigLoader::load_from_file(path)
                 .await
-                .map_err(|e| ServerError::Configuration(ConfigError::InvalidJwtSecret))?
+                .map_err(|e| ServerError::Configuration(ConfigError::DbxConfig(e)))?
         } else {
-            Self::create_default_config(&app_config)?
+            dbx_config::ConfigLoader::load_from_env()
+                .await
+                .map_err(|e| ServerError::Configuration(ConfigError::DbxConfig(e)))?
         };
 
         // Validate configuration
         dbx_config::ConfigValidator::validate_config(&config)
-            .map_err(|e| ServerError::Configuration(ConfigError::InvalidJwtSecret))?;
+            .map_err(|e| ServerError::Configuration(ConfigError::DbxConfig(e)))?;
+
+        // Create AppConfig from DbxConfig
+        let app_config = AppConfig::from_dbx_config_direct(config.clone())
+            .map_err(ServerError::Configuration)?;
 
         // Build backend registry
         let mut registry_builder = BackendRegistryBuilder::new();
@@ -89,9 +93,20 @@ impl AppState {
             )))
         })?;
 
-        // Create backend-agnostic auth services based on provider type
+        // Get the backend instance from the router for auth services
+        let auth_backend = backend_router
+            .get_backend(default_backend_name)
+            .await
+            .ok_or_else(|| {
+                ServerError::DatabaseConnection(format!(
+                    "Auth backend '{}' not available",
+                    default_backend_name
+                ))
+            })?;
+
+        // Create backend-agnostic auth services using the configured default backend
         let (user_store, jwt_service, api_key_service, rbac_service, rate_limit_service) =
-            Self::create_auth_services(&app_config, default_backend).await?;
+            Self::create_auth_services(&app_config, auth_backend).await?;
         Ok(Self {
             backend_router: Arc::new(backend_router),
             jwt_service,
@@ -104,7 +119,7 @@ impl AppState {
 
     async fn create_auth_services(
         app_config: &AppConfig,
-        backend_config: &dbx_config::BackendConfig,
+        backend: Arc<dyn dbx_core::UniversalBackend>,
     ) -> Result<
         (
             Arc<UserStore>,
@@ -115,58 +130,30 @@ impl AppState {
         ),
         ServerError,
     > {
-        match backend_config.provider.as_str() {
-            "redis" => {
-                // Create Redis connection pool for auth services
-                let redis_pool = Arc::new(
-                    dbx_adapter::redis::client::RedisPool::new(
-                        &backend_config.url,
-                        backend_config.pool_size.unwrap_or(5),
-                    )
-                    .map_err(|e| {
-                        ServerError::DatabaseConnection(format!(
-                            "Redis auth connection failed: {}",
-                            e
-                        ))
-                    })?,
-                );
+        // Create auth services using the configured backend
+        let user_store = Arc::new(UserStore::new(backend.clone()));
+        let jwt_service = Arc::new(JwtService::new(app_config.jwt.clone(), user_store.clone()));
+        let api_key_service = Arc::new(ApiKeyService::new(backend.clone()));
+        let rbac_service = Arc::new(RbacService::new(backend.clone(), app_config.rbac.clone()));
 
-                // Create auth services using Redis backend
-                let user_store = Arc::new(UserStore::new(redis_pool.clone()));
-                let jwt_service =
-                    Arc::new(JwtService::new(app_config.jwt.clone(), user_store.clone()));
-                let api_key_service = Arc::new(ApiKeyService::new(redis_pool.clone()));
-                let rbac_service = Arc::new(RbacService::new(
-                    redis_pool.clone(),
-                    app_config.rbac.clone(),
-                ));
-
-                let rate_limit_service = RateLimitService::new(redis_pool);
-                if app_config.rate_limit.enabled {
-                    let global_policy = crate::middleware::RateLimitPolicy {
-                        requests: app_config.rate_limit.global_requests_per_window,
-                        window_seconds: app_config.rate_limit.global_window_seconds,
-                        burst_allowance: app_config.rate_limit.global_burst_allowance,
-                    };
-                    rate_limit_service.set_global_policy(global_policy).await;
-                }
-                let rate_limit_service = Arc::new(rate_limit_service);
-
-                Ok((
-                    user_store,
-                    jwt_service,
-                    api_key_service,
-                    rbac_service,
-                    rate_limit_service,
-                ))
-            }
-            provider => Err(ServerError::Configuration(
-                ConfigError::MissingEnvironmentVariable(format!(
-                    "Unsupported auth backend provider: {}",
-                    provider
-                )),
-            )),
+        let rate_limit_service = RateLimitService::new(backend.clone());
+        if app_config.rate_limit.enabled {
+            let global_policy = crate::middleware::RateLimitPolicy {
+                requests: app_config.rate_limit.global_requests_per_window,
+                window_seconds: app_config.rate_limit.global_window_seconds,
+                burst_allowance: app_config.rate_limit.global_burst_allowance,
+            };
+            rate_limit_service.set_global_policy(global_policy).await;
         }
+        let rate_limit_service = Arc::new(rate_limit_service);
+
+        Ok((
+            user_store,
+            jwt_service,
+            api_key_service,
+            rbac_service,
+            rate_limit_service,
+        ))
     }
 
     /// Create configuration - use environment if available, otherwise create test defaults

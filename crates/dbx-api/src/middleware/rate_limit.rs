@@ -6,8 +6,7 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 use chrono::{DateTime, Utc};
-use dbx_adapter::redis::client::RedisPool;
-use redis::Commands;
+use dbx_core::{DataValue, UniversalBackend};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -36,121 +35,163 @@ pub struct RateLimitContext {
 
 #[derive(Clone)]
 pub struct SlidingWindowRateLimiter {
-    redis_pool: Arc<RedisPool>,
+    backend: Arc<dyn UniversalBackend>,
 }
 
 impl SlidingWindowRateLimiter {
-    pub fn new(redis_pool: Arc<RedisPool>) -> Self {
-        Self { redis_pool }
+    pub fn new(backend: Arc<dyn UniversalBackend>) -> Self {
+        Self { backend }
     }
 
     pub async fn check_rate_limit(
         &self,
         context: &RateLimitContext,
     ) -> Result<RateLimitResult, String> {
+        use dbx_core::{DataOperation, DataResult};
+
         let now = Utc::now();
         let window_start = now - chrono::Duration::seconds(context.policy.window_seconds as i64);
 
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
+        let count_key = format!("{}:count", key);
+        let window_key = format!("{}:window", key);
 
-        // Use Redis ZREMRANGEBYSCORE to remove expired entries and ZCARD to count current entries
-        let script = r#"
-            local key = KEYS[1]
-            local window_start = ARGV[1]
-            local now = ARGV[2] 
-            local limit = tonumber(ARGV[3])
-            local burst = tonumber(ARGV[4]) or limit
-            local window_seconds = tonumber(ARGV[5])
-            
-            -- Remove expired entries
-            redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)
-            
-            -- Count current entries
-            local current_count = redis.call('ZCARD', key)
-            
-            -- Check if within limits (considering burst)
-            local effective_limit = math.max(limit, burst)
-            
-            if current_count >= effective_limit then
-                local oldest_entry = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-                local retry_after = 0
-                if #oldest_entry > 0 then
-                    local oldest_time = tonumber(oldest_entry[2])
-                    retry_after = math.ceil(oldest_time + window_seconds - tonumber(now))
-                end
-                
-                return {0, current_count, limit, retry_after}
-            end
-            
-            -- Add current request
-            local request_id = now .. ':' .. math.random(1000000)
-            redis.call('ZADD', key, now, request_id)
-            redis.call('EXPIRE', key, window_seconds * 2)
-            
-            local new_count = current_count + 1
-            local remaining = math.max(0, limit - new_count)
-            
-            return {1, new_count, remaining, 0}
-        "#;
-
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
-        let now_timestamp = now.timestamp().to_string();
-        let window_start_timestamp = window_start.timestamp().to_string();
-        let limit_str = context.policy.requests.to_string();
-        let burst_str = context
-            .policy
-            .burst_allowance
-            .unwrap_or(context.policy.requests)
-            .to_string();
-        let window_str = context.policy.window_seconds.to_string();
-
-        let result: Vec<i64> = redis::Script::new(script)
-            .key(&key)
-            .arg(&window_start_timestamp)
-            .arg(&now_timestamp)
-            .arg(&limit_str)
-            .arg(&burst_str)
-            .arg(&window_str)
-            .invoke(&mut *conn_arc.lock().unwrap())
-            .map_err(|e| format!("Redis script execution failed: {}", e))?;
-
-        let allowed = result[0] == 1;
-        let current_count = result[1] as u32;
-        let remaining = result[2] as u32;
-        let retry_after_seconds = if result[3] > 0 {
-            Some(result[3] as u32)
-        } else {
-            None
+        // Get current count and window start time
+        let current_count = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: count_key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(count_str)),
+                ..
+            }) => count_str.parse::<u32>().unwrap_or(0),
+            Ok(DataResult::Get {
+                value: Some(DataValue::Int(count)),
+                ..
+            }) => count as u32,
+            _ => 0,
         };
 
-        let reset_time = now + chrono::Duration::seconds(context.policy.window_seconds as i64);
+        let window_start_time = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: window_key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(time_str)),
+                ..
+            }) => time_str.parse::<i64>().unwrap_or(0),
+            Ok(DataResult::Get {
+                value: Some(DataValue::Int(time)),
+                ..
+            }) => time,
+            _ => 0,
+        };
+
+        // Check if window has expired and reset if needed
+        let current_window_start = if window_start_time < window_start.timestamp() {
+            let new_window_start = now.timestamp();
+            let _ = self
+                .backend
+                .execute_data(DataOperation::Set {
+                    key: window_key.clone(),
+                    value: DataValue::Int(new_window_start),
+                    ttl: Some(context.policy.window_seconds as u64 * 2),
+                })
+                .await;
+            let _ = self
+                .backend
+                .execute_data(DataOperation::Set {
+                    key: count_key.clone(),
+                    value: DataValue::Int(0),
+                    ttl: Some(context.policy.window_seconds as u64 * 2),
+                })
+                .await;
+            0
+        } else {
+            current_count
+        };
+
+        // Check rate limit
+        let effective_limit = context
+            .policy
+            .burst_allowance
+            .unwrap_or(context.policy.requests);
+
+        if current_window_start >= effective_limit {
+            let reset_time = DateTime::from_timestamp(
+                window_start_time + context.policy.window_seconds as i64,
+                0,
+            )
+            .unwrap_or(now + chrono::Duration::seconds(context.policy.window_seconds as i64));
+            let retry_after = (reset_time - now).num_seconds().max(0) as u32;
+
+            return Ok(RateLimitResult {
+                allowed: false,
+                limit: context.policy.requests,
+                remaining: 0,
+                reset_time,
+                retry_after: Some(retry_after),
+            });
+        }
+
+        // Increment counter
+        let new_count = current_window_start + 1;
+        let _ = self
+            .backend
+            .execute_data(DataOperation::Set {
+                key: count_key,
+                value: DataValue::Int(new_count as i64),
+                ttl: Some(context.policy.window_seconds as u64 * 2),
+            })
+            .await;
+
+        let remaining = context.policy.requests.saturating_sub(new_count);
+        let reset_time =
+            DateTime::from_timestamp(window_start_time + context.policy.window_seconds as i64, 0)
+                .unwrap_or(now + chrono::Duration::seconds(context.policy.window_seconds as i64));
 
         Ok(RateLimitResult {
-            allowed,
+            allowed: true,
             limit: context.policy.requests,
             remaining,
             reset_time,
-            retry_after: retry_after_seconds,
+            retry_after: None,
         })
     }
 
     pub async fn reset_rate_limit(&self, identifier: &str, endpoint: &str) -> Result<(), String> {
+        use dbx_core::DataOperation;
+
         let key = format!("rate_limit:{}:{}", identifier, endpoint);
+        let count_key = format!("{}:count", key);
+        let window_key = format!("{}:window", key);
 
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .del(&key)
-            .map_err(|e| format!("Failed to reset rate limit: {}", e))?;
+        let _ = self
+            .backend
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
+        let _ = self
+            .backend
+            .execute_data(DataOperation::Delete {
+                key: count_key,
+                fields: None,
+            })
+            .await;
+        let _ = self
+            .backend
+            .execute_data(DataOperation::Delete {
+                key: window_key,
+                fields: None,
+            })
+            .await;
 
         Ok(())
     }
@@ -172,43 +213,121 @@ impl SlidingWindowRateLimiter {
         let window_start = now - chrono::Duration::seconds(policy.window_seconds as i64);
         let key = format!("rate_limit:{}:{}", identifier, endpoint);
 
-        let script = r#"
-            local key = KEYS[1]
-            local window_start = ARGV[1]
-            local limit = tonumber(ARGV[2])
-            
-            -- Remove expired entries
-            redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)
-            
-            -- Count current entries
-            local current_count = redis.call('ZCARD', key)
-            local remaining = math.max(0, limit - current_count)
-            
-            return {current_count, remaining}
-        "#;
+        let count_key = format!("{}:count", key);
+        let window_key = format!("{}:window", key);
 
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        let current_count = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: count_key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(count_str)),
+                ..
+            }) => count_str.parse::<u32>().unwrap_or(0),
+            Ok(DataResult::Get {
+                value: Some(DataValue::Int(count)),
+                ..
+            }) => count as u32,
+            _ => 0,
+        };
 
-        let window_start_timestamp = window_start.timestamp().to_string();
-        let limit_str = policy.requests.to_string();
+        let window_start_time = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: window_key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(time_str)),
+                ..
+            }) => time_str.parse::<i64>().unwrap_or(0),
+            Ok(DataResult::Get {
+                value: Some(DataValue::Int(time)),
+                ..
+            }) => time,
+            _ => 0,
+        };
 
-        let result: Vec<i64> = redis::Script::new(script)
-            .key(&key)
-            .arg(&window_start_timestamp)
-            .arg(&limit_str)
-            .invoke(&mut *conn_arc.lock().unwrap())
-            .map_err(|e| format!("Redis script execution failed: {}", e))?;
-
-        let current_count = result[0] as u32;
-        let remaining = result[1] as u32;
-        let reset_time = now + chrono::Duration::seconds(policy.window_seconds as i64);
+        let remaining = policy.requests.saturating_sub(current_count);
+        let reset_time =
+            DateTime::from_timestamp(window_start_time + policy.window_seconds as i64, 0)
+                .unwrap_or(now + chrono::Duration::seconds(policy.window_seconds as i64));
 
         Ok(RateLimitResult {
             allowed: remaining > 0,
+            limit: policy.requests,
+            remaining,
+            reset_time,
+            retry_after: None,
+        })
+    }
+
+    pub async fn get_rate_limit_status(
+        &self,
+        identifier: &str,
+        endpoint: &str,
+        policy: &RateLimitPolicy,
+    ) -> Result<RateLimitResult, String> {
+        use dbx_core::{DataOperation, DataResult};
+
+        let now = Utc::now();
+        let window_start = now - chrono::Duration::seconds(policy.window_seconds as i64);
+
+        let key = format!("rate_limit:{}:{}", identifier, endpoint);
+        let count_key = format!("{}:count", key);
+        let window_key = format!("{}:window", key);
+
+        let current_count = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: count_key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(count_str)),
+                ..
+            }) => count_str.parse::<u32>().unwrap_or(0),
+            Ok(DataResult::Get {
+                value: Some(DataValue::Int(count)),
+                ..
+            }) => count as u32,
+            _ => 0,
+        };
+
+        let window_start_time = match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: window_key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(time_str)),
+                ..
+            }) => time_str.parse::<i64>().unwrap_or(0),
+            Ok(DataResult::Get {
+                value: Some(DataValue::Int(time)),
+                ..
+            }) => time,
+            _ => 0,
+        };
+
+        let remaining = policy.requests.saturating_sub(current_count);
+        let reset_time =
+            DateTime::from_timestamp(window_start_time + policy.window_seconds as i64, 0)
+                .unwrap_or(now + chrono::Duration::seconds(policy.window_seconds as i64));
+
+        Ok(RateLimitResult {
+            allowed: current_count < policy.requests,
             limit: policy.requests,
             remaining,
             reset_time,
@@ -225,9 +344,9 @@ pub struct RateLimitService {
 }
 
 impl RateLimitService {
-    pub fn new(redis_pool: Arc<RedisPool>) -> Self {
+    pub fn new(backend: Arc<dyn UniversalBackend>) -> Self {
         Self {
-            limiter: SlidingWindowRateLimiter::new(redis_pool),
+            limiter: SlidingWindowRateLimiter::new(backend),
             policies: Arc::new(RwLock::new(HashMap::new())),
             global_policy: Arc::new(RwLock::new(None)),
         }
@@ -246,78 +365,54 @@ impl RateLimitService {
     }
 
     pub async fn increment_total_requests(&self) -> Result<(), String> {
-        let mut conn = self
+        let _ = self
             .limiter
-            .redis_pool
-            .get_connection()
-            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
-
-        let _: () = redis::cmd("INCR")
-            .arg("rate_limit:metrics:total_requests")
-            .query(&mut conn)
-            .map_err(|e| format!("Failed to increment total requests: {}", e))?;
-
+            .backend
+            .incr("rate_limit:metrics:total_requests")
+            .await;
         Ok(())
     }
 
     pub async fn increment_rate_limited_requests(&self) -> Result<(), String> {
-        let mut conn = self
+        let _ = self
             .limiter
-            .redis_pool
-            .get_connection()
-            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
-
-        let _: () = redis::cmd("INCR")
-            .arg("rate_limit:metrics:rate_limited_requests")
-            .query(&mut conn)
-            .map_err(|e| format!("Failed to increment rate limited requests: {}", e))?;
-
+            .backend
+            .incr("rate_limit:metrics:rate_limited_requests")
+            .await;
         Ok(())
     }
 
     pub async fn get_total_requests(&self) -> Result<u64, String> {
-        let mut conn = self
+        let count: u64 = self
             .limiter
-            .redis_pool
-            .get_connection()
-            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
-
-        let count: u64 = redis::cmd("GET")
-            .arg("rate_limit:metrics:total_requests")
-            .query(&mut conn)
+            .backend
+            .get("rate_limit:metrics:total_requests")
+            .await
             .unwrap_or(0);
-
         Ok(count)
     }
 
     pub async fn get_rate_limited_requests(&self) -> Result<u64, String> {
-        let mut conn = self
+        let count: u64 = self
             .limiter
-            .redis_pool
-            .get_connection()
-            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
-
-        let count: u64 = redis::cmd("GET")
-            .arg("rate_limit:metrics:rate_limited_requests")
-            .query(&mut conn)
+            .backend
+            .get("rate_limit:metrics:rate_limited_requests")
+            .await
             .unwrap_or(0);
-
         Ok(count)
     }
 
     pub async fn reset_metrics(&self) -> Result<(), String> {
-        let mut conn = self
+        let _ = self
             .limiter
-            .redis_pool
-            .get_connection()
-            .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
-
-        let _: () = redis::cmd("DEL")
-            .arg("rate_limit:metrics:total_requests")
-            .arg("rate_limit:metrics:rate_limited_requests")
-            .query(&mut conn)
-            .map_err(|e| format!("Failed to reset metrics: {}", e))?;
-
+            .backend
+            .del("rate_limit:metrics:total_requests")
+            .await;
+        let _ = self
+            .limiter
+            .backend
+            .del("rate_limit:metrics:rate_limited_requests")
+            .await;
         Ok(())
     }
 
@@ -376,7 +471,7 @@ impl RateLimitService {
     pub async fn count_active_limiters(&self) -> Result<u32, String> {
         let mut conn = self
             .limiter
-            .redis_pool
+            .backend
             .get_connection()
             .map_err(|e| e.to_string())?;
 
@@ -526,10 +621,27 @@ mod tests {
         }
     }
 
-    fn create_redis_pool() -> Arc<RedisPool> {
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        Arc::new(RedisPool::new(&redis_url, 1).unwrap())
+    fn create_redis_pool() -> Arc<dyn UniversalBackend> {
+        use dbx_adapter::redis::factory::RedisBackendFactory;
+        use dbx_config::BackendConfig;
+
+        let config = BackendConfig {
+            provider: "redis".to_string(),
+            url: std::env::var("DBX_BACKEND_1_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+            pool_size: Some(1),
+            timeout_ms: Some(5000),
+            retry_attempts: Some(3),
+            retry_delay_ms: Some(1000),
+            capabilities: None,
+            additional_config: std::collections::HashMap::new(),
+        };
+
+        let factory = RedisBackendFactory::new();
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async { factory.create_backend(&config).await })
+            .unwrap()
     }
 
     #[tokio::test]

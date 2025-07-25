@@ -1,25 +1,23 @@
 use crate::{
-    auth::{permissions::PermissionType, ApiKeyError, ApiKeyService, RbacConfig, RbacService},
-    config::JwtConfig,
+    auth::{permissions::PermissionType, ApiKeyError, ApiKeyService, RbacService},
+    config::{AppConfig, JwtConfig},
     constants::errors::ErrorMessages,
-    models::{
-        ApiKeyContext, ApiResponse, AuthResponse, Claims, CreateUserRequest,
-        PermissionCheckContext, RbacContext, TokenType, User, UserInfo, UserRole,
-    },
+    models::{ApiResponse, CreateUserRequest, LoginRequest, User, UserRole},
 };
 use async_trait::async_trait;
 use axum::{
-    extract::{rejection::JsonRejection, Query, Request, State},
-    http::{header, HeaderMap, StatusCode, Uri},
+    extract::{Request, State},
+    http::{HeaderMap, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Json},
+    response::Json,
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{Duration, Utc};
-use dbx_adapter::redis::client::RedisPool;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use serde::Deserialize;
-use std::sync::Arc;
+use chrono::{DateTime, Utc};
+use dbx_core::{DataOperation, DataResult, DataValue, UniversalBackend};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
+use thiserror::Error;
 use uuid::Uuid;
 
 /// Handle Redis errors and convert them to HTTP responses
@@ -82,12 +80,12 @@ pub trait UserStoreOperations {
 
 #[derive(Clone)]
 pub struct UserStore {
-    redis_pool: Arc<RedisPool>,
+    backend: Arc<dyn dbx_core::UniversalBackend>,
 }
 
 impl UserStore {
-    pub fn new(redis_pool: Arc<RedisPool>) -> Self {
-        Self { redis_pool }
+    pub fn new(backend: Arc<dyn dbx_core::UniversalBackend>) -> Self {
+        Self { backend }
     }
 
     fn hash_password(password: &str) -> Result<String, AuthError> {
@@ -102,29 +100,32 @@ impl UserStore {
 #[async_trait]
 impl UserStoreOperations for UserStore {
     async fn get_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError> {
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
+        use dbx_core::{DataOperation, DataResult, DataValue};
 
         let key = format!("user:username:{}", username);
-        let user_json = dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .get(&key)
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        if let Some(json) = user_json {
-            let user: User = serde_json::from_str(&json)
-                .map_err(|e| AuthError::InternalError(format!("JSON parse error: {}", e)))?;
-            Ok(Some(user))
-        } else {
-            Ok(None)
+        match self
+            .backend
+            .execute_data(DataOperation::Get { key, fields: None })
+            .await
+        {
+            Ok(DataResult::Get {
+                value: Some(DataValue::String(json)),
+                ..
+            }) => {
+                let user: User = serde_json::from_str(&json)
+                    .map_err(|e| AuthError::InternalError(format!("JSON parse error: {}", e)))?;
+                Ok(Some(user))
+            }
+            Ok(DataResult::Get { value: None, .. }) => Ok(None),
+            Ok(_) => Ok(None),
+            Err(e) => Err(AuthError::DatabaseError(e.to_string())),
         }
     }
 
     async fn get_user_by_id(&self, user_id: &str) -> Result<Option<User>, AuthError> {
         let conn = self
-            .redis_pool
+            .backend
             .get_connection()
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
         let conn_arc = Arc::new(std::sync::Mutex::new(conn));
@@ -166,25 +167,29 @@ impl UserStoreOperations for UserStore {
             is_active: true,
         };
 
-        let conn = self
-            .redis_pool
-            .get_connection()
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-        let conn_arc = Arc::new(std::sync::Mutex::new(conn));
-
         let user_json = serde_json::to_string(&user)
             .map_err(|e| AuthError::InternalError(format!("JSON serialize error: {}", e)))?;
 
         // Store user by ID
         let id_key = format!("user:id:{}", user_id);
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc.clone())
-            .set(&id_key, &user_json)
+        self.backend
+            .execute_data(DataOperation::Set {
+                key: id_key,
+                value: DataValue::String(user_json.clone()),
+                ttl: None,
+            })
+            .await
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
         // Store user by username
         let username_key = format!("user:username:{}", request.username);
-        dbx_adapter::redis::primitives::string::RedisString::new(conn_arc)
-            .set(&username_key, &user_json)
+        self.backend
+            .execute_data(DataOperation::Set {
+                key: username_key,
+                value: DataValue::String(user_json),
+                ttl: None,
+            })
+            .await
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
         Ok(user)
@@ -206,7 +211,7 @@ impl UserStoreOperations for UserStore {
             user.updated_at = Utc::now();
 
             let conn = self
-                .redis_pool
+                .backend
                 .get_connection()
                 .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
             let conn_arc = Arc::new(std::sync::Mutex::new(conn));
