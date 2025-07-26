@@ -5,13 +5,17 @@
 //! connection types.
 
 use redis::{Client, Connection, RedisError, RedisResult};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::error;
 
 use super::primitives::hash::RedisHash;
 use super::primitives::set::RedisSet;
 use super::primitives::string::RedisString;
 
-/// A simple Redis client wrapper that manages a single connection
+/// Type alias for connection result
+type ConnectionResult<'a> = Result<MutexGuard<'a, Connection>, RedisError>;
+
+/// Redis client wrapper that manages a single connection
 #[derive(Clone)]
 pub struct RedisClient {
     client: Arc<Client>,
@@ -54,16 +58,32 @@ impl RedisClient {
         &self.connection
     }
 
+    /// Acquire connection with poison recovery
+    pub fn acquire_connection(&self) -> ConnectionResult {
+        match self.connection.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                error!("Redis connection mutex poisoned, recovering");
+                Ok(poisoned.into_inner())
+            }
+        }
+    }
+
     /// Get a new connection from the client
     pub fn get_new_connection(&self) -> RedisResult<Connection> {
         self.client.get_connection()
     }
 
-    /// Check if the connection is valid
-    pub fn ping(&self) -> RedisResult<bool> {
-        let mut conn = self.connection.lock().unwrap();
+    /// Test the connection to ensure it's working
+    pub fn test_connection(&self) -> RedisResult<bool> {
+        let mut conn = self.acquire_connection()?;
         let pong: String = redis::cmd("PING").query(&mut *conn)?;
         Ok(pong == "PONG")
+    }
+
+    /// Check if the connection is valid (legacy method for backward compatibility)
+    pub fn ping(&self) -> RedisResult<bool> {
+        self.test_connection()
     }
 
     /// Get a RedisString primitive for string operations

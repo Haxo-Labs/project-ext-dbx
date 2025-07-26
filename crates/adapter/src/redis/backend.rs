@@ -7,7 +7,7 @@ use serde_json::{Map, Value as JsonValue};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::redis::client::RedisClient;
+use crate::redis::{client::RedisClient, RedisConnectionHandler};
 use dbx_core::{
     BackendCapabilities, BackendFeature, BackendHealth, BackendStats, ConnectionStats,
     DataOperation, DataOperationType, DataResult, DataValue, DbxError, HealthStatus,
@@ -20,14 +20,55 @@ use dbx_core::{
 pub struct RedisBackend {
     client: RedisClient,
     backend_name: String,
+    capabilities: BackendCapabilities,
 }
 
 impl RedisBackend {
-    /// Create a new Redis backend
+    /// Create a new Redis backend instance
     pub fn new(client: RedisClient, backend_name: String) -> Self {
         Self {
             client,
             backend_name,
+            capabilities: Self::create_capabilities(),
+        }
+    }
+
+    /// Define the capabilities of this Redis backend
+    fn create_capabilities() -> BackendCapabilities {
+        BackendCapabilities {
+            data_operations: vec![
+                DataOperationType::Get,
+                DataOperationType::Set,
+                DataOperationType::Update,
+                DataOperationType::Delete,
+                DataOperationType::Exists,
+                DataOperationType::GetTtl,
+                DataOperationType::SetTtl,
+                DataOperationType::Batch,
+            ],
+            query_capabilities: QueryCapabilities {
+                key_patterns: true,
+                field_filters: false,
+                range_queries: false,
+                text_search: false,
+                logical_operations: false,
+                sorting: false,
+                pagination: true,
+                aggregations: false,
+            },
+            stream_capabilities: StreamCapabilities {
+                pub_sub: true,
+                streams: true,
+                persistent_streams: true,
+                stream_groups: false,
+            },
+            transaction_support: TransactionSupport::MultiOperation,
+            features: vec![
+                BackendFeature::JsonSupport,
+                BackendFeature::BinaryData,
+                BackendFeature::Replication,
+                BackendFeature::Clustering,
+            ],
         }
     }
 
@@ -139,7 +180,12 @@ impl RedisBackend {
     /// Get the Redis data type of a key
     fn get_redis_type(&self, key: &str) -> Result<String, DbxError> {
         let redis_string = self.client.string();
-        let mut conn = redis_string.connection().lock().unwrap();
+        let mut conn = redis_string.acquire_connection().map_err(|e| {
+            DbxError::backend(
+                self.backend_name.clone(),
+                format!("Failed to acquire lock: {}", e),
+            )
+        })?;
         let key_type: String = redis::cmd("TYPE").arg(key).query(&mut *conn).map_err(|e| {
             DbxError::backend(
                 self.backend_name.clone(),
@@ -273,7 +319,12 @@ impl RedisBackend {
                             "list" => {
                                 // Get list values
                                 let redis_string = self.client.string();
-                                let mut conn = redis_string.connection().lock().unwrap();
+                                let mut conn = redis_string.acquire_connection().map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("Failed to acquire lock: {}", e),
+                                    )
+                                })?;
                                 let list_data: Vec<String> = redis::cmd("LRANGE")
                                     .arg(key)
                                     .arg(0)
@@ -334,7 +385,7 @@ impl RedisBackend {
 
                     if let Some(ttl_secs) = ttl {
                         redis_string
-                            .set_with_expiry(key, &redis_value, *ttl_secs as usize)
+                            .setex(key, &redis_value, *ttl_secs as usize)
                             .map_err(|e| {
                                 DbxError::backend(
                                     self.backend_name.clone(),
@@ -383,7 +434,7 @@ impl RedisBackend {
                         if fields.is_empty() {
                             // Delete entire key
                             let redis_string = self.client.string();
-                            redis_string.del(key).map_err(|e| {
+                            redis_string.del(&[key]).map_err(|e| {
                                 DbxError::backend(
                                     self.backend_name.clone(),
                                     format!("Delete failed: {}", e),
@@ -403,7 +454,7 @@ impl RedisBackend {
                     } else {
                         // Delete entire key (no fields specified)
                         let redis_string = self.client.string();
-                        redis_string.del(key).map_err(|e| {
+                        redis_string.del(&[key]).map_err(|e| {
                             DbxError::backend(
                                 self.backend_name.clone(),
                                 format!("Delete failed: {}", e),
@@ -496,41 +547,7 @@ impl UniversalBackend for RedisBackend {
     }
 
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities {
-            data_operations: vec![
-                DataOperationType::Get,
-                DataOperationType::Set,
-                DataOperationType::Update,
-                DataOperationType::Delete,
-                DataOperationType::Exists,
-                DataOperationType::GetTtl,
-                DataOperationType::SetTtl,
-                DataOperationType::Batch,
-            ],
-            query_capabilities: QueryCapabilities {
-                key_patterns: true,
-                field_filters: false,
-                range_queries: false,
-                text_search: false,
-                logical_operations: false,
-                sorting: false,
-                pagination: true, // Limited support
-                aggregations: false,
-            },
-            stream_capabilities: StreamCapabilities {
-                pub_sub: true,
-                streams: true,
-                persistent_streams: true,
-                stream_groups: false, // Could be added later
-            },
-            transaction_support: TransactionSupport::MultiOperation,
-            features: vec![
-                BackendFeature::JsonSupport,
-                BackendFeature::BinaryData,
-                BackendFeature::Replication,
-                BackendFeature::Clustering,
-            ],
-        }
+        self.capabilities.clone()
     }
 
     async fn execute_data(&self, operation: DataOperation) -> Result<DataResult, DbxError> {

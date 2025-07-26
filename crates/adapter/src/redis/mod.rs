@@ -15,6 +15,7 @@ pub use backend::RedisBackend;
 pub use factory::{create_redis_factory, RedisBackendFactory};
 
 use redis::{Connection, RedisError, RedisResult, Script};
+use std::sync::MutexGuard;
 
 use client::RedisClient;
 use primitives::admin::AdminOperations;
@@ -22,6 +23,12 @@ use primitives::bitmap::RedisBitmap;
 use primitives::hash::RedisHash;
 use primitives::set::RedisSet;
 use primitives::string::RedisString;
+
+/// Connection handling for Redis primitives
+pub trait RedisConnectionHandler {
+    /// Acquire connection with poison recovery
+    fn acquire_connection(&self) -> Result<MutexGuard<'_, Connection>, RedisError>;
+}
 
 /// Redis data type adapters providing type-specific operations
 pub mod types {
