@@ -302,8 +302,11 @@ pub struct UserRoleAssignment {
 /// Request to update an existing role
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateRoleRequest {
+    /// Optional new description for the role
     pub description: Option<String>,
+    /// Optional new permissions for the role
     pub permissions: Option<Vec<String>>,
+    /// Optional roles this role inherits from
     pub inherits_from: Option<Vec<String>>,
 }
 

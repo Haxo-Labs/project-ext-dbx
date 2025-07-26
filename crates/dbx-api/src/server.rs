@@ -158,11 +158,13 @@ impl AppState {
         let mut backends = HashMap::new();
 
         // Create a single Redis backend for testing
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
         backends.insert(
             "test_redis".to_string(),
             dbx_config::BackendConfig {
                 provider: "redis".to_string(),
-                url: "redis://localhost:6379".to_string(),
+                url: redis_url,
                 pool_size: Some(5),
                 timeout_ms: Some(5000),
                 retry_attempts: Some(3),
@@ -252,22 +254,35 @@ pub fn create_app(state: AppState) -> Router {
     let stream_routes = create_stream_routes().layer(cors_layer.clone());
 
     // Create rate limiting management routes (admin authentication required)
-    let rate_limit_routes = create_rate_limit_routes()
-        .layer(cors_layer.clone());
+    let rate_limit_routes = create_rate_limit_routes().layer(cors_layer.clone());
 
     // Create health routes (admin only)
-    let health_routes = create_health_routes()
-        .layer(cors_layer.clone());
+    let health_routes = create_health_routes().layer(cors_layer.clone());
 
     Router::new()
         .nest("/auth", auth_routes)
         .nest("/api/v1/keys", api_key_routes)
-        .nest("/api/v1/data", data_routes.with_state(state.backend_router.clone()))
-        .nest("/api/v1/query", query_routes.with_state(state.backend_router.clone()))
+        .nest(
+            "/api/v1/data",
+            data_routes.with_state(state.backend_router.clone()),
+        )
+        .nest(
+            "/api/v1/query",
+            query_routes.with_state(state.backend_router.clone()),
+        )
         .nest("/api/v1/roles", role_routes)
-        .nest("/api/v1/admin", health_routes.with_state(state.backend_router.clone()))
-        .nest("/api/v1/stream", stream_routes.with_state(state.backend_router.clone()))
-        .nest("/api/v1/rate-limit", rate_limit_routes.with_state(state.rate_limit_service.clone()))
+        .nest(
+            "/api/v1/admin",
+            health_routes.with_state(state.backend_router.clone()),
+        )
+        .nest(
+            "/api/v1/stream",
+            stream_routes.with_state(state.backend_router.clone()),
+        )
+        .nest(
+            "/api/v1/rate-limit",
+            rate_limit_routes.with_state(state.rate_limit_service.clone()),
+        )
         .layer(axum::middleware::from_fn(move |req, next| {
             let config = security_config.clone();
             async move { development_security_middleware(config, req, next).await }
