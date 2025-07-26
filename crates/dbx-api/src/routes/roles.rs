@@ -1,5 +1,6 @@
 use axum::{
-    extract::{Path, Query, Request, State},
+    body,
+    extract::{Extension, Path, Query, Request, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get, post, put},
@@ -13,8 +14,8 @@ use crate::{
         RbacService,
     },
     models::{
-        ApiResponse, AssignRoleRequest, AuditQueryParams, CreateRoleRequest, RevokeRoleRequest,
-        RoleResponse, UpdateRoleRequest, UserPermissionsResponse,
+        ApiResponse, AssignRoleRequest, AuditQueryParams, CreateRoleRequest, RbacContext,
+        RevokeRoleRequest, RoleResponse, UpdateRoleRequest, UserPermissionsResponse,
     },
 };
 
@@ -22,10 +23,7 @@ use crate::{
 pub fn create_role_routes(rbac_service: Arc<RbacService>) -> Router {
     Router::new()
         .route("/", get(list_roles).post(create_role))
-        .route(
-            "/:role_name",
-            get(get_role).put(update_role).delete(delete_role),
-        )
+        .route("/:role_name", get(get_role).delete(delete_role))
         .route("/:role_name/permissions", get(get_role_permissions))
         .route("/assign", post(assign_role_to_user))
         .route("/revoke", post(revoke_role_from_user))
@@ -131,7 +129,7 @@ pub async fn create_role(
         })?;
 
     // Extract request body
-    let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+    let body_bytes = match body::to_bytes(req.into_body(), usize::MAX).await {
         Ok(bytes) => bytes,
         Err(_) => {
             return Err((
@@ -154,7 +152,7 @@ pub async fn create_role(
     match rbac_service
         .create_role(
             &request.name,
-            &request.description,
+            request.description.as_deref().unwrap_or(""),
             request.permissions,
             request.inherits_from,
             &rbac_context.username,
@@ -203,11 +201,65 @@ pub async fn create_role(
 }
 
 /// Update an existing role
-pub async fn update_role(
+pub async fn modify_role(
     State(rbac_service): State<Arc<RbacService>>,
-    Path(role_name): Path<String>,
-    Json(request): Json<UpdateRoleRequest>,
+    mut req: Request,
 ) -> Result<Json<ApiResponse<RoleResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    // Extract role name from path
+    let role_name = req
+        .uri()
+        .path()
+        .strip_prefix("/api/roles/")
+        .unwrap_or("")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    if role_name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::error(
+                "Role name is required".to_string(),
+            )),
+        ));
+    }
+
+    // Extract authenticated user from RBAC context
+    let rbac_context = req
+        .extensions()
+        .get::<crate::models::RbacContext>()
+        .cloned()
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiResponse::<()>::error(
+                    "Authentication required".to_string(),
+                )),
+            )
+        })?;
+
+    // Extract request body
+    let body_bytes = match body::to_bytes(req.into_body(), usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::error("Invalid request body".to_string())),
+            ));
+        }
+    };
+
+    let request: UpdateRoleRequest = match serde_json::from_slice(&body_bytes) {
+        Ok(req) => req,
+        Err(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::error("Invalid JSON format".to_string())),
+            ));
+        }
+    };
+
     // Check if role exists and is not a system role
     {
         let role_registry_arc = rbac_service.get_role_registry();
@@ -241,7 +293,7 @@ pub async fn update_role(
             request.description,
             request.permissions,
             request.inherits_from,
-            "admin_user", // Authenticated user context would be extracted from middleware
+            &rbac_context.username,
         )
         .await
     {
@@ -382,7 +434,7 @@ pub async fn assign_role_to_user(
         })?;
 
     // Extract request body
-    let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+    let body_bytes = match body::to_bytes(req.into_body(), usize::MAX).await {
         Ok(bytes) => bytes,
         Err(_) => {
             return Err((
@@ -402,13 +454,21 @@ pub async fn assign_role_to_user(
         }
     };
 
+    // Handle expiration - prefer expires_at, fall back to expires_in_days
+    let expiration_days = if let Some(expires_at) = request.expires_at {
+        let now = chrono::Utc::now();
+        Some(((expires_at - now).num_days().max(1)) as u32)
+    } else {
+        request.expires_in_days
+    };
+
     match rbac_service
         .assign_role(
             &request.user_id,
             &request.user_id, // User ID is the username in this context
             &request.role_name,
             &rbac_context.username,
-            request.expires_in_days,
+            expiration_days,
             request.metadata,
         )
         .await
@@ -451,7 +511,7 @@ pub async fn revoke_role_from_user(
         })?;
 
     // Extract request body
-    let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+    let body_bytes = match body::to_bytes(req.into_body(), usize::MAX).await {
         Ok(bytes) => bytes,
         Err(_) => {
             return Err((
@@ -600,7 +660,7 @@ mod tests {
         // Test CreateRoleRequest validation
         let create_request = CreateRoleRequest {
             name: "test_role".to_string(),
-            description: "A test role".to_string(),
+            description: Some("A test role".to_string()),
             permissions: vec!["string:get".to_string(), "hash:set".to_string()],
             inherits_from: Some(vec!["user".to_string()]),
         };
@@ -645,6 +705,7 @@ mod tests {
         let assign_request = AssignRoleRequest {
             user_id: "user123".to_string(),
             role_name: "admin".to_string(),
+            expires_at: None,
             expires_in_days: Some(30),
             metadata: Some(serde_json::json!({"department": "engineering"})),
         };
