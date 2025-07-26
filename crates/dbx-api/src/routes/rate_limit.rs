@@ -1,9 +1,9 @@
 use crate::{
-    middleware::{RateLimitPolicy, RateLimitService},
-    models::{ApiResponse, RbacContext},
+    middleware::RateLimitService,
+    models::{ApiResponse, RateLimitPolicy, RbacContext},
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get, post, put},
@@ -63,7 +63,7 @@ pub fn create_rate_limit_routes() -> Router<Arc<RateLimitService>> {
         .route("/policies/:endpoint", put(update_rate_limit_policy))
         .route("/policies/:endpoint", delete(delete_rate_limit_policy))
         .route("/reset/:identifier/:endpoint", post(reset_rate_limit))
-        .route("/metrics", get(get_rate_limit_metrics))
+        // .route("/metrics", get(get_rate_limit_metrics)) // Temporarily disabled
         .route("/metrics/reset", post(reset_rate_limit_metrics))
 }
 
@@ -176,7 +176,7 @@ pub async fn set_rate_limit_policy(
     };
 
     rate_limit_service
-        .set_endpoint_policy(request.endpoint.clone(), policy.clone())
+        .set_endpoint_policy(&request.endpoint, policy.clone())
         .await;
 
     let response = RateLimitPolicyResponse {
@@ -214,7 +214,7 @@ pub async fn update_rate_limit_policy(
     };
 
     rate_limit_service
-        .set_endpoint_policy(endpoint.clone(), policy.clone())
+        .set_endpoint_policy(&endpoint, policy.clone())
         .await;
 
     let response = RateLimitPolicyResponse {
@@ -281,13 +281,13 @@ pub async fn reset_rate_limit(
 /// Get rate limiting metrics
 pub async fn get_rate_limit_metrics(
     State(rate_limit_service): State<Arc<RateLimitService>>,
-    _rbac_context: RbacContext,
+    Extension(_rbac_context): Extension<RbacContext>,
 ) -> Result<Json<ApiResponse<RateLimitMetrics>>, (StatusCode, Json<ApiResponse<()>>)> {
     let policies = rate_limit_service.get_all_policies().await;
     let policies_count = policies.len() as u32;
 
     // Add global policy if exists
-    let global_policy = rate_limit_service.global_policy.read().await;
+    let global_policy = rate_limit_service.global_policy.read().unwrap();
     let total_policies = if global_policy.is_some() {
         policies_count + 1
     } else {

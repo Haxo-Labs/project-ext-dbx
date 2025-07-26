@@ -1,6 +1,5 @@
 use axum::{
-    body,
-    extract::{Extension, Path, Query, Request, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get, post, put},
@@ -112,43 +111,9 @@ pub async fn get_role(
 /// Create a new custom role
 pub async fn create_role(
     State(rbac_service): State<Arc<RbacService>>,
-    mut req: Request,
+    Extension(rbac_context): Extension<RbacContext>,
+    Json(request): Json<CreateRoleRequest>,
 ) -> Result<Json<ApiResponse<RoleResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
-    // Extract authenticated user from RBAC context
-    let rbac_context = req
-        .extensions()
-        .get::<crate::models::RbacContext>()
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error(
-                    "Authentication required".to_string(),
-                )),
-            )
-        })?;
-
-    // Extract request body
-    let body_bytes = match body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::error("Invalid request body".to_string())),
-            ));
-        }
-    };
-
-    let request: CreateRoleRequest = match serde_json::from_slice(&body_bytes) {
-        Ok(req) => req,
-        Err(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::error("Invalid JSON format".to_string())),
-            ));
-        }
-    };
-
     match rbac_service
         .create_role(
             &request.name,
@@ -200,168 +165,12 @@ pub async fn create_role(
     }
 }
 
-/// Update an existing role
-pub async fn modify_role(
-    State(rbac_service): State<Arc<RbacService>>,
-    mut req: Request,
-) -> Result<Json<ApiResponse<RoleResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
-    // Extract role name from path
-    let role_name = req
-        .uri()
-        .path()
-        .strip_prefix("/api/roles/")
-        .unwrap_or("")
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string();
-
-    if role_name.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<()>::error(
-                "Role name is required".to_string(),
-            )),
-        ));
-    }
-
-    // Extract authenticated user from RBAC context
-    let rbac_context = req
-        .extensions()
-        .get::<crate::models::RbacContext>()
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error(
-                    "Authentication required".to_string(),
-                )),
-            )
-        })?;
-
-    // Extract request body
-    let body_bytes = match body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::error("Invalid request body".to_string())),
-            ));
-        }
-    };
-
-    let request: UpdateRoleRequest = match serde_json::from_slice(&body_bytes) {
-        Ok(req) => req,
-        Err(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::error("Invalid JSON format".to_string())),
-            ));
-        }
-    };
-
-    // Check if role exists and is not a system role
-    {
-        let role_registry_arc = rbac_service.get_role_registry();
-        let role_registry = role_registry_arc.read().unwrap();
-        match role_registry.get_role(&role_name) {
-            Some(role) if role.is_system => {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    Json(ApiResponse::<()>::error(
-                        "Cannot modify system role".to_string(),
-                    )),
-                ));
-            }
-            Some(_) => {} // Role exists and can be modified
-            None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    Json(ApiResponse::<()>::error(format!(
-                        "Role '{}' not found",
-                        role_name
-                    ))),
-                ));
-            }
-        }
-    }
-
-    // Update role using RBAC service
-    match rbac_service
-        .update_role(
-            &role_name,
-            request.description,
-            request.permissions,
-            request.inherits_from,
-            &rbac_context.username,
-        )
-        .await
-    {
-        Ok(role) => {
-            let role_registry_arc = rbac_service.get_role_registry();
-            let role_registry = role_registry_arc.read().unwrap();
-            let effective_permissions = role.effective_permissions(&role_registry);
-            let role_response = RoleResponse {
-                name: role.name.clone(),
-                description: role.description.clone(),
-                permissions: role
-                    .permissions
-                    .permission_names()
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-                inherits_from: role.inherits_from.clone(),
-                is_default: role.is_default,
-                is_system: role.is_system,
-                effective_permissions: effective_permissions
-                    .permission_names()
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            };
-            Ok(Json(ApiResponse::success(role_response)))
-        }
-        Err(e) => {
-            let (status, message) = match e {
-                crate::auth::RbacError::RoleNotFound(msg) => (StatusCode::NOT_FOUND, msg),
-                crate::auth::RbacError::SystemRoleModification => (
-                    StatusCode::FORBIDDEN,
-                    "Cannot modify system role".to_string(),
-                ),
-                crate::auth::RbacError::InheritanceCycle => (
-                    StatusCode::BAD_REQUEST,
-                    "Role inheritance cycle detected".to_string(),
-                ),
-                _ => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed to update role".to_string(),
-                ),
-            };
-            Err((status, Json(ApiResponse::<()>::error(message))))
-        }
-    }
-}
-
 /// Delete a custom role
 pub async fn delete_role(
     State(rbac_service): State<Arc<RbacService>>,
     Path(role_name): Path<String>,
-    req: Request,
+    Extension(rbac_context): Extension<RbacContext>,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
-    // Extract authenticated user from RBAC context
-    let rbac_context = req
-        .extensions()
-        .get::<crate::models::RbacContext>()
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error(
-                    "Authentication required".to_string(),
-                )),
-            )
-        })?;
-
     match rbac_service
         .delete_role(&role_name, &rbac_context.username)
         .await
@@ -417,43 +226,9 @@ pub async fn get_role_permissions(
 /// Assign a role to a user
 pub async fn assign_role_to_user(
     State(rbac_service): State<Arc<RbacService>>,
-    mut req: Request,
+    Extension(rbac_context): Extension<RbacContext>,
+    Json(request): Json<AssignRoleRequest>,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
-    // Extract authenticated user from RBAC context
-    let rbac_context = req
-        .extensions()
-        .get::<crate::models::RbacContext>()
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error(
-                    "Authentication required".to_string(),
-                )),
-            )
-        })?;
-
-    // Extract request body
-    let body_bytes = match body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::error("Invalid request body".to_string())),
-            ));
-        }
-    };
-
-    let request: AssignRoleRequest = match serde_json::from_slice(&body_bytes) {
-        Ok(req) => req,
-        Err(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::error("Invalid JSON format".to_string())),
-            ));
-        }
-    };
-
     // Handle expiration - prefer expires_at, fall back to expires_in_days
     let expiration_days = if let Some(expires_at) = request.expires_at {
         let now = chrono::Utc::now();
@@ -494,43 +269,9 @@ pub async fn assign_role_to_user(
 /// Revoke a role from a user
 pub async fn revoke_role_from_user(
     State(rbac_service): State<Arc<RbacService>>,
-    mut req: Request,
+    Extension(rbac_context): Extension<RbacContext>,
+    Json(request): Json<RevokeRoleRequest>,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
-    // Extract authenticated user from RBAC context
-    let rbac_context = req
-        .extensions()
-        .get::<crate::models::RbacContext>()
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error(
-                    "Authentication required".to_string(),
-                )),
-            )
-        })?;
-
-    // Extract request body
-    let body_bytes = match body::to_bytes(req.into_body(), usize::MAX).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::error("Invalid request body".to_string())),
-            ));
-        }
-    };
-
-    let request: RevokeRoleRequest = match serde_json::from_slice(&body_bytes) {
-        Ok(req) => req,
-        Err(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::error("Invalid JSON format".to_string())),
-            ));
-        }
-    };
-
     match rbac_service
         .revoke_role(
             &request.user_id,
