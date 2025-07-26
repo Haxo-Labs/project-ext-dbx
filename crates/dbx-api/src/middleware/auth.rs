@@ -22,6 +22,7 @@ use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
+use tracing::error;
 use uuid::Uuid;
 
 /// User information for responses
@@ -715,129 +716,190 @@ use crate::auth::permissions::Permission;
 
 /// Permission checking middleware using RBAC service
 pub async fn permission_check_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
-    permission_type: PermissionType,
+    required_permission: PermissionType,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    // Get user from request extensions (set by auth middleware)
-    let user = request.extensions().get::<User>().ok_or_else(|| {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(ApiResponse::<()>::error(
-                "Authentication required".to_string(),
-            )),
+    // Get RBAC context from request extensions (set by RBAC auth middleware)
+    let rbac_context = request
+        .extensions()
+        .get::<RbacContext>()
+        .cloned()
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiResponse::<()>::error(
+                    "Authentication required".to_string(),
+                )),
+            )
+        })?;
+
+    // Check permission using RBAC service
+    match rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            required_permission.clone(),
+            rbac_context.clone(),
         )
-    })?;
-
-    // Simple role-based permission check
-    let has_permission = match permission_type {
-        PermissionType::StringGet
-        | PermissionType::StringSet
-        | PermissionType::HashGet
-        | PermissionType::HashSet
-        | PermissionType::SetMembers
-        | PermissionType::SetAdd => {
-            matches!(user.role, UserRole::User | UserRole::Admin)
-                || (user.role == UserRole::ReadOnly
-                    && matches!(
-                        permission_type,
-                        PermissionType::StringGet
-                            | PermissionType::HashGet
-                            | PermissionType::SetMembers
-                    ))
+        .await
+    {
+        Ok(has_permission) => {
+            if has_permission {
+                Ok(next.run(request).await)
+            } else {
+                Err((
+                    StatusCode::FORBIDDEN,
+                    Json(ApiResponse::<()>::error(format!(
+                        "Insufficient permissions. Required: {:?}",
+                        required_permission
+                    ))),
+                ))
+            }
         }
-        PermissionType::AdminPing | PermissionType::AdminFlush => user.role == UserRole::Admin,
-        PermissionType::RoleManage => user.role == UserRole::Admin,
-        PermissionType::AuditView => user.role == UserRole::Admin,
-        _ => false,
-    };
-
-    if !has_permission {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ApiResponse::<()>::error(
-                "Insufficient permissions".to_string(),
-            )),
-        ));
+        Err(e) => {
+            error!(
+                user_id = %rbac_context.user_id,
+                permission = ?required_permission,
+                error = %e,
+                "Permission check failed"
+            );
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "Permission check failed".to_string(),
+                )),
+            ))
+        }
     }
-
-    Ok(next.run(request).await)
 }
 
 /// Middleware for string operations
 pub async fn string_get_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::StringGet).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::StringGet,
+    )
+    .await
 }
 
 pub async fn string_set_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::StringSet).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::StringSet,
+    )
+    .await
 }
 
 /// Middleware for hash operations
 pub async fn hash_get_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::HashGet).await
+    permission_check_middleware(State(rbac_service), request, next, PermissionType::HashGet).await
 }
 
 pub async fn hash_set_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::HashSet).await
+    permission_check_middleware(State(rbac_service), request, next, PermissionType::HashSet).await
 }
 
 /// Middleware for set operations
 pub async fn set_members_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::SetMembers).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::SetMembers,
+    )
+    .await
 }
 
 pub async fn set_add_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::SetAdd).await
+    permission_check_middleware(State(rbac_service), request, next, PermissionType::SetAdd).await
 }
 
 /// Middleware for admin operations
 pub async fn admin_ping_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::AdminPing).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::AdminPing,
+    )
+    .await
 }
 
 pub async fn admin_flush_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::AdminFlush).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::AdminFlush,
+    )
+    .await
 }
 
 /// Middleware for role management operations
 pub async fn role_manage_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::RoleManage).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::RoleManage,
+    )
+    .await
 }
 
 /// Middleware for audit log viewing
 pub async fn audit_view_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::AuditView).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::AuditView,
+    )
+    .await
 }
 
 /// RBAC authentication middleware that creates RBAC context from JWT/API key
@@ -1011,15 +1073,59 @@ pub struct RbacContextMiddleware {
 
 // Additional middleware for data operation permission patterns
 pub async fn data_read_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::StringGet).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::StringGet,
+    )
+    .await
 }
 
 pub async fn data_write_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(request, next, PermissionType::StringSet).await
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::StringSet,
+    )
+    .await
+}
+
+/// Flexible string permission check
+async fn check_string_permission(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::StringGet,
+    )
+    .await
+}
+
+/// Flexible string write permission check
+async fn check_string_write_permission(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        PermissionType::StringSet,
+    )
+    .await
 }
