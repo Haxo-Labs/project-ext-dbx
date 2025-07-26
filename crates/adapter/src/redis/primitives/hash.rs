@@ -1,7 +1,8 @@
 use redis::{Commands, Connection, FromRedisValue, Pipeline, RedisResult, Script, ToRedisArgs};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::error;
 
-use std::sync::Arc;
-use std::sync::Mutex;
+use crate::redis::RedisConnectionHandler;
 
 /// Represents a Redis hash data type with operations for manipulating hash values.
 ///
@@ -13,6 +14,18 @@ use std::sync::Mutex;
 #[derive(Clone)]
 pub struct RedisHash {
     conn: Arc<Mutex<Connection>>,
+}
+
+impl RedisConnectionHandler for RedisHash {
+    fn acquire_connection(&self) -> Result<MutexGuard<'_, Connection>, redis::RedisError> {
+        match self.conn.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                error!("Redis connection mutex poisoned, recovering");
+                Ok(poisoned.into_inner())
+            }
+        }
+    }
 }
 
 /// Core implementation with basic hash operations
@@ -29,95 +42,100 @@ impl RedisHash {
 
     /// Sets a field in a hash
     pub fn hset(&self, key: &str, field: &str, value: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.hset(key, field, value)?;
         Ok(result == 1)
     }
 
     /// Sets multiple fields in a hash
     pub fn hmset(&self, key: &str, field_values: &[(&str, &str)]) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.hset_multiple(key, field_values)
     }
 
     /// Gets a field from a hash
     pub fn hget(&self, key: &str, field: &str) -> RedisResult<Option<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.hget(key, field)
     }
 
     /// Gets multiple fields from a hash
     pub fn hmget(&self, key: &str, fields: &[&str]) -> RedisResult<Vec<Option<String>>> {
-        let mut conn = self.conn.lock().unwrap();
-        let mut cmd = redis::cmd("HMGET");
-        cmd.arg(key);
-        for field in fields {
-            cmd.arg(field);
-        }
-        cmd.query(&mut *conn)
+        let mut conn = self.acquire_connection()?;
+        conn.hget(key, fields)
     }
 
     /// Gets all fields and values from a hash
-    pub fn hgetall(&self, key: &str) -> RedisResult<std::collections::HashMap<String, String>> {
-        let mut conn = self.conn.lock().unwrap();
+    pub fn hgetall(&self, key: &str) -> RedisResult<Vec<(String, String)>> {
+        let mut conn = self.acquire_connection()?;
         conn.hgetall(key)
     }
 
     /// Gets all field names from a hash
     pub fn hkeys(&self, key: &str) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.hkeys(key)
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("HKEYS").arg(key).query(&mut *conn)
     }
 
     /// Gets all values from a hash
     pub fn hvals(&self, key: &str) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.hvals(key)
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("HVALS").arg(key).query(&mut *conn)
     }
 
     /// Gets the number of fields in a hash
-    pub fn hlen(&self, key: &str) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+    pub fn hlen(&self, key: &str) -> RedisResult<i64> {
+        let mut conn = self.acquire_connection()?;
         conn.hlen(key)
     }
 
     /// Checks if a field exists in a hash
     pub fn hexists(&self, key: &str, field: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.hexists(key, field)?;
         Ok(result == 1)
     }
 
     /// Deletes one or more fields from a hash
-    pub fn hdel(&self, key: &str, fields: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+    pub fn hdel(&self, key: &str, fields: &[&str]) -> RedisResult<i64> {
+        let mut conn = self.acquire_connection()?;
         conn.hdel(key, fields)
     }
 
     /// Increments a numeric field in a hash
     pub fn hincrby(&self, key: &str, field: &str, increment: i64) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.hincr(key, field, increment)
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("HINCRBY")
+            .arg(key)
+            .arg(field)
+            .arg(increment)
+            .query(&mut *conn)
     }
 
     /// Increments a float field in a hash
     pub fn hincrbyfloat(&self, key: &str, field: &str, increment: f64) -> RedisResult<f64> {
-        let mut conn = self.conn.lock().unwrap();
-        let mut cmd = redis::cmd("HINCRBYFLOAT");
-        cmd.arg(key).arg(field).arg(increment);
-        cmd.query(&mut *conn)
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("HINCRBYFLOAT")
+            .arg(key)
+            .arg(field)
+            .arg(increment)
+            .query(&mut *conn)
     }
 
     /// Sets a field only if it doesn't exist
     pub fn hsetnx(&self, key: &str, field: &str, value: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
-        let result: i32 = conn.hset_nx(key, field, value)?;
+        let mut conn = self.acquire_connection()?;
+        let result: i32 = redis::cmd("HSETNX")
+            .arg(key)
+            .arg(field)
+            .arg(value)
+            .query(&mut *conn)?;
         Ok(result == 1)
     }
 
     /// Gets a random field from a hash
     pub fn hrandfield(&self, key: &str) -> RedisResult<Option<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut cmd = redis::cmd("HRANDFIELD");
         cmd.arg(key);
         cmd.query(&mut *conn)
@@ -125,7 +143,7 @@ impl RedisHash {
 
     /// Gets multiple random fields from a hash
     pub fn hrandfield_count(&self, key: &str, count: isize) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut cmd = redis::cmd("HRANDFIELD");
         cmd.arg(key).arg(count);
         cmd.query(&mut *conn)
@@ -137,7 +155,7 @@ impl RedisHash {
         key: &str,
         count: isize,
     ) -> RedisResult<Vec<(String, String)>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut cmd = redis::cmd("HRANDFIELD");
         cmd.arg(key).arg(count).arg("WITHVALUES");
         cmd.query(&mut *conn)
@@ -151,7 +169,7 @@ impl RedisHash {
         pattern: Option<&str>,
         count: Option<usize>,
     ) -> RedisResult<(usize, Vec<(String, String)>)> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut cmd = redis::cmd("HSCAN");
         cmd.arg(key).arg(cursor);
         if let Some(p) = pattern {
@@ -165,34 +183,40 @@ impl RedisHash {
 
     /// Deletes a hash
     pub fn del(&self, key: &str) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.del(key)
     }
 
     /// Checks if a hash exists
     pub fn exists(&self, key: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.exists(key)?;
         Ok(result == 1)
     }
 
     /// Gets the TTL of a hash in seconds
     pub fn ttl(&self, key: &str) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.ttl(key)
     }
 
     /// Sets the TTL of a hash in seconds
     pub fn expire(&self, key: &str, seconds: u64) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.expire(key, seconds as usize)?;
         Ok(result == 1)
     }
 
     /// Gets keys matching a pattern
     pub fn keys(&self, pattern: &str) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.keys(pattern)
+    }
+
+    /// Gets the string length of a field value in a hash
+    pub fn hstrlen(&self, key: &str, field: &str) -> RedisResult<i64> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("HSTRLEN").arg(key).arg(field).query(&mut *conn)
     }
 }
 
@@ -219,7 +243,7 @@ impl RedisHash {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         let result = f(&mut pipe).query(&mut *conn)?;
         Ok(result)
@@ -334,7 +358,7 @@ impl RedisHash {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         pipe.atomic();
         let result = f(&mut pipe).query(&mut *conn)?;
@@ -411,7 +435,7 @@ impl RedisHash {
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         script.key(keys).arg(args).invoke(&mut *conn)
     }
 }

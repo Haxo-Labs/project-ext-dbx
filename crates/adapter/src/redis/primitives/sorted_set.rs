@@ -1,4 +1,6 @@
 use redis::{Commands, Connection, FromRedisValue, Pipeline, RedisResult, Script, ToRedisArgs};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::error;
 
 /// Internal script storage for debugging and testing purposes.
 ///
@@ -8,8 +10,8 @@ mod script_constants {
     /// Simple ping script for testing script execution
     pub const PING_SCRIPT: &str = "return redis.call('PING')";
 }
-use std::sync::Arc;
-use std::sync::Mutex;
+
+use crate::redis::RedisConnectionHandler;
 
 /// Represents a Redis sorted set data type with operations for manipulating sorted set values.
 ///
@@ -27,6 +29,18 @@ pub struct RedisSortedSet {
     conn: Arc<Mutex<Connection>>,
 }
 
+impl RedisConnectionHandler for RedisSortedSet {
+    fn acquire_connection(&self) -> Result<MutexGuard<'_, Connection>, redis::RedisError> {
+        match self.conn.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                error!("Redis connection mutex poisoned, recovering");
+                Ok(poisoned.into_inner())
+            }
+        }
+    }
+}
+
 /// Core implementation with basic sorted set operations
 impl RedisSortedSet {
     /// Creates a new RedisSortedSet instance with the provided connection
@@ -41,7 +55,7 @@ impl RedisSortedSet {
 
     /// Adds one or more members with scores to a sorted set
     pub fn zadd(&self, key: &str, items: &[(f64, &str)]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut cmd = redis::cmd("ZADD");
         cmd.arg(key);
         for (score, member) in items {
@@ -52,19 +66,19 @@ impl RedisSortedSet {
 
     /// Adds a single member with score to a sorted set
     pub fn zadd_single(&self, key: &str, score: f64, member: &str) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zadd(key, member, score)
     }
 
     /// Removes one or more members from a sorted set
     pub fn zrem(&self, key: &str, members: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrem(key, members)
     }
 
     /// Returns a range of members from a sorted set by index
     pub fn zrange(&self, key: &str, start: isize, stop: isize) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrange(key, start, stop)
     }
 
@@ -75,13 +89,13 @@ impl RedisSortedSet {
         start: isize,
         stop: isize,
     ) -> RedisResult<Vec<(String, f64)>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrange_withscores(key, start, stop)
     }
 
     /// Returns a range of members from a sorted set by score
     pub fn zrangebyscore(&self, key: &str, min: f64, max: f64) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrangebyscore(key, min, max)
     }
 
@@ -92,7 +106,7 @@ impl RedisSortedSet {
         min: f64,
         max: f64,
     ) -> RedisResult<Vec<(String, f64)>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrangebyscore_withscores(key, min, max)
     }
 
@@ -105,7 +119,7 @@ impl RedisSortedSet {
         offset: isize,
         count: isize,
     ) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrangebyscore_limit(key, min, max, offset, count)
     }
 
@@ -118,13 +132,13 @@ impl RedisSortedSet {
         offset: isize,
         count: isize,
     ) -> RedisResult<Vec<(String, f64)>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrangebyscore_limit_withscores(key, min, max, offset, count)
     }
 
     /// Returns a reverse range of members from a sorted set by index
     pub fn zrevrange(&self, key: &str, start: isize, stop: isize) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrevrange(key, start, stop)
     }
 
@@ -135,13 +149,13 @@ impl RedisSortedSet {
         start: isize,
         stop: isize,
     ) -> RedisResult<Vec<(String, f64)>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrevrange_withscores(key, start, stop)
     }
 
     /// Returns a reverse range of members from a sorted set by score
     pub fn zrevrangebyscore(&self, key: &str, max: f64, min: f64) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrevrangebyscore(key, max, min)
     }
 
@@ -152,7 +166,7 @@ impl RedisSortedSet {
         max: f64,
         min: f64,
     ) -> RedisResult<Vec<(String, f64)>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrevrangebyscore_withscores(key, max, min)
     }
 
@@ -165,7 +179,7 @@ impl RedisSortedSet {
         offset: isize,
         count: isize,
     ) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrevrangebyscore_limit(key, max, min, offset, count)
     }
 
@@ -178,67 +192,67 @@ impl RedisSortedSet {
         offset: isize,
         count: isize,
     ) -> RedisResult<Vec<(String, f64)>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrevrangebyscore_limit_withscores(key, max, min, offset, count)
     }
 
     /// Returns the rank of a member in a sorted set
     pub fn zrank(&self, key: &str, member: &str) -> RedisResult<Option<usize>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrank(key, member)
     }
 
     /// Returns the reverse rank of a member in a sorted set
     pub fn zrevrank(&self, key: &str, member: &str) -> RedisResult<Option<usize>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrevrank(key, member)
     }
 
     /// Returns the score of a member in a sorted set
     pub fn zscore(&self, key: &str, member: &str) -> RedisResult<Option<f64>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zscore(key, member)
     }
 
     /// Returns the number of members in a sorted set
     pub fn zcard(&self, key: &str) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zcard(key)
     }
 
     /// Returns the number of members in a sorted set with scores between min and max
     pub fn zcount(&self, key: &str, min: f64, max: f64) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zcount(key, min, max)
     }
 
     /// Increments the score of a member in a sorted set
     pub fn zincrby(&self, key: &str, delta: f64, member: &str) -> RedisResult<f64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zincr(key, member, delta)
     }
 
     /// Removes all members in a sorted set with rank between start and stop
     pub fn zremrangebyrank(&self, key: &str, start: isize, stop: isize) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zremrangebyrank(key, start, stop)
     }
 
     /// Removes all members in a sorted set with scores between min and max
     pub fn zremrangebyscore(&self, key: &str, min: f64, max: f64) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zrembyscore(key, min, max)
     }
 
     /// Returns the intersection of multiple sorted sets
     pub fn zinterstore(&self, destination: &str, keys: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zinterstore(destination, keys)
     }
 
     /// Returns the union of multiple sorted sets
     pub fn zunionstore(&self, destination: &str, keys: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.zunionstore(destination, keys)
     }
 
@@ -249,7 +263,7 @@ impl RedisSortedSet {
         keys: &[&str],
         weights: &[f64],
     ) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let key_weight_pairs: Vec<(&str, f64)> = keys
             .iter()
             .zip(weights.iter())
@@ -265,7 +279,7 @@ impl RedisSortedSet {
         keys: &[&str],
         weights: &[f64],
     ) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let key_weight_pairs: Vec<(&str, f64)> = keys
             .iter()
             .zip(weights.iter())
@@ -276,33 +290,33 @@ impl RedisSortedSet {
 
     /// Deletes a sorted set
     pub fn del(&self, key: &str) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.del(key)
     }
 
     /// Checks if a sorted set exists
     pub fn exists(&self, key: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.exists(key)?;
         Ok(result == 1)
     }
 
     /// Gets the TTL of a sorted set in seconds
     pub fn ttl(&self, key: &str) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.ttl(key)
     }
 
     /// Sets the TTL of a sorted set in seconds
     pub fn expire(&self, key: &str, seconds: u64) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.expire(key, seconds as usize)?;
         Ok(result == 1)
     }
 
     /// Gets keys matching a pattern
     pub fn keys(&self, pattern: &str) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.keys(pattern)
     }
 }
@@ -330,7 +344,7 @@ impl RedisSortedSet {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         let result = f(&mut pipe).query(&mut *conn)?;
         Ok(result)
@@ -446,7 +460,7 @@ impl RedisSortedSet {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         // Add MULTI command at the beginning
         pipe.cmd("MULTI");
@@ -509,7 +523,7 @@ impl RedisSortedSet {
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         script.key(keys).arg(args).invoke(&mut *conn)
     }
 

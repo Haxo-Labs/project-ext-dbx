@@ -1,4 +1,6 @@
 use redis::{Commands, Connection, FromRedisValue, Pipeline, RedisResult, Script, ToRedisArgs};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::error;
 
 /// Internal script storage for debugging and testing purposes.
 ///
@@ -8,8 +10,8 @@ mod script_constants {
     /// Simple ping script for testing script execution
     pub const PING_SCRIPT: &str = "return redis.call('PING')";
 }
-use std::sync::Arc;
-use std::sync::Mutex;
+
+use crate::redis::RedisConnectionHandler;
 
 /// Represents a Redis string data type with operations for manipulating string values.
 ///
@@ -27,6 +29,18 @@ pub struct RedisString {
     conn: Arc<Mutex<Connection>>,
 }
 
+impl RedisConnectionHandler for RedisString {
+    fn acquire_connection(&self) -> Result<MutexGuard<'_, Connection>, redis::RedisError> {
+        match self.conn.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                error!("Redis connection mutex poisoned, recovering");
+                Ok(poisoned.into_inner())
+            }
+        }
+    }
+}
+
 /// Core implementation with basic string operations
 impl RedisString {
     /// Creates a new RedisString instance with the provided connection
@@ -41,81 +55,111 @@ impl RedisString {
 
     /// Sets a key to hold the string value
     pub fn set(&self, key: &str, value: &str) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.set(key, value)
     }
 
     /// Gets the string value of a key
     pub fn get(&self, key: &str) -> RedisResult<Option<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.get(key)
     }
 
-    /// Appends a value to a key
-    pub fn append(&self, key: &str, value: &str) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.append(key, value)
+    /// Sets a key to hold the string value with an expiration
+    pub fn setex(&self, key: &str, value: &str, seconds: usize) -> RedisResult<()> {
+        let mut conn = self.acquire_connection()?;
+        conn.set_ex(key, value, seconds)
     }
 
-    /// Increments the number stored at key by one
+    /// Gets the string value of a key and deletes it
+    pub fn getdel(&self, key: &str) -> RedisResult<Option<String>> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("GETDEL").arg(key).query(&mut *conn)
+    }
+
+    /// Gets the old string value of a key and sets it to a new value
+    pub fn getset(&self, key: &str, value: &str) -> RedisResult<Option<String>> {
+        let mut conn = self.acquire_connection()?;
+        conn.getset(key, value)
+    }
+
+    /// Increments the integer value of a key by one
     pub fn incr(&self, key: &str) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.incr(key, 1)
     }
 
-    /// Sets a key with expiration
-    pub fn set_with_expiry(&self, key: &str, value: &str, ttl_seconds: usize) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.set_ex(key, value, ttl_seconds)
+    /// Increments the integer value of a key by the given increment
+    pub fn incrby(&self, key: &str, increment: i64) -> RedisResult<i64> {
+        let mut conn = self.acquire_connection()?;
+        conn.incr(key, increment)
     }
 
-    /// Increments the number stored at key by the given amount
-    pub fn incr_by(&self, key: &str, amount: i64) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.incr(key, amount)
-    }
-
-    /// Decrements the number stored at key by one
+    /// Decrements the integer value of a key by one
     pub fn decr(&self, key: &str) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.decr(key, 1)
+        let mut conn = self.acquire_connection()?;
+        conn.incr(key, -1)
     }
 
-    /// Decrements the number stored at key by the given amount
-    pub fn decr_by(&self, key: &str, amount: i64) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.decr(key, amount)
+    /// Decrements the integer value of a key by the given decrement
+    pub fn decrby(&self, key: &str, decrement: i64) -> RedisResult<i64> {
+        let mut conn = self.acquire_connection()?;
+        conn.incr(key, -decrement)
     }
 
-    /// Deletes a key
-    pub fn del(&self, key: &str) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.del(key)
+    /// Appends a value to a key
+    pub fn append(&self, key: &str, value: &str) -> RedisResult<i64> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("APPEND").arg(key).arg(value).query(&mut *conn)
+    }
+
+    /// Gets the length of the string value of a key
+    pub fn strlen(&self, key: &str) -> RedisResult<usize> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("STRLEN").arg(key).query(&mut *conn)
+    }
+
+    /// Sets multiple keys to multiple values
+    pub fn mset(&self, items: &[(&str, &str)]) -> RedisResult<()> {
+        let mut conn = self.acquire_connection()?;
+        conn.set_multiple(items)
+    }
+
+    /// Gets the values of all the given keys
+    pub fn mget(&self, keys: &[&str]) -> RedisResult<Vec<Option<String>>> {
+        let mut conn = self.acquire_connection()?;
+        conn.get(keys)
+    }
+
+    /// Deletes one or more keys
+    pub fn del(&self, keys: &[&str]) -> RedisResult<i64> {
+        let mut conn = self.acquire_connection()?;
+        conn.del(keys)
     }
 
     /// Checks if a key exists
     pub fn exists(&self, key: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.exists(key)?;
         Ok(result == 1)
     }
 
     /// Gets the TTL of a key in seconds
     pub fn ttl(&self, key: &str) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.ttl(key)
     }
 
     /// Sets the TTL of a key in seconds
     pub fn expire(&self, key: &str, seconds: u64) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.expire(key, seconds as usize)?;
         Ok(result == 1)
     }
 
     /// Gets keys matching a pattern
     pub fn keys(&self, pattern: &str) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.keys(pattern)
     }
 }
@@ -143,7 +187,7 @@ impl RedisString {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         let result = f(&mut pipe).query(&mut *conn)?;
         Ok(result)
@@ -240,7 +284,7 @@ impl RedisString {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         // Add MULTI command at the beginning
         pipe.cmd("MULTI");
@@ -299,7 +343,7 @@ impl RedisString {
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         script.key(keys).arg(args).invoke(&mut *conn)
     }
 
@@ -484,10 +528,10 @@ mod tests {
         let _get_cmd = redis_string.get("test_key");
         let _append_cmd = redis_string.append("test_key", "_suffix");
         let _incr_cmd = redis_string.incr("counter");
-        let _set_ex_cmd = redis_string.set_with_expiry("session", "token123", 60);
+        let _set_ex_cmd = redis_string.setex("session", "token123", 60);
         let _decr_cmd = redis_string.decr("counter");
-        let _incr_by_cmd = redis_string.incr_by("score", 5);
-        let _decr_by_cmd = redis_string.decr_by("balance", 25);
+        let _incr_by_cmd = redis_string.incrby("score", 5);
+        let _decr_by_cmd = redis_string.decrby("balance", 25);
     }
 
     #[test]

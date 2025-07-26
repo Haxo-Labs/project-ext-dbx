@@ -1,4 +1,8 @@
 use redis::{Commands, Connection, FromRedisValue, Pipeline, RedisResult, Script, ToRedisArgs};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::error;
+
+use crate::redis::RedisConnectionHandler;
 
 /// Internal script storage for debugging and testing purposes.
 ///
@@ -8,10 +12,8 @@ mod script_constants {
     /// Simple ping script for testing script execution
     pub const PING_SCRIPT: &str = "return redis.call('PING')";
 }
-use std::sync::Arc;
-use std::sync::Mutex;
 
-/// Represents a Redis bitmap data type with operations for manipulating bit values.
+/// Represents a Redis bitmap (string treated as bit array) with operations for manipulating bitmap values.
 ///
 /// This implementation supports:
 /// - Individual commands (setbit, getbit, bitcount, etc.)
@@ -19,11 +21,30 @@ use std::sync::Mutex;
 /// - Transactions (for atomicity)
 /// - Lua script execution (for complex operations)
 ///
-/// Redis bitmaps are implemented using string commands with bit-level operations.
-/// Each bit is addressed by its offset (0-based index).
+/// # Examples
+///
+/// ```ignore
+/// // Example of using Redis bitmap operations
+/// let redis_bitmap = RedisBitmap::new(connection);
+/// redis_bitmap.setbit("user:active", 123, true).unwrap();
+/// let is_active = redis_bitmap.getbit("user:active", 123).unwrap();
+/// let active_count = redis_bitmap.bitcount("user:active", None, None).unwrap();
+/// ```
 #[derive(Clone)]
 pub struct RedisBitmap {
     conn: Arc<Mutex<Connection>>,
+}
+
+impl RedisConnectionHandler for RedisBitmap {
+    fn acquire_connection(&self) -> Result<MutexGuard<'_, Connection>, redis::RedisError> {
+        match self.conn.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                error!("Redis connection mutex poisoned, recovering");
+                Ok(poisoned.into_inner())
+            }
+        }
+    }
 }
 
 /// Core implementation with basic bitmap operations
@@ -40,27 +61,42 @@ impl RedisBitmap {
 
     /// Sets or clears the bit at offset in the string value stored at key
     pub fn setbit(&self, key: &str, offset: usize, value: bool) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
-        let result: i32 = conn.setbit(key, offset, value)?;
-        Ok(result == 1)
+        let mut conn = self.acquire_connection()?;
+        let old_value: i32 = redis::cmd("SETBIT")
+            .arg(key)
+            .arg(offset)
+            .arg(if value { 1 } else { 0 })
+            .query(&mut *conn)?;
+        Ok(old_value != 0)
     }
 
     /// Returns the bit value at offset in the string value stored at key
     pub fn getbit(&self, key: &str, offset: usize) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
-        let result: i32 = conn.getbit(key, offset)?;
-        Ok(result == 1)
+        let mut conn = self.acquire_connection()?;
+        let result: i32 = redis::cmd("GETBIT")
+            .arg(key)
+            .arg(offset)
+            .query(&mut *conn)?;
+        Ok(result != 0)
     }
 
-    /// Counts the number of set bits (population counting) in a string
-    pub fn bitcount(&self, key: &str) -> RedisResult<u64> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.bitcount(key)
+    /// Counts the number of set bits in a string
+    pub fn bitcount(&self, key: &str, start: Option<i64>, end: Option<i64>) -> RedisResult<usize> {
+        let mut conn = self.acquire_connection()?;
+        let mut cmd = redis::cmd("BITCOUNT");
+        cmd.arg(key);
+        if let Some(s) = start {
+            cmd.arg(s);
+            if let Some(e) = end {
+                cmd.arg(e);
+            }
+        }
+        cmd.query(&mut *conn)
     }
 
     /// Counts the number of set bits (population counting) in a string within a range
     pub fn bitcount_range(&self, key: &str, start: i64, end: i64) -> RedisResult<u64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         redis::cmd("BITCOUNT")
             .arg(key)
             .arg(start)
@@ -70,7 +106,7 @@ impl RedisBitmap {
 
     /// Performs a bitwise operation between multiple keys and stores the result
     pub fn bitop(&self, operation: &str, destkey: &str, keys: &[&str]) -> RedisResult<u64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         redis::cmd("BITOP")
             .arg(operation)
             .arg(destkey)
@@ -95,7 +131,7 @@ impl RedisBitmap {
 
     /// Performs a bitwise NOT operation on a key and stores the result
     pub fn bitop_not(&self, destkey: &str, sourcekey: &str) -> RedisResult<u64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         redis::cmd("BITOP")
             .arg("NOT")
             .arg(destkey)
@@ -105,7 +141,7 @@ impl RedisBitmap {
 
     /// Returns the position of the first bit set to 1 or 0 in a string
     pub fn bitpos(&self, key: &str, bit: bool) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let bit_value = if bit { 1 } else { 0 };
         redis::cmd("BITPOS")
             .arg(key)
@@ -115,7 +151,7 @@ impl RedisBitmap {
 
     /// Returns the position of the first bit set to 1 or 0 in a string within a range
     pub fn bitpos_range(&self, key: &str, bit: bool, start: i64, end: i64) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let bit_value = if bit { 1 } else { 0 };
         redis::cmd("BITPOS")
             .arg(key)
@@ -133,7 +169,7 @@ impl RedisBitmap {
         start: i64,
         end: i64,
     ) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let bit_value = if bit { 1 } else { 0 };
         redis::cmd("BITPOS")
             .arg(key)
@@ -152,7 +188,7 @@ impl RedisBitmap {
         start: i64,
         end: i64,
     ) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let bit_value = if bit { 1 } else { 0 };
         redis::cmd("BITPOS")
             .arg(key)
@@ -165,57 +201,57 @@ impl RedisBitmap {
 
     /// Returns the string value stored at key
     pub fn get(&self, key: &str) -> RedisResult<Option<Vec<u8>>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.get(key)
     }
 
     /// Sets the string value of a key
     pub fn set(&self, key: &str, value: &[u8]) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.set(key, value)
     }
 
     /// Returns the length of the string value stored at key
     pub fn strlen(&self, key: &str) -> RedisResult<u64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.strlen(key)
     }
 
     /// Deletes a bitmap
     pub fn del(&self, key: &str) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.del(key)
     }
 
     /// Checks if a bitmap exists
     pub fn exists(&self, key: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.exists(key)?;
         Ok(result == 1)
     }
 
     /// Gets the TTL of a bitmap in seconds
     pub fn ttl(&self, key: &str) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.ttl(key)
     }
 
     /// Sets the TTL of a bitmap in seconds
     pub fn expire(&self, key: &str, seconds: u64) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.expire(key, seconds as usize)?;
         Ok(result == 1)
     }
 
     /// Gets keys matching a pattern
     pub fn keys(&self, pattern: &str) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.keys(pattern)
     }
 
     /// Sets multiple bits at once using a byte array
     pub fn set_bits_from_bytes(&self, key: &str, offset: u64, bytes: &[u8]) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         // Set the string value starting at the specified offset
         redis::cmd("SETRANGE")
             .arg(key)
@@ -226,7 +262,7 @@ impl RedisBitmap {
 
     /// Gets multiple bits as bytes
     pub fn get_bits_as_bytes(&self, key: &str, offset: u64, length: u64) -> RedisResult<Vec<u8>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         redis::cmd("GETRANGE")
             .arg(key)
             .arg(offset)
@@ -259,7 +295,7 @@ impl RedisBitmap {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         let result = f(&mut pipe).query(&mut *conn)?;
         Ok(result)
@@ -354,7 +390,7 @@ impl RedisBitmap {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         // Add MULTI command at the beginning
         pipe.cmd("MULTI");
@@ -415,7 +451,7 @@ impl RedisBitmap {
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         script.key(keys).arg(args).invoke(&mut *conn)
     }
 
@@ -658,7 +694,7 @@ mod tests {
         // Verify compilation
         let _setbit_cmd = redis_bitmap.setbit("test_bitmap", 0, true);
         let _getbit_cmd = redis_bitmap.getbit("test_bitmap", 0);
-        let _bitcount_cmd = redis_bitmap.bitcount("test_bitmap");
+        let _bitcount_cmd = redis_bitmap.bitcount("test_bitmap", None, None);
         let _bitcount_range_cmd = redis_bitmap.bitcount_range("test_bitmap", 0, 10);
         let _bitop_and_cmd = redis_bitmap.bitop_and("dest", &["bitmap1", "bitmap2"]);
         let _bitop_or_cmd = redis_bitmap.bitop_or("dest", &["bitmap1", "bitmap2"]);

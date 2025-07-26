@@ -1,121 +1,60 @@
-use crate::redis::RedisResult;
-use redis::Connection;
+use redis::{Commands, Connection, FromRedisValue, Pipeline, RedisResult, Script, ToRedisArgs};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::error;
 
-/// Provides administrative operations for Redis.
-///
-/// Supports database management, server information, configuration, monitoring,
-/// and health checks.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use dbx_adapter::redis::Redis;
-/// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-/// let redis = Redis::from_url(&redis_url).unwrap();
-/// let admin = redis.admin();
-///
-/// // Check server health
-/// let response = admin.ping().unwrap();
-/// assert_eq!(response, "PONG");
-///
-/// // Get server info
-/// let info = admin.info().unwrap();
-/// assert!(info.contains("redis_version"));
-/// ```
+use crate::redis::RedisConnectionHandler;
+
+/// Administrative operations for Redis server management
+#[derive(Clone)]
 pub struct AdminOperations {
     conn: Arc<Mutex<Connection>>,
 }
 
+impl RedisConnectionHandler for AdminOperations {
+    fn acquire_connection(&self) -> Result<MutexGuard<'_, Connection>, redis::RedisError> {
+        match self.conn.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                error!("Redis connection mutex poisoned, recovering");
+                Ok(poisoned.into_inner())
+            }
+        }
+    }
+}
+
 impl AdminOperations {
-    /// Creates a new instance of `AdminOperations`.
-    ///
-    /// # Arguments
-    ///
-    /// * `conn` - The Redis connection wrapped in Arc<Mutex<>>.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// ```
+    /// Creates a new AdminOperations instance
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
     }
 
-    /// Flushes all keys from the current database.
-    ///
-    /// This operation removes all keys in the currently selected Redis database.
-    /// Use with caution as this operation cannot be undone.
-    ///
-    /// # Returns
-    ///
-    /// A result indicating success or failure.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// admin.flushdb().unwrap();
-    /// ```
-    pub fn flushdb(&self) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
-        redis::cmd("FLUSHDB").query(&mut *conn)
+    /// Gets the connection reference for direct usage
+    pub fn connection(&self) -> &Arc<Mutex<Connection>> {
+        &self.conn
     }
 
-    /// Flushes all keys from all databases.
-    ///
-    /// This operation removes all keys from all Redis databases, regardless of the currently selected one.
-    /// Use with extreme caution as this operation cannot be undone.
-    ///
-    /// # Returns
-    ///
-    /// A result indicating success or failure.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// admin.flushall().unwrap();
-    /// ```
-    pub fn flushall(&self) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
-        redis::cmd("FLUSHALL").query(&mut *conn)
+    /// Tests connectivity to the Redis server
+    pub fn ping(&self) -> RedisResult<bool> {
+        let mut conn = self.acquire_connection()?;
+        let response: String = redis::cmd("PING").query(&mut *conn)?;
+        Ok(response == "PONG")
     }
 
-    /// Retrieves the Redis server's information and statistics.
-    ///
-    /// Returns server information including version, memory usage,
-    /// connected clients, and statistics.
-    ///
-    /// # Returns
-    ///
-    /// A string containing the server's information in the standard Redis INFO format.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// let info = admin.info().unwrap();
-    /// assert!(info.contains("redis_version"));
-    /// ```
-    pub fn info(&self) -> RedisResult<String> {
-        let mut conn = self.conn.lock().unwrap();
-        redis::cmd("INFO").query(&mut *conn)
+    /// Sends a ping with a custom message
+    pub fn ping_with_message(&self, message: &str) -> RedisResult<String> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("PING").arg(message).query(&mut *conn)
+    }
+
+    /// Gets server information and statistics
+    pub fn info(&self, section: Option<&str>) -> RedisResult<String> {
+        let mut conn = self.acquire_connection()?;
+        match section {
+            Some(s) => redis::cmd("INFO").arg(s).query(&mut *conn),
+            None => redis::cmd("INFO").query(&mut *conn),
+        }
     }
 
     /// Retrieves specific sections of Redis server information.
@@ -139,59 +78,22 @@ impl AdminOperations {
     /// assert!(server_info.contains("redis_version"));
     /// ```
     pub fn info_section(&self, section: &str) -> RedisResult<String> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         redis::cmd("INFO").arg(section).query(&mut *conn)
     }
 
-    /// Pings the Redis server to check connectivity.
-    ///
-    /// This operation sends a simple "PING" command to the Redis server and expects a "PONG" response.
-    /// Useful for health checks and connection validation.
-    ///
-    /// # Returns
-    ///
-    /// A string response from the server, typically "PONG".
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// let response = admin.ping().unwrap();
-    /// assert_eq!(response, "PONG");
-    /// ```
-    pub fn ping(&self) -> RedisResult<String> {
-        let mut conn = self.conn.lock().unwrap();
-        redis::cmd("PING").query(&mut *conn)
+    /// Gets server configuration parameters
+    pub fn config_get(&self, parameter: &str) -> RedisResult<Vec<String>> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("CONFIG")
+            .arg("GET")
+            .arg(parameter)
+            .query(&mut *conn)
     }
 
-    /// Configures Redis server parameters.
-    ///
-    /// Sets configuration parameters at runtime. Note that not all parameters
-    /// can be set at runtime, and some may require a server restart.
-    ///
-    /// # Arguments
-    ///
-    /// * `parameter` - The configuration parameter to set.
-    /// * `value` - The value to set for the parameter.
-    ///
-    /// # Returns
-    ///
-    /// A result indicating success or failure.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// admin.config_set("timeout", "300").unwrap();
-    /// ```
-    pub fn config_set(&self, parameter: &str, value: &str) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+    /// Sets a server configuration parameter
+    pub fn config_set(&self, parameter: &str, value: &str) -> RedisResult<String> {
+        let mut conn = self.acquire_connection()?;
         redis::cmd("CONFIG")
             .arg("SET")
             .arg(parameter)
@@ -199,41 +101,16 @@ impl AdminOperations {
             .query(&mut *conn)
     }
 
-    /// Retrieves the value of a Redis server configuration parameter.
-    ///
-    /// # Arguments
-    ///
-    /// * `parameter` - The configuration parameter to retrieve.
-    ///
-    /// # Returns
-    ///
-    /// A string containing the parameter's value.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// let timeout = admin.config_get("timeout").unwrap();
-    /// ```
-    pub fn config_get(&self, parameter: &str) -> RedisResult<String> {
-        let mut conn = self.conn.lock().unwrap();
-        let result: Vec<String> = redis::cmd("CONFIG")
-            .arg("GET")
-            .arg(parameter)
-            .query(&mut *conn)?;
-        if result.len() >= 2 {
-            Ok(result[1].clone())
-        } else {
-            // If we don't get enough results, the parameter probably doesn't exist
-            // Return the original error from the query
-            redis::cmd("CONFIG")
-                .arg("GET")
-                .arg(parameter)
-                .query(&mut *conn)
-        }
+    /// Resets server statistics
+    pub fn config_resetstat(&self) -> RedisResult<String> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("CONFIG").arg("RESETSTAT").query(&mut *conn)
+    }
+
+    /// Rewrites the configuration file
+    pub fn config_rewrite(&self) -> RedisResult<String> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("CONFIG").arg("REWRITE").query(&mut *conn)
     }
 
     /// Retrieves all Redis server configuration parameters.
@@ -253,7 +130,7 @@ impl AdminOperations {
     /// assert!(config.contains_key("timeout"));
     /// ```
     pub fn config_get_all(&self) -> RedisResult<HashMap<String, String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: Vec<String> = redis::cmd("CONFIG").arg("GET").arg("*").query(&mut *conn)?;
 
         let mut config = HashMap::new();
@@ -265,57 +142,22 @@ impl AdminOperations {
         Ok(config)
     }
 
-    /// Resets Redis server configuration to default values.
-    ///
-    /// # Returns
-    ///
-    /// A result indicating success or failure.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// admin.config_resetstat().unwrap();
-    /// ```
-    pub fn config_resetstat(&self) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
-        redis::cmd("CONFIG").arg("RESETSTAT").query(&mut *conn)
-    }
-
-    /// Rewrites the Redis configuration file.
-    ///
-    /// This command rewrites the redis.conf file with the current configuration.
-    ///
-    /// # Returns
-    ///
-    /// A result indicating success or failure.
-    pub fn config_rewrite(&self) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
-        redis::cmd("CONFIG").arg("REWRITE").query(&mut *conn)
-    }
-
-    /// Returns the number of keys in the current database.
-    ///
-    /// # Returns
-    ///
-    /// The number of keys in the current database.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use dbx_adapter::redis::Redis;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
-    /// let admin = redis.admin();
-    /// let count = admin.dbsize().unwrap();
-    /// println!("Database contains {} keys", count);
-    /// ```
-    pub fn dbsize(&self) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+    /// Returns the number of keys in the current database
+    pub fn dbsize(&self) -> RedisResult<usize> {
+        let mut conn = self.acquire_connection()?;
         redis::cmd("DBSIZE").query(&mut *conn)
+    }
+
+    /// Removes all keys from the current database
+    pub fn flushdb(&self) -> RedisResult<String> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("FLUSHDB").query(&mut *conn)
+    }
+
+    /// Removes all keys from all databases
+    pub fn flushall(&self) -> RedisResult<String> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("FLUSHALL").query(&mut *conn)
     }
 
     /// Returns the current server time.
@@ -335,7 +177,7 @@ impl AdminOperations {
     /// println!("Server time: {} (microseconds: {})", time, microseconds);
     /// ```
     pub fn time(&self) -> RedisResult<(i64, i64)> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         redis::cmd("TIME").query(&mut *conn)
     }
 
@@ -479,8 +321,16 @@ impl AdminOperations {
 
         Ok(HealthCheck {
             is_healthy,
-            ping_response: ping_result.unwrap_or_else(|_| "FAILED".to_string()),
-            database_size: dbsize_result.unwrap_or(-1),
+            ping_response: ping_result
+                .map(|success| {
+                    if success {
+                        "PONG".to_string()
+                    } else {
+                        "FAILED".to_string()
+                    }
+                })
+                .unwrap_or_else(|_| "FAILED".to_string()),
+            database_size: dbsize_result.map(|size| size as i64).unwrap_or(-1),
             version: version_result.unwrap_or_else(|_| "unknown".to_string()),
             memory_usage: memory_result.unwrap_or_default(),
         })
@@ -506,7 +356,7 @@ impl AdminOperations {
     /// println!("Server uptime: {} seconds", status.uptime_seconds);
     /// ```
     pub fn server_status(&self) -> RedisResult<ServerStatus> {
-        let info = self.info()?;
+        let info = self.info(None)?;
         let (time, _) = self.time()?;
 
         let mut status = ServerStatus {
@@ -663,7 +513,7 @@ mod tests {
     fn test_info_operation() {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
-        let info = admin.info().unwrap();
+        let info = admin.info(None).unwrap();
         assert!(info.contains("redis_version"));
         assert!(info.contains("connected_clients"));
     }

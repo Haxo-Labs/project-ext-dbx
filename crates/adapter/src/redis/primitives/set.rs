@@ -1,4 +1,6 @@
 use redis::{Commands, Connection, FromRedisValue, Pipeline, RedisResult, Script, ToRedisArgs};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::error;
 
 /// Internal script storage for debugging and testing purposes.
 ///
@@ -8,8 +10,8 @@ mod script_constants {
     /// Simple ping script for testing script execution
     pub const PING_SCRIPT: &str = "return redis.call('PING')";
 }
-use std::sync::Arc;
-use std::sync::Mutex;
+
+use crate::redis::RedisConnectionHandler;
 
 /// Represents a Redis set data type with operations for manipulating set values.
 ///
@@ -27,6 +29,18 @@ pub struct RedisSet {
     conn: Arc<Mutex<Connection>>,
 }
 
+impl RedisConnectionHandler for RedisSet {
+    fn acquire_connection(&self) -> Result<MutexGuard<'_, Connection>, redis::RedisError> {
+        match self.conn.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                error!("Redis connection mutex poisoned, recovering");
+                Ok(poisoned.into_inner())
+            }
+        }
+    }
+}
+
 /// Core implementation with basic set operations
 impl RedisSet {
     /// Creates a new RedisSet instance with the provided connection
@@ -41,142 +55,146 @@ impl RedisSet {
 
     /// Adds one or more members to a set
     pub fn sadd(&self, key: &str, members: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.sadd(key, members)
     }
 
     /// Removes one or more members from a set
     pub fn srem(&self, key: &str, members: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.srem(key, members)
     }
 
-    /// Returns all members of a set
+    /// Gets all members of a set
     pub fn smembers(&self, key: &str) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.smembers(key)
     }
 
-    /// Returns the number of members in a set
+    /// Checks if a member exists in a set
+    pub fn sismember(&self, key: &str, member: &str) -> RedisResult<bool> {
+        let mut conn = self.acquire_connection()?;
+        let result: i32 = conn.sismember(key, member)?;
+        Ok(result == 1)
+    }
+
+    /// Gets the number of members in a set
     pub fn scard(&self, key: &str) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.scard(key)
     }
 
-    /// Tests if a member exists in a set
-    pub fn sismember(&self, key: &str, member: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.sismember(key, member)
-    }
-
-    /// Returns a random member from a set
+    /// Gets a random member from a set
     pub fn srandmember(&self, key: &str) -> RedisResult<Option<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.srandmember(key)
     }
 
-    /// Returns multiple random members from a set
-    pub fn srandmember_count(&self, key: &str, count: usize) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.srandmember_multiple(key, count)
+    /// Gets multiple random members from a set
+    pub fn srandmember_multiple(&self, key: &str, count: isize) -> RedisResult<Vec<String>> {
+        let mut conn = self.acquire_connection()?;
+        redis::cmd("SRANDMEMBER")
+            .arg(key)
+            .arg(count)
+            .query(&mut *conn)
     }
 
     /// Removes and returns a random member from a set
     pub fn spop(&self, key: &str) -> RedisResult<Option<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.spop(key)
     }
 
     /// Removes and returns multiple random members from a set
-    pub fn spop_count(&self, key: &str, count: usize) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+    pub fn spop_multiple(&self, key: &str, count: usize) -> RedisResult<Vec<String>> {
+        let mut conn = self.acquire_connection()?;
         redis::cmd("SPOP").arg(key).arg(count).query(&mut *conn)
     }
 
     /// Moves a member from one set to another
     pub fn smove(&self, source: &str, destination: &str, member: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.smove(source, destination, member)?;
         Ok(result == 1)
     }
 
-    /// Returns the intersection of multiple sets
-    pub fn sinter(&self, keys: &[&str]) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.sinter(keys)
-    }
-
-    /// Returns the union of multiple sets
+    /// Gets the union of multiple sets
     pub fn sunion(&self, keys: &[&str]) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.sunion(keys)
     }
 
-    /// Returns the difference between the first set and all the successive sets
+    /// Gets the intersection of multiple sets
+    pub fn sinter(&self, keys: &[&str]) -> RedisResult<Vec<String>> {
+        let mut conn = self.acquire_connection()?;
+        conn.sinter(keys)
+    }
+
+    /// Gets the difference between sets
     pub fn sdiff(&self, keys: &[&str]) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.sdiff(keys)
     }
 
-    /// Stores the intersection of multiple sets in a destination set
-    pub fn sinterstore(&self, destination: &str, keys: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
-        conn.sinterstore(destination, keys)
-    }
-
-    /// Stores the union of multiple sets in a destination set
+    /// Stores the union of multiple sets in a destination key
     pub fn sunionstore(&self, destination: &str, keys: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.sunionstore(destination, keys)
     }
 
-    /// Stores the difference between the first set and all the successive sets in a destination set
+    /// Stores the intersection of multiple sets in a destination key
+    pub fn sinterstore(&self, destination: &str, keys: &[&str]) -> RedisResult<usize> {
+        let mut conn = self.acquire_connection()?;
+        conn.sinterstore(destination, keys)
+    }
+
+    /// Stores the difference between sets in a destination key
     pub fn sdiffstore(&self, destination: &str, keys: &[&str]) -> RedisResult<usize> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.sdiffstore(destination, keys)
     }
 
     /// Returns a random member from a set without removing it
     pub fn srandmember_one(&self, key: &str) -> RedisResult<Option<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.srandmember(key)
     }
 
     /// Returns all members of a set as a HashSet
     pub fn smembers_as_set(&self, key: &str) -> RedisResult<std::collections::HashSet<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.smembers(key)
     }
 
     /// Deletes a set
     pub fn del(&self, key: &str) -> RedisResult<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.del(key)
     }
 
     /// Checks if a set exists
     pub fn exists(&self, key: &str) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.exists(key)?;
         Ok(result == 1)
     }
 
     /// Gets the TTL of a set in seconds
     pub fn ttl(&self, key: &str) -> RedisResult<i64> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.ttl(key)
     }
 
     /// Sets the TTL of a set in seconds
     pub fn expire(&self, key: &str, seconds: u64) -> RedisResult<bool> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let result: i32 = conn.expire(key, seconds as usize)?;
         Ok(result == 1)
     }
 
     /// Gets keys matching a pattern
     pub fn keys(&self, pattern: &str) -> RedisResult<Vec<String>> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         conn.keys(pattern)
     }
 }
@@ -204,7 +222,7 @@ impl RedisSet {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         let result = f(&mut pipe).query(&mut *conn)?;
         Ok(result)
@@ -307,7 +325,7 @@ impl RedisSet {
         F: FnOnce(&mut Pipeline) -> &mut Pipeline,
         T: FromRedisValue,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         let mut pipe = redis::pipe();
         // Add MULTI command at the beginning
         pipe.cmd("MULTI");
@@ -366,7 +384,7 @@ impl RedisSet {
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.acquire_connection()?;
         script.key(keys).arg(args).invoke(&mut *conn)
     }
 
