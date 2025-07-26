@@ -538,10 +538,42 @@ impl RateLimitService {
     }
 
     pub async fn count_active_limiters(&self) -> Result<u32, String> {
-        // Note: This implementation returns a fixed count since UniversalBackend
-        // doesn't expose key enumeration. In production, this could be tracked
-        // separately or implemented with backend-specific logic.
-        Ok(0)
+        // Track active limiters by maintaining a count in the backend
+        let active_count = self
+            .get_counter_value("rate_limit:metrics:active_limiters")
+            .await?;
+        Ok(active_count.max(0) as u32)
+    }
+
+    pub async fn increment_active_limiters(&self) -> Result<(), String> {
+        let key = "rate_limit:metrics:active_limiters";
+        let current = self.get_counter_value(key).await.unwrap_or(0);
+        let _ = self
+            .limiter
+            .backend
+            .execute_data(DataOperation::Set {
+                key: key.to_string(),
+                value: DataValue::Int(current + 1),
+                ttl: None,
+            })
+            .await;
+        Ok(())
+    }
+
+    pub async fn decrement_active_limiters(&self) -> Result<(), String> {
+        let key = "rate_limit:metrics:active_limiters";
+        let current = self.get_counter_value(key).await.unwrap_or(0);
+        let new_count = (current - 1).max(0);
+        let _ = self
+            .limiter
+            .backend
+            .execute_data(DataOperation::Set {
+                key: key.to_string(),
+                value: DataValue::Int(new_count),
+                ttl: None,
+            })
+            .await;
+        Ok(())
     }
 }
 
