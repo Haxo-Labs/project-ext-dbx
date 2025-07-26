@@ -900,6 +900,12 @@ mod tests {
         }
     }
 
+    fn create_test_redis_pool() -> Arc<dbx_adapter::redis::client::RedisPool> {
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
+        Arc::new(dbx_adapter::redis::client::RedisPool::new(&redis_url, 5).unwrap())
+    }
+
     #[tokio::test]
     async fn test_rbac_config_default() {
         let config = RbacConfig::default();
@@ -965,9 +971,7 @@ mod tests {
 
     #[test]
     fn test_validate_inheritance_chain_simple_cycle() {
-        let redis_pool = Arc::new(
-            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
-        );
+        let redis_pool = create_test_redis_pool();
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Set up roles in registry: A -> B
@@ -1003,9 +1007,7 @@ mod tests {
 
     #[test]
     fn test_validate_inheritance_chain_self_cycle() {
-        let redis_pool = Arc::new(
-            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
-        );
+        let redis_pool = create_test_redis_pool();
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Test self-inheritance: A -> A
@@ -1020,9 +1022,7 @@ mod tests {
 
     #[test]
     fn test_validate_inheritance_chain_deep_cycle() {
-        let redis_pool = Arc::new(
-            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
-        );
+        let redis_pool = create_test_redis_pool();
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Set up deep chain: A -> B -> C -> D
@@ -1074,9 +1074,7 @@ mod tests {
 
     #[test]
     fn test_validate_inheritance_chain_depth_limit() {
-        let redis_pool = Arc::new(
-            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
-        );
+        let redis_pool = create_test_redis_pool();
         let mut config = create_test_rbac_config();
         config.max_role_inheritance_depth = 2; // Set low depth limit
         let rbac = RbacService::new(redis_pool, config);
@@ -1122,9 +1120,7 @@ mod tests {
 
     #[test]
     fn test_validate_inheritance_chain_multiple_parents() {
-        let redis_pool = Arc::new(
-            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
-        );
+        let redis_pool = create_test_redis_pool();
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Set up: A -> B, A -> C, C -> D
@@ -1177,9 +1173,7 @@ mod tests {
 
     #[test]
     fn test_validate_inheritance_chain_valid_cases() {
-        let redis_pool = Arc::new(
-            dbx_adapter::redis::client::RedisPool::new("redis://localhost:6379", 5).unwrap(),
-        );
+        let redis_pool = create_test_redis_pool();
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Set up valid chain: A -> B -> C
