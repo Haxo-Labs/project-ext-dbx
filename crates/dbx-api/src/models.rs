@@ -304,6 +304,7 @@ pub struct UserRoleAssignment {
 pub struct UpdateRoleRequest {
     pub description: Option<String>,
     pub permissions: Option<Vec<String>>,
+    pub inherits_from: Option<Vec<String>>,
 }
 
 /// Request to create a new role
@@ -312,6 +313,7 @@ pub struct CreateRoleRequest {
     pub name: String,
     pub description: Option<String>,
     pub permissions: Vec<String>,
+    pub inherits_from: Option<Vec<String>>,
 }
 
 /// Request to assign a role to a user
@@ -320,6 +322,8 @@ pub struct AssignRoleRequest {
     pub user_id: String,
     pub role_name: String,
     pub expires_at: Option<DateTime<Utc>>,
+    pub expires_in_days: Option<u32>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Request to revoke a role from a user
@@ -327,6 +331,7 @@ pub struct AssignRoleRequest {
 pub struct RevokeRoleRequest {
     pub user_id: String,
     pub role_name: String,
+    pub reason: Option<String>,
 }
 
 /// Role response for API
