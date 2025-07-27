@@ -394,21 +394,19 @@ impl RedisSet {
     /// This integrates script execution with Redis pipelines. Since the Redis
     /// Testing utility for script internals.
     pub fn add_script_to_pipeline<'a, K, A>(
+        &self,
         pipe: &'a mut Pipeline,
-        _script: &Script,
-        keys: K,
-        args: A,
+        script: &str,
+        keys: Vec<K>,
+        args: Vec<A>,
     ) -> &'a mut Pipeline
     where
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        // For testing purposes, we add a simple command to the pipeline
-        // In production, scripts would be managed separately from pipelines
-        // or use direct script.invoke() calls rather than pipeline integration
         pipe.cmd("EVAL")
-            .arg(script_constants::PING_SCRIPT)
-            .arg(1)
+            .arg(script)
+            .arg(keys.len())
             .arg(keys)
             .arg(args)
     }
@@ -675,7 +673,12 @@ mod tests {
 
         // Test pipeline integration with scripts
         let mut pipe = redis::pipe();
-        RedisSet::add_script_to_pipeline(&mut pipe, &add_script, &["set1"], &["new_member"]);
+        _redis_set.add_script_to_pipeline(
+            &mut pipe,
+            script_constants::ADD_SCRIPT,
+            vec!["set1"],
+            vec!["new_member"],
+        );
     }
 
     #[test]
@@ -747,7 +750,12 @@ mod examples {
 
         // Example 3: Using scripts in pipelines
         let _: Result<(usize, Vec<String>), redis::RedisError> = redis_set.with_pipeline(|pipe| {
-            RedisSet::add_script_to_pipeline(pipe, &add_script, &["set1"], &["new_member"]);
+            redis_set.add_script_to_pipeline(
+                pipe,
+                script_constants::ADD_SCRIPT,
+                vec!["set1"],
+                vec!["new_member"],
+            );
 
             pipe.cmd("SMEMBERS").arg("set1")
         });

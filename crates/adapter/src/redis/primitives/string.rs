@@ -353,21 +353,19 @@ impl RedisString {
     /// This integrates script execution with Redis pipelines. Since the Redis
     /// Testing utility for script internals.
     pub fn add_script_to_pipeline<'a, K, A>(
+        &self,
         pipe: &'a mut Pipeline,
-        _script: &Script,
-        keys: K,
-        args: A,
+        script: &str,
+        keys: Vec<K>,
+        args: Vec<A>,
     ) -> &'a mut Pipeline
     where
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        // For testing purposes, we add a simple command to the pipeline
-        // In production, scripts would be managed separately from pipelines
-        // or use direct script.invoke() calls rather than pipeline integration
         pipe.cmd("EVAL")
-            .arg(script_constants::PING_SCRIPT)
-            .arg(1)
+            .arg(script)
+            .arg(keys.len())
             .arg(keys)
             .arg(args)
     }
@@ -597,7 +595,12 @@ mod tests {
 
         // Test pipeline integration with scripts
         let mut pipe = redis::pipe();
-        RedisString::add_script_to_pipeline(&mut pipe, &get_set_script, &["key1"], &["new_value"]);
+        _redis_string.add_script_to_pipeline(
+            &mut pipe,
+            script_constants::GET_SET_SCRIPT,
+            vec!["key1"],
+            vec!["new_value"],
+        );
     }
 
     #[test]
@@ -614,8 +617,7 @@ mod tests {
 
 /// Examples of how to use RedisString with various features
 ///
-/// These examples demonstrate how to use RedisString's features
-/// in real-world scenarios.
+/// These examples demonstrate how to use RedisString's features.
 #[cfg(test)]
 mod examples {
     use super::*;
@@ -669,7 +671,12 @@ mod examples {
 
         // Example 3: Using scripts in pipelines
         let _: Result<(i64, String), redis::RedisError> = redis_string.with_pipeline(|pipe| {
-            RedisString::add_script_to_pipeline(pipe, &increment_script, &["counter"], &[5]);
+            redis_string.add_script_to_pipeline(
+                pipe,
+                script_constants::INCREMENT_SCRIPT,
+                vec!["counter"],
+                vec![5],
+            );
 
             pipe.cmd("GET").arg("some_key")
         });
