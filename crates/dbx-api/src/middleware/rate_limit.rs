@@ -699,16 +699,18 @@ pub struct RateLimitService {
     sliding_window_limiter: SlidingWindowRateLimiter,
     bit_vector_limiter: BitVectorRateLimiter,
     use_bit_vector: bool, // Flag to choose between implementations
-    pub global_policy: Option<crate::models::RateLimitPolicy>,
+    pub global_policy: tokio::sync::RwLock<Option<crate::models::RateLimitPolicy>>,
+    backend: Arc<dyn UniversalBackend>,
 }
 
 impl RateLimitService {
     pub fn new(backend: Arc<dyn UniversalBackend>, use_bit_vector: bool) -> Self {
         Self {
             sliding_window_limiter: SlidingWindowRateLimiter::new(backend.clone()),
-            bit_vector_limiter: BitVectorRateLimiter::new(backend),
+            bit_vector_limiter: BitVectorRateLimiter::new(backend.clone()),
             use_bit_vector,
-            global_policy: None,
+            global_policy: tokio::sync::RwLock::new(None),
+            backend,
         }
     }
 
@@ -718,6 +720,9 @@ impl RateLimitService {
         identifier: &str,
         endpoint: &str,
     ) -> Result<RateLimitResult, String> {
+        // Track total requests
+        let _ = self.increment_total_requests().await;
+
         let policy = self.get_policy_for_endpoint(endpoint).await?;
         let context = RateLimitContext {
             identifier: identifier.to_string(),
@@ -725,11 +730,20 @@ impl RateLimitService {
             endpoint: endpoint.to_string(),
         };
 
-        if self.use_bit_vector {
+        let result = if self.use_bit_vector {
             self.bit_vector_limiter.check_rate_limit(&context).await
         } else {
             self.sliding_window_limiter.check_rate_limit(&context).await
+        };
+
+        // Track rate limited requests if request was denied
+        if let Ok(ref rate_limit_result) = result {
+            if !rate_limit_result.allowed {
+                let _ = self.increment_rate_limited_requests().await;
+            }
         }
+
+        result
     }
 
     /// Get memory efficiency metrics
@@ -800,7 +814,26 @@ impl RateLimitService {
     }
 
     pub async fn get_policy_for_endpoint(&self, endpoint: &str) -> Result<RateLimitPolicy, String> {
-        // Default policy for demonstration
+        // First, try to get endpoint-specific policy
+        let key = format!("rate_limit:policy:{}", endpoint);
+        let operation = dbx_core::DataOperation::Get { key, fields: None };
+
+        if let Ok(result) = self.backend.execute_data(operation).await {
+            if let Some(dbx_core::DataValue::String(policy_json)) = result.data {
+                if let Ok(policy) = serde_json::from_str::<RateLimitPolicy>(&policy_json) {
+                    return Ok(policy);
+                }
+            }
+        }
+
+        // Fall back to global policy
+        {
+            let global_policy = self.global_policy.read().await;
+            if let Some(policy) = &*global_policy {
+                return Ok(policy.clone());
+            }
+        }
+        // Fall back to default policy
         Ok(RateLimitPolicy {
             requests: 100,
             window_seconds: 60,
@@ -815,28 +848,82 @@ impl RateLimitService {
         endpoint: &str,
     ) -> Result<crate::models::RateLimitInfo, String> {
         let policy = self.get_policy_for_endpoint(endpoint).await?;
-        // Implementation would check current usage
-        Ok(crate::models::RateLimitInfo {
-            allowed: true,
-            limit: policy.requests,
-            remaining: policy.requests, // Simplified
-            reset_time: chrono::Utc::now()
-                + chrono::Duration::seconds(policy.window_seconds as i64),
-            retry_after: None,
-        })
+
+        // Check current rate limit status
+        let context = RateLimitContext {
+            identifier: identifier.to_string(),
+            policy: policy.clone(),
+            endpoint: endpoint.to_string(),
+        };
+
+        let result = if self.use_bit_vector {
+            self.bit_vector_limiter.check_rate_limit(&context).await
+        } else {
+            self.sliding_window_limiter.check_rate_limit(&context).await
+        };
+
+        match result {
+            Ok(rate_limit_result) => Ok(crate::models::RateLimitInfo {
+                allowed: rate_limit_result.allowed,
+                limit: rate_limit_result.limit,
+                remaining: rate_limit_result.remaining,
+                reset_time: rate_limit_result.reset_time,
+                retry_after: rate_limit_result.retry_after,
+            }),
+            Err(e) => Err(format!("Failed to check rate limit: {}", e)),
+        }
     }
 
     /// Get all configured policies
     pub async fn get_all_policies(&self) -> Vec<(String, crate::models::RateLimitPolicy)> {
-        // Return default policies for now
-        vec![(
-            "default".to_string(),
-            crate::models::RateLimitPolicy {
-                requests: 100,
-                window_seconds: 60,
-                burst_allowance: Some(10),
+        let mut policies = Vec::new();
+
+        // Add global policy if exists
+        {
+            let global_policy = self.global_policy.read().await;
+            if let Some(policy) = &*global_policy {
+                policies.push(("global".to_string(), policy.clone()));
+            }
+        }
+
+        // Get endpoint-specific policies using query operation
+        let query_op = dbx_core::QueryOperation {
+            id: uuid::Uuid::new_v4(),
+            filter: dbx_core::QueryFilter::KeyPattern {
+                pattern: "rate_limit:policy:*".to_string(),
             },
-        )]
+            projection: None,
+            sort: None,
+            limit: None,
+            offset: None,
+        };
+
+        match self.backend.execute_query(query_op).await {
+            Ok(result) => {
+                for item in result.results {
+                    if let Some(endpoint) = item.key.strip_prefix("rate_limit:policy:") {
+                        if let Ok(policy) = serde_json::from_str::<crate::models::RateLimitPolicy>(
+                            &item.data.to_string_lossy(),
+                        ) {
+                            policies.push((endpoint.to_string(), policy));
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // Fallback to default policy if backend unavailable
+                policies.push((
+                    "default".to_string(),
+                    crate::models::RateLimitPolicy {
+                        requests: 100,
+                        window_seconds: 60,
+                        burst_allowance: Some(10),
+                    },
+                ));
+            }
+        }
+
+        policies
     }
 
     /// Set policy for a specific endpoint
@@ -845,43 +932,179 @@ impl RateLimitService {
         endpoint: &str,
         policy: crate::models::RateLimitPolicy,
     ) -> Result<(), String> {
-        // Implementation would store the policy
+        let key = format!("rate_limit:policy:{}", endpoint);
+        let policy_json = serde_json::to_string(&policy)
+            .map_err(|e| format!("Failed to serialize policy: {}", e))?;
+
+        let operation = dbx_core::DataOperation::Set {
+            key,
+            value: dbx_core::DataValue::String(policy_json),
+            ttl: None, // Policies don't expire
+        };
+
+        self.backend
+            .execute_data(operation)
+            .await
+            .map_err(|e| format!("Failed to store policy: {}", e))?;
+
         Ok(())
     }
 
     /// Remove policy for a specific endpoint
     pub async fn remove_endpoint_policy(&self, endpoint: &str) -> Result<bool, String> {
-        // Implementation would remove the policy
+        let key = format!("rate_limit:policy:{}", endpoint);
+
+        // First check if the policy exists
+        let exists_op = dbx_core::DataOperation::Exists {
+            key: key.clone(),
+            fields: None,
+        };
+
+        let exists = match self.backend.execute_data(exists_op).await {
+            Ok(result) => match result.data {
+                Some(dbx_core::DataValue::Bool(exists)) => exists,
+                _ => false,
+            },
+            Err(_) => false,
+        };
+
+        if !exists {
+            return Ok(false);
+        }
+
+        // Delete the policy
+        let delete_op = dbx_core::DataOperation::Delete { key, fields: None };
+
+        self.backend
+            .execute_data(delete_op)
+            .await
+            .map_err(|e| format!("Failed to delete policy: {}", e))?;
+
         Ok(true)
     }
 
     /// Reset rate limit for a specific identifier and endpoint
     pub async fn reset_rate_limit(&self, identifier: &str, endpoint: &str) -> Result<(), String> {
-        // Implementation would clear rate limit data
+        // Clear rate limit data for both sliding window and bit vector implementations
+        let sliding_window_key = format!("rate_limit:{}:{}", identifier, endpoint);
+        let bit_vector_key = format!("rate_limit_bv:{}:{}", identifier, endpoint);
+
+        let operations = vec![
+            dbx_core::DataOperation::Delete {
+                key: sliding_window_key,
+                fields: None,
+            },
+            dbx_core::DataOperation::Delete {
+                key: bit_vector_key,
+                fields: None,
+            },
+        ];
+
+        let batch_op = dbx_core::DataOperation::Batch { operations };
+
+        self.backend
+            .execute_data(batch_op)
+            .await
+            .map_err(|e| format!("Failed to reset rate limit: {}", e))?;
+
         Ok(())
     }
 
     /// Count active limiters
     pub async fn count_active_limiters(&self) -> Result<usize, String> {
-        // Implementation would count active limiters
-        Ok(0)
+        // Count active rate limiters by finding all rate limit keys
+        let query_op = dbx_core::QueryOperation {
+            id: uuid::Uuid::new_v4(),
+            filter: dbx_core::QueryFilter::KeyPattern {
+                pattern: "rate_limit:*:*".to_string(),
+            },
+            projection: None,
+            sort: None,
+            limit: None,
+            offset: None,
+        };
+
+        match self.backend.execute_query(query_op).await {
+            Ok(result) => {
+                // Count unique identifier:endpoint combinations
+                let mut unique_limiters = std::collections::HashSet::new();
+                for item in result.results {
+                    if let Some(parts) = item.key.strip_prefix("rate_limit:") {
+                        if let Some(colon_pos) = parts.find(':') {
+                            let identifier = &parts[..colon_pos];
+                            let endpoint = &parts[colon_pos + 1..];
+                            unique_limiters.insert(format!("{}:{}", identifier, endpoint));
+                        }
+                    }
+                }
+                Ok(unique_limiters.len())
+            }
+            Err(_) => Ok(0),
+        }
     }
 
     /// Get total requests count
     pub async fn get_total_requests(&self) -> Result<u64, String> {
-        // Implementation would return total requests
-        Ok(0)
+        let key = "rate_limit:metrics:total_requests";
+        let operation = dbx_core::DataOperation::Get {
+            key: key.to_string(),
+            fields: None,
+        };
+
+        match self.backend.execute_data(operation).await {
+            Ok(result) => match result.data {
+                Some(dbx_core::DataValue::String(s)) => s
+                    .parse::<u64>()
+                    .map_err(|e| format!("Failed to parse total requests: {}", e)),
+                Some(dbx_core::DataValue::Int(i)) => Ok(i as u64),
+                _ => Ok(0),
+            },
+            Err(_) => Ok(0), // Return 0 if not found
+        }
     }
 
     /// Get rate limited requests count
     pub async fn get_rate_limited_requests(&self) -> Result<u64, String> {
-        // Implementation would return rate limited requests
-        Ok(0)
+        let key = "rate_limit:metrics:rate_limited_requests";
+        let operation = dbx_core::DataOperation::Get {
+            key: key.to_string(),
+            fields: None,
+        };
+
+        match self.backend.execute_data(operation).await {
+            Ok(result) => match result.data {
+                Some(dbx_core::DataValue::String(s)) => s
+                    .parse::<u64>()
+                    .map_err(|e| format!("Failed to parse rate limited requests: {}", e)),
+                Some(dbx_core::DataValue::Int(i)) => Ok(i as u64),
+                _ => Ok(0),
+            },
+            Err(_) => Ok(0), // Return 0 if not found
+        }
     }
 
     /// Reset metrics
     pub async fn reset_metrics(&self) -> Result<(), String> {
-        // Implementation would reset metrics
+        let metrics_keys = vec![
+            "rate_limit:metrics:total_requests",
+            "rate_limit:metrics:rate_limited_requests",
+        ];
+
+        let mut operations = Vec::new();
+        for key in metrics_keys {
+            operations.push(dbx_core::DataOperation::Delete {
+                key: key.to_string(),
+                fields: None,
+            });
+        }
+
+        let batch_op = dbx_core::DataOperation::Batch { operations };
+
+        self.backend
+            .execute_data(batch_op)
+            .await
+            .map_err(|e| format!("Failed to reset metrics: {}", e))?;
+
         Ok(())
     }
 
@@ -890,7 +1113,94 @@ impl RateLimitService {
         &self,
         policy: crate::models::RateLimitPolicy,
     ) -> Result<(), String> {
-        // Implementation would set global policy
+        // Store the policy in memory
+        {
+            let mut global_policy = self.global_policy.write().await;
+            *global_policy = Some(policy.clone());
+        }
+
+        // Also persist it to the backend for durability
+        let key = "rate_limit:global_policy";
+        let policy_json = serde_json::to_string(&policy)
+            .map_err(|e| format!("Failed to serialize global policy: {}", e))?;
+
+        let operation = dbx_core::DataOperation::Set {
+            key: key.to_string(),
+            value: dbx_core::DataValue::String(policy_json),
+            ttl: None,
+        };
+
+        self.backend
+            .execute_data(operation)
+            .await
+            .map_err(|e| format!("Failed to store global policy: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Increment total requests counter
+    pub async fn increment_total_requests(&self) -> Result<(), String> {
+        let key = "rate_limit:metrics:total_requests";
+
+        // Try to increment, if key doesn't exist, set to 1
+        let get_op = dbx_core::DataOperation::Get {
+            key: key.to_string(),
+            fields: None,
+        };
+
+        let current_value = match self.backend.execute_data(get_op).await {
+            Ok(result) => match result.data {
+                Some(dbx_core::DataValue::String(s)) => s.parse::<u64>().unwrap_or(0),
+                Some(dbx_core::DataValue::Int(i)) => i as u64,
+                _ => 0,
+            },
+            Err(_) => 0,
+        };
+
+        let set_op = dbx_core::DataOperation::Set {
+            key: key.to_string(),
+            value: dbx_core::DataValue::String((current_value + 1).to_string()),
+            ttl: None,
+        };
+
+        self.backend
+            .execute_data(set_op)
+            .await
+            .map_err(|e| format!("Failed to increment total requests: {}", e))?;
+
+        Ok(())
+    }
+
+        /// Increment rate limited requests counter
+    pub async fn increment_rate_limited_requests(&self) -> Result<(), String> {
+        let key = "rate_limit:metrics:rate_limited_requests";
+        
+        // Try to increment, if key doesn't exist, set to 1
+        let get_op = dbx_core::DataOperation::Get {
+            key: key.to_string(),
+            fields: None,
+        };
+
+        let current_value = match self.backend.execute_data(get_op).await {
+            Ok(result) => match result.data {
+                Some(dbx_core::DataValue::String(s)) => s.parse::<u64>().unwrap_or(0),
+                Some(dbx_core::DataValue::Int(i)) => i as u64,
+                _ => 0,
+            },
+            Err(_) => 0,
+        };
+
+        let set_op = dbx_core::DataOperation::Set {
+            key: key.to_string(),
+            value: dbx_core::DataValue::String((current_value + 1).to_string()),
+            ttl: None,
+        };
+
+        self.backend
+            .execute_data(set_op)
+            .await
+            .map_err(|e| format!("Failed to increment rate limited requests: {}", e))?;
+
         Ok(())
     }
 }
@@ -1301,7 +1611,7 @@ mod tests {
     fn create_redis_pool() -> Arc<dyn UniversalBackend> {
         use dbx_adapter::redis::factory::RedisBackendFactory;
         use dbx_config::BackendConfig;
-        use dbx_router::BackendFactory;
+        use dbx_router::registry::BackendFactory;
 
         let config = BackendConfig {
             provider: "redis".to_string(),
