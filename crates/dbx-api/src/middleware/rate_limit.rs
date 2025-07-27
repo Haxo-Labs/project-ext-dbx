@@ -1,7 +1,4 @@
-use crate::{
-    middleware::JwtService,
-    models::{ApiResponse, RateLimitPolicy},
-};
+use crate::models::{ApiResponse, RateLimitPolicy};
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
@@ -11,8 +8,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use dbx_core::{DataOperation, DataValue, UniversalBackend};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use uuid::Uuid;
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitResult {
@@ -44,101 +40,38 @@ impl SlidingWindowRateLimiter {
         &self,
         context: &RateLimitContext,
     ) -> Result<RateLimitResult, String> {
-        use dbx_core::{DataOperation, DataResult};
-
         let now = Utc::now();
         let window_start = now - chrono::Duration::seconds(context.policy.window_seconds as i64);
 
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let count_key = format!("{}:count", key);
-        let window_key = format!("{}:window", key);
 
-        // Get current count and window start time
-        let current_count = match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: count_key.clone(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(result) => {
-                if result.success {
-                    if let Some(DataValue::String(count_str)) = result.data {
-                        count_str.parse::<u32>().unwrap_or(0)
-                    } else if let Some(DataValue::Int(count)) = result.data {
-                        count as u32
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
-        };
+        // Get existing timestamps for this identifier/endpoint
+        let existing_timestamps = self.get_request_timestamps(&key).await?;
 
-        let window_start_time = match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: window_key.clone(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(result) => {
-                if result.success {
-                    if let Some(DataValue::String(time_str)) = result.data {
-                        time_str.parse::<i64>().unwrap_or(0)
-                    } else if let Some(DataValue::Int(time)) = result.data {
-                        time
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
-        };
+        // Filter timestamps to only include those within the sliding window
+        let valid_timestamps: Vec<i64> = existing_timestamps
+            .into_iter()
+            .filter(|&timestamp| timestamp >= window_start.timestamp())
+            .collect();
 
-        // Check if window has expired and reset if needed
-        let current_window_start = if window_start_time < window_start.timestamp() {
-            let new_window_start = now.timestamp();
-            let _ = self
-                .backend
-                .execute_data(DataOperation::Set {
-                    key: window_key.clone(),
-                    value: DataValue::Int(new_window_start),
-                    ttl: Some(context.policy.window_seconds as u64 * 2),
-                })
-                .await;
-            let _ = self
-                .backend
-                .execute_data(DataOperation::Set {
-                    key: count_key.clone(),
-                    value: DataValue::Int(0),
-                    ttl: Some(context.policy.window_seconds as u64 * 2),
-                })
-                .await;
-            0
-        } else {
-            current_count
-        };
-
-        // Check rate limit
+        let current_request_count = valid_timestamps.len() as u32;
         let effective_limit = context
             .policy
             .burst_allowance
             .unwrap_or(context.policy.requests);
 
-        if current_window_start >= effective_limit {
+        // Check if we're at the limit
+        if current_request_count >= effective_limit {
+            // Find the oldest request in the window to determine reset time
+            let now_timestamp = now.timestamp();
+            let oldest_timestamp = valid_timestamps.iter().min().unwrap_or(&now_timestamp);
             let reset_time = DateTime::from_timestamp(
-                window_start_time + context.policy.window_seconds as i64,
+                oldest_timestamp + context.policy.window_seconds as i64,
                 0,
             )
             .unwrap_or(now + chrono::Duration::seconds(context.policy.window_seconds as i64));
-            let retry_after = (reset_time - now).num_seconds().max(0) as u32;
+
+            let retry_after = (reset_time - now).num_seconds().max(1) as u32;
 
             return Ok(RateLimitResult {
                 allowed: false,
@@ -149,21 +82,19 @@ impl SlidingWindowRateLimiter {
             });
         }
 
-        // Increment counter
-        let new_count = current_window_start + 1;
-        let _ = self
-            .backend
-            .execute_data(DataOperation::Set {
-                key: count_key,
-                value: DataValue::Int(new_count as i64),
-                ttl: Some(context.policy.window_seconds as u64 * 2),
-            })
-            .await;
+        // Add current request timestamp
+        let mut updated_timestamps = valid_timestamps;
+        updated_timestamps.push(now.timestamp());
 
-        let remaining = context.policy.requests.saturating_sub(new_count);
-        let reset_time =
-            DateTime::from_timestamp(window_start_time + context.policy.window_seconds as i64, 0)
-                .unwrap_or(now + chrono::Duration::seconds(context.policy.window_seconds as i64));
+        // Store updated timestamps
+        self.store_request_timestamps(&key, &updated_timestamps, context.policy.window_seconds)
+            .await?;
+
+        let remaining = context
+            .policy
+            .requests
+            .saturating_sub(updated_timestamps.len() as u32);
+        let reset_time = now + chrono::Duration::seconds(context.policy.window_seconds as i64);
 
         Ok(RateLimitResult {
             allowed: true,
@@ -175,32 +106,16 @@ impl SlidingWindowRateLimiter {
     }
 
     pub async fn reset_rate_limit(&self, identifier: &str, endpoint: &str) -> Result<(), String> {
-        use dbx_core::DataOperation;
-
         let key = format!("rate_limit:{}:{}", identifier, endpoint);
-        let count_key = format!("{}:count", key);
-        let window_key = format!("{}:window", key);
 
-        let _ = self
+        match self
             .backend
             .execute_data(DataOperation::Delete { key, fields: None })
-            .await;
-        let _ = self
-            .backend
-            .execute_data(DataOperation::Delete {
-                key: count_key,
-                fields: None,
-            })
-            .await;
-        let _ = self
-            .backend
-            .execute_data(DataOperation::Delete {
-                key: window_key,
-                fields: None,
-            })
-            .await;
-
-        Ok(())
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Reset error: {}", e)),
+        }
     }
 
     pub async fn get_rate_limit_info(
@@ -215,69 +130,30 @@ impl SlidingWindowRateLimiter {
             endpoint: endpoint.to_string(),
         };
 
-        // Get current status without incrementing
+        // Get current status without incrementing (read-only check)
         let now = Utc::now();
         let window_start = now - chrono::Duration::seconds(policy.window_seconds as i64);
         let key = format!("rate_limit:{}:{}", identifier, endpoint);
 
-        let count_key = format!("{}:count", key);
-        let window_key = format!("{}:window", key);
+        let existing_timestamps = self.get_request_timestamps(&key).await?;
 
-        let current_count = match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: count_key.clone(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(result) => {
-                if result.success {
-                    if let Some(DataValue::String(count_str)) = result.data {
-                        count_str.parse::<u32>().unwrap_or(0)
-                    } else if let Some(DataValue::Int(count)) = result.data {
-                        count as u32
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
+        let valid_timestamps: Vec<i64> = existing_timestamps
+            .into_iter()
+            .filter(|&timestamp| timestamp >= window_start.timestamp())
+            .collect();
+
+        let current_request_count = valid_timestamps.len() as u32;
+        let remaining = policy.requests.saturating_sub(current_request_count);
+
+        let reset_time = if let Some(&oldest) = valid_timestamps.iter().min() {
+            DateTime::from_timestamp(oldest + policy.window_seconds as i64, 0)
+                .unwrap_or(now + chrono::Duration::seconds(policy.window_seconds as i64))
+        } else {
+            now + chrono::Duration::seconds(policy.window_seconds as i64)
         };
-
-        let window_start_time = match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: window_key.clone(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(result) => {
-                if result.success {
-                    if let Some(DataValue::String(time_str)) = result.data {
-                        time_str.parse::<i64>().unwrap_or(0)
-                    } else if let Some(DataValue::Int(time)) = result.data {
-                        time
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
-        };
-
-        let remaining = policy.requests.saturating_sub(current_count);
-        let reset_time =
-            DateTime::from_timestamp(window_start_time + policy.window_seconds as i64, 0)
-                .unwrap_or(now + chrono::Duration::seconds(policy.window_seconds as i64));
 
         Ok(RateLimitResult {
-            allowed: remaining > 0,
+            allowed: current_request_count < policy.requests,
             limit: policy.requests,
             remaining,
             reset_time,
@@ -285,81 +161,166 @@ impl SlidingWindowRateLimiter {
         })
     }
 
-    pub async fn get_rate_limit_status(
-        &self,
-        identifier: &str,
-        endpoint: &str,
-        policy: &RateLimitPolicy,
-    ) -> Result<RateLimitResult, String> {
-        use dbx_core::{DataOperation, DataResult};
-
-        let now = Utc::now();
-        let window_start = now - chrono::Duration::seconds(policy.window_seconds as i64);
-
-        let key = format!("rate_limit:{}:{}", identifier, endpoint);
-        let count_key = format!("{}:count", key);
-        let window_key = format!("{}:window", key);
-
-        let current_count = match self
+    async fn get_request_timestamps(&self, key: &str) -> Result<Vec<i64>, String> {
+        match self
             .backend
             .execute_data(DataOperation::Get {
-                key: count_key.clone(),
+                key: key.to_string(),
                 fields: None,
             })
+            .await
+        {
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(timestamps_str)) = result.data {
+                        // Parse comma-separated timestamps
+                        if timestamps_str.is_empty() {
+                            Ok(Vec::new())
+                        } else {
+                            timestamps_str
+                                .split(',')
+                                .map(|s| {
+                                    s.parse::<i64>().map_err(|e| format!("Parse error: {}", e))
+                                })
+                                .collect()
+                        }
+                    } else {
+                        Ok(Vec::new())
+                    }
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            Err(e) => Err(format!("Backend error: {}", e)),
+        }
+    }
+
+    async fn store_request_timestamps(
+        &self,
+        key: &str,
+        timestamps: &[i64],
+        window_seconds: u32,
+    ) -> Result<(), String> {
+        let timestamps_str = timestamps
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        match self
+            .backend
+            .execute_data(DataOperation::Set {
+                key: key.to_string(),
+                value: DataValue::String(timestamps_str),
+                ttl: Some(window_seconds as u64 * 2), // Keep data longer than window for safety
+            })
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Storage error: {}", e)),
+        }
+    }
+
+    pub async fn increment_active_limiters(&self) -> Result<(), String> {
+        let key = "rate_limit:active_count".to_string();
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(result) => {
+                let current_count = if result.success {
+                    if let Some(DataValue::String(count_str)) = result.data {
+                        count_str.parse::<i64>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(count)) = result.data {
+                        count
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+
+                self.backend
+                    .execute_data(DataOperation::Set {
+                        key,
+                        value: DataValue::Int(current_count + 1),
+                        ttl: None,
+                    })
+                    .await
+                    .map_err(|e| format!("Increment error: {}", e))?;
+
+                Ok(())
+            }
+            Err(e) => Err(format!("Get count error: {}", e)),
+        }
+    }
+
+    pub async fn decrement_active_limiters(&self) -> Result<(), String> {
+        let key = "rate_limit:active_count".to_string();
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.clone(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(result) => {
+                let current_count = if result.success {
+                    if let Some(DataValue::String(count_str)) = result.data {
+                        count_str.parse::<i64>().unwrap_or(0)
+                    } else if let Some(DataValue::Int(count)) = result.data {
+                        count
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+
+                let new_count = (current_count - 1).max(0);
+
+                self.backend
+                    .execute_data(DataOperation::Set {
+                        key,
+                        value: DataValue::Int(new_count),
+                        ttl: None,
+                    })
+                    .await
+                    .map_err(|e| format!("Decrement error: {}", e))?;
+
+                Ok(())
+            }
+            Err(e) => Err(format!("Get count error: {}", e)),
+        }
+    }
+
+    pub async fn count_active_limiters(&self) -> Result<i64, String> {
+        let key = "rate_limit:active_count".to_string();
+        match self
+            .backend
+            .execute_data(DataOperation::Get { key, fields: None })
             .await
         {
             Ok(result) => {
                 if result.success {
                     if let Some(DataValue::String(count_str)) = result.data {
-                        count_str.parse::<u32>().unwrap_or(0)
+                        Ok(count_str.parse::<i64>().unwrap_or(0))
                     } else if let Some(DataValue::Int(count)) = result.data {
-                        count as u32
+                        Ok(count)
                     } else {
-                        0
+                        Ok(0)
                     }
                 } else {
-                    0
+                    Ok(0)
                 }
             }
-            Err(_) => 0,
-        };
-
-        let window_start_time = match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: window_key.clone(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(result) => {
-                if result.success {
-                    if let Some(DataValue::String(time_str)) = result.data {
-                        time_str.parse::<i64>().unwrap_or(0)
-                    } else if let Some(DataValue::Int(time)) = result.data {
-                        time
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
-        };
-
-        let remaining = policy.requests.saturating_sub(current_count);
-        let reset_time =
-            DateTime::from_timestamp(window_start_time + policy.window_seconds as i64, 0)
-                .unwrap_or(now + chrono::Duration::seconds(policy.window_seconds as i64));
-
-        Ok(RateLimitResult {
-            allowed: current_count < policy.requests,
-            limit: policy.requests,
-            remaining,
-            reset_time,
-            retry_after: None,
-        })
+            Err(e) => Err(format!("Count error: {}", e)),
+        }
     }
 }
 
@@ -720,6 +681,7 @@ mod tests {
     fn create_redis_pool() -> Arc<dyn UniversalBackend> {
         use dbx_adapter::redis::factory::RedisBackendFactory;
         use dbx_config::BackendConfig;
+        use dbx_router::BackendFactory;
 
         let config = BackendConfig {
             provider: "redis".to_string(),
@@ -736,7 +698,7 @@ mod tests {
         let factory = RedisBackendFactory::new();
         tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(async { factory.create_backend(&config).await })
+            .block_on(async { factory.create_backend("test", &config).await })
             .unwrap()
     }
 
@@ -745,17 +707,24 @@ mod tests {
         let redis_pool = create_redis_pool();
         let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
-        let test_prefix = format!("test_basic_{}", chrono::Utc::now().timestamp_nanos());
+        let test_prefix = format!(
+            "test_basic_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let context = RateLimitContext {
             identifier: format!("test_user_basic_{}", test_prefix),
             policy: create_test_policy(),
             endpoint: format!("/api/test_{}", test_prefix),
         };
 
-        // Clean up any existing keys
-        let mut conn = redis_pool.get_connection().unwrap();
+        // Clean up any existing keys using backend abstraction
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key.clone(),
+                fields: None,
+            })
+            .await;
 
         // First few requests should be allowed
         for i in 1..=5 {
@@ -777,7 +746,9 @@ mod tests {
         assert!(result.retry_after.is_some());
 
         // Cleanup
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
     }
 
     #[tokio::test]
@@ -797,9 +768,10 @@ mod tests {
         };
 
         // Clean up any existing keys
-        let mut conn = redis_pool.get_connection().unwrap();
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
 
         // Use up the rate limit
         for i in 1..=2 {
@@ -825,7 +797,9 @@ mod tests {
         assert!(result.allowed, "Request should be allowed after reset");
 
         // Cleanup
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
     }
 
     #[tokio::test]
@@ -840,9 +814,10 @@ mod tests {
         let user_id = format!("user1_{}", test_prefix);
 
         // Clean up any existing keys
-        let mut conn = redis_pool.get_connection().unwrap();
         let key = format!("rate_limit:{}:{}", user_id, endpoint);
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
 
         // Test global policy
         let result = service.check_rate_limit(&user_id, &endpoint).await.unwrap();
@@ -850,7 +825,9 @@ mod tests {
         assert_eq!(result.limit, 5);
 
         // Cleanup
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
     }
 
     #[tokio::test]
@@ -865,26 +842,32 @@ mod tests {
         let special_endpoint = format!("/api/special_{}", test_prefix);
         let user_id = format!("user1_{}", test_prefix);
 
-        service
+        rate_limit_service
             .set_endpoint_policy(
-                special_endpoint.clone(),
+                &special_endpoint,
                 RateLimitPolicy {
                     requests: 2,
-                    window_seconds: 5,
+                    window_seconds: 10,
                     burst_allowance: None,
                 },
             )
             .await;
 
         // Clean up any existing keys
-        let mut conn = redis_pool.get_connection().unwrap();
         let key1 = format!("rate_limit:{}:{}", user_id, general_endpoint);
         let key2 = format!("rate_limit:{}:{}", user_id, special_endpoint);
-        let _: () = redis::cmd("DEL")
-            .arg(&key1)
-            .arg(&key2)
-            .query(&mut conn)
-            .unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key1.clone(),
+                fields: None,
+            })
+            .await;
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key2.clone(),
+                fields: None,
+            })
+            .await;
 
         // Test global policy
         let result = service
@@ -903,11 +886,18 @@ mod tests {
         assert_eq!(result.limit, 2);
 
         // Cleanup
-        let _: () = redis::cmd("DEL")
-            .arg(&key1)
-            .arg(&key2)
-            .query(&mut conn)
-            .unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key1,
+                fields: None,
+            })
+            .await;
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key2,
+                fields: None,
+            })
+            .await;
     }
 
     #[tokio::test]
@@ -930,12 +920,20 @@ mod tests {
         let user2_id = format!("user2_{}", test_prefix);
 
         // Clean up any existing keys for this test
-        let mut conn = redis_pool.get_connection().unwrap();
-        let _: () = redis::cmd("DEL")
-            .arg(format!("rate_limit:{}:{}", user1_id, endpoint))
-            .arg(format!("rate_limit:{}:{}", user2_id, endpoint))
-            .query(&mut conn)
-            .unwrap_or(());
+        let key1 = format!("rate_limit:{}:{}", user1_id, endpoint);
+        let key2 = format!("rate_limit:{}:{}", user2_id, endpoint);
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key1.clone(),
+                fields: None,
+            })
+            .await;
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key2.clone(),
+                fields: None,
+            })
+            .await;
 
         // User 1 uses up their limit
         for i in 1..=3 {
@@ -965,11 +963,18 @@ mod tests {
         assert_eq!(result.remaining, 2);
 
         // Cleanup
-        let _: () = redis::cmd("DEL")
-            .arg(format!("rate_limit:{}:{}", user1_id, endpoint))
-            .arg(format!("rate_limit:{}:{}", user2_id, endpoint))
-            .query(&mut conn)
-            .unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key1,
+                fields: None,
+            })
+            .await;
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete {
+                key: key2,
+                fields: None,
+            })
+            .await;
     }
 
     #[tokio::test]
@@ -988,9 +993,10 @@ mod tests {
         let endpoint = format!("/api/info_test_{}", test_prefix);
 
         // Clean up any existing keys
-        let mut conn = redis_pool.get_connection().unwrap();
         let key = format!("rate_limit:{}:{}", identifier, endpoint);
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
 
         // Get initial info
         let info = limiter
@@ -1026,7 +1032,9 @@ mod tests {
         assert_eq!(info3.remaining, 4);
 
         // Cleanup
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
     }
 
     #[tokio::test]
@@ -1046,9 +1054,10 @@ mod tests {
         };
 
         // Clean up any existing keys
-        let mut conn = redis_pool.get_connection().unwrap();
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
 
         // First 3 requests should be allowed (normal limit)
         for i in 1..=3 {
@@ -1070,7 +1079,9 @@ mod tests {
         );
 
         // Cleanup
-        let _: () = redis::cmd("DEL").arg(&key).query(&mut conn).unwrap_or(());
+        let _ = redis_pool
+            .execute_data(DataOperation::Delete { key, fields: None })
+            .await;
     }
 
     #[test]
