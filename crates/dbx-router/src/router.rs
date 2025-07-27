@@ -6,21 +6,21 @@ use dbx_config::{DbxConfig, KeyRoutingRule};
 use dbx_core::{DataOperation, DbxResult, QueryOperation, StreamOperation, UniversalBackend};
 
 use crate::load_balancer::LoadBalancerStats;
-use crate::matcher::MatcherStats;
-use crate::{BackendRegistry, KeyMatcher, LoadBalancer};
+use crate::matcher::{MatcherStats, OptimizedMatcherStats};
+use crate::{BackendRegistry, KeyMatcher, LoadBalancer, OptimizedKeyMatcher};
 
 /// Main router that orchestrates backend selection and operation dispatch
 pub struct BackendRouter {
     registry: BackendRegistry,
-    key_matcher: KeyMatcher,
+    key_matcher: OptimizedKeyMatcher,
     load_balancer: LoadBalancer,
     default_backend: Option<String>,
 }
 
 impl BackendRouter {
-    /// Create a new backend router
+    /// Create a new backend router with optimized routing
     pub fn new(registry: BackendRegistry, config: &DbxConfig) -> DbxResult<Self> {
-        let key_matcher = KeyMatcher::new(config.routing.key_routing.clone())?;
+        let key_matcher = OptimizedKeyMatcher::new(config.routing.key_routing.clone())?;
         let load_balancer =
             LoadBalancer::new(config.routing.load_balancing.clone().unwrap_or_default())?;
 
@@ -30,6 +30,57 @@ impl BackendRouter {
             load_balancer,
             default_backend: Some(config.routing.default_backend.clone()),
         })
+    }
+
+    /// Create a legacy router (for backwards compatibility)
+    pub fn new_legacy(
+        registry: BackendRegistry,
+        config: &DbxConfig,
+    ) -> DbxResult<LegacyBackendRouter> {
+        let key_matcher = KeyMatcher::new(config.routing.key_routing.clone())?;
+        let load_balancer =
+            LoadBalancer::new(config.routing.load_balancing.clone().unwrap_or_default())?;
+
+        Ok(LegacyBackendRouter {
+            registry,
+            key_matcher,
+            load_balancer,
+            default_backend: Some(config.routing.default_backend.clone()),
+        })
+    }
+
+    /// Get optimized matcher performance statistics
+    pub fn get_matcher_performance_stats(&self) -> OptimizedMatcherStats {
+        self.key_matcher.get_performance_stats()
+    }
+
+    /// Benchmark router performance
+    pub async fn benchmark_routing(
+        &self,
+        keys: &[String],
+        iterations: usize,
+    ) -> RouterBenchmarkResult {
+        let start = std::time::Instant::now();
+        let mut successful_routes = 0;
+
+        for _ in 0..iterations {
+            for key in keys {
+                if self.key_matcher.match_key(key).is_some() {
+                    successful_routes += 1;
+                }
+            }
+        }
+
+        let duration = start.elapsed();
+        let total_operations = iterations * keys.len();
+
+        RouterBenchmarkResult {
+            total_operations,
+            successful_routes,
+            total_duration: duration,
+            avg_duration_nanos: duration.as_nanos() as u64 / total_operations as u64,
+            operations_per_second: (total_operations as f64 / duration.as_secs_f64()) as u64,
+        }
     }
 
     /// Route a data operation to the appropriate backend
@@ -258,13 +309,13 @@ impl BackendRouter {
         match operation {
             DataOperation::Get { key, .. } => Some(key),
             DataOperation::Set { key, .. } => Some(key),
-            DataOperation::Update { key, .. } => Some(key),
             DataOperation::Delete { key, .. } => Some(key),
+            DataOperation::Update { key, .. } => Some(key),
             DataOperation::Exists { key, .. } => Some(key),
-            DataOperation::SetTtl { key, .. } => Some(key),
             DataOperation::GetTtl { key } => Some(key),
+            DataOperation::SetTtl { key, .. } => Some(key),
             DataOperation::Batch { operations } => {
-                // For batch operations, try to extract key from the first operation
+                // Use the first operation's key for routing batch operations
                 operations
                     .first()
                     .and_then(|op| self.extract_key_from_data_operation(op))
@@ -358,14 +409,14 @@ impl BackendRouter {
     /// Get operation type string from data operation
     fn get_operation_type_from_data_operation(&self, operation: &DataOperation) -> String {
         match operation {
-            DataOperation::Get { .. } => "get".to_string(),
-            DataOperation::Set { .. } => "set".to_string(),
-            DataOperation::Update { .. } => "update".to_string(),
-            DataOperation::Delete { .. } => "delete".to_string(),
-            DataOperation::Exists { .. } => "exists".to_string(),
-            DataOperation::SetTtl { .. } => "set_ttl".to_string(),
-            DataOperation::GetTtl { .. } => "get_ttl".to_string(),
-            DataOperation::Batch { .. } => "batch".to_string(),
+            DataOperation::Get { .. } => "data:get".to_string(),
+            DataOperation::Set { .. } => "data:set".to_string(),
+            DataOperation::Update { .. } => "data:update".to_string(),
+            DataOperation::Delete { .. } => "data:delete".to_string(),
+            DataOperation::Exists { .. } => "data:exists".to_string(),
+            DataOperation::SetTtl { .. } => "data:set_ttl".to_string(),
+            DataOperation::GetTtl { .. } => "data:get_ttl".to_string(),
+            DataOperation::Batch { .. } => "data:batch".to_string(),
         }
     }
 
@@ -376,26 +427,16 @@ impl BackendRouter {
         operation_type: &str,
     ) -> bool {
         let capabilities = backend.capabilities();
-
-        // Convert operation type string to enum
-        let operation_enum = match operation_type {
-            "get" => Some(dbx_core::DataOperationType::Get),
-            "set" => Some(dbx_core::DataOperationType::Set),
-            "update" => Some(dbx_core::DataOperationType::Update),
-            "delete" => Some(dbx_core::DataOperationType::Delete),
-            "exists" => Some(dbx_core::DataOperationType::Exists),
-            "get_ttl" => Some(dbx_core::DataOperationType::GetTtl),
-            "set_ttl" => Some(dbx_core::DataOperationType::SetTtl),
-            "batch" => Some(dbx_core::DataOperationType::Batch),
-            _ => None,
-        };
-
-        // Check if the operation is in the supported data operations
-        if let Some(op_type) = operation_enum {
-            capabilities.data_operations.contains(&op_type)
-        } else {
-            false
-        }
+        capabilities.data_operations.iter().any(|op| match op {
+            dbx_core::DataOperationType::Get => operation_type == "data:get",
+            dbx_core::DataOperationType::Set => operation_type == "data:set",
+            dbx_core::DataOperationType::Update => operation_type == "data:update",
+            dbx_core::DataOperationType::Delete => operation_type == "data:delete",
+            dbx_core::DataOperationType::Exists => operation_type == "data:exists",
+            dbx_core::DataOperationType::GetTtl => operation_type == "data:get_ttl",
+            dbx_core::DataOperationType::SetTtl => operation_type == "data:set_ttl",
+            dbx_core::DataOperationType::Batch => operation_type == "data:batch",
+        })
     }
 
     /// Add a backend to the load balancer
@@ -491,6 +532,147 @@ impl BackendRouter {
             _ => false,
         }
     }
+}
+
+/// Legacy backend router for backwards compatibility
+pub struct LegacyBackendRouter {
+    registry: BackendRegistry,
+    key_matcher: KeyMatcher,
+    load_balancer: LoadBalancer,
+    default_backend: Option<String>,
+}
+
+impl LegacyBackendRouter {
+    /// Route a data operation to the appropriate backend
+    pub async fn route_data_operation(
+        &self,
+        operation: &DataOperation,
+    ) -> DbxResult<Arc<dyn UniversalBackend>> {
+        // Get operation type for capability checking
+        let operation_type = self.get_operation_type_from_data_operation(operation);
+
+        // Try key-based routing first
+        if let Some(key) = self.extract_key_from_data_operation(operation) {
+            if let Some(backend_name) = self.key_matcher.match_key(key) {
+                debug!(key = %key, backend = %backend_name, "Using key-based routing");
+
+                if let Some(backend) = self.registry.get_backend(&backend_name).await {
+                    // Check if backend supports this operation type
+                    if self.backend_supports_operation(&backend, &operation_type) {
+                        return Ok(backend);
+                    } else {
+                        debug!(backend = %backend_name, operation = %operation_type, "Backend doesn't support operation, trying alternatives");
+                    }
+                }
+            }
+        }
+
+        // Fallback to load balancer
+        let key = self.extract_key_from_data_operation(operation);
+        let backend_name = self
+            .load_balancer
+            .select_backend_with_key(key.as_deref())
+            .await?;
+
+        match backend_name {
+            Some(name) => {
+                if let Some(backend) = self.registry.get_backend(&name).await {
+                    Ok(backend)
+                } else {
+                    Err(crate::RouterError::BackendNotFound { backend: name }.into())
+                }
+            }
+            None => Err(crate::RouterError::NoHealthyBackends.into()),
+        }
+    }
+
+    /// Extract key from data operation for routing
+    fn extract_key_from_data_operation<'a>(&self, operation: &'a DataOperation) -> Option<&'a str> {
+        match operation {
+            DataOperation::Get { key, .. } => Some(key),
+            DataOperation::Set { key, .. } => Some(key),
+            DataOperation::Delete { key, .. } => Some(key),
+            DataOperation::Update { key, .. } => Some(key),
+            DataOperation::Exists { key, .. } => Some(key),
+            DataOperation::GetTtl { key } => Some(key),
+            DataOperation::SetTtl { key, .. } => Some(key),
+            DataOperation::Batch { operations } => {
+                // Use the first operation's key for routing batch operations
+                operations
+                    .first()
+                    .and_then(|op| self.extract_key_from_data_operation(op))
+            }
+        }
+    }
+
+    /// Get operation type from data operation
+    fn get_operation_type_from_data_operation(&self, operation: &DataOperation) -> String {
+        match operation {
+            DataOperation::Get { .. } => "data:get".to_string(),
+            DataOperation::Set { .. } => "data:set".to_string(),
+            DataOperation::Update { .. } => "data:update".to_string(),
+            DataOperation::Delete { .. } => "data:delete".to_string(),
+            DataOperation::Exists { .. } => "data:exists".to_string(),
+            DataOperation::GetTtl { .. } => "data:get_ttl".to_string(),
+            DataOperation::SetTtl { .. } => "data:set_ttl".to_string(),
+            DataOperation::Batch { .. } => "data:batch".to_string(),
+        }
+    }
+
+    /// Check if backend supports operation
+    fn backend_supports_operation(
+        &self,
+        backend: &Arc<dyn UniversalBackend>,
+        operation_type: &str,
+    ) -> bool {
+        let capabilities = backend.capabilities();
+        capabilities.data_operations.iter().any(|op| match op {
+            dbx_core::DataOperationType::Get => operation_type == "data:get",
+            dbx_core::DataOperationType::Set => operation_type == "data:set",
+            dbx_core::DataOperationType::Update => operation_type == "data:update",
+            dbx_core::DataOperationType::Delete => operation_type == "data:delete",
+            dbx_core::DataOperationType::Exists => operation_type == "data:exists",
+            dbx_core::DataOperationType::GetTtl => operation_type == "data:get_ttl",
+            dbx_core::DataOperationType::SetTtl => operation_type == "data:set_ttl",
+            dbx_core::DataOperationType::Batch => operation_type == "data:batch",
+        })
+    }
+
+    /// Get statistics about the router
+    pub async fn get_stats(&self) -> LegacyRouterStats {
+        LegacyRouterStats {
+            matcher_stats: self.key_matcher.get_stats(),
+            load_balancer_stats: self.load_balancer.get_stats().await,
+            registry_backend_stats: self.registry.get_all_stats().await,
+        }
+    }
+}
+
+/// Router benchmark results
+#[derive(Debug, Clone)]
+pub struct RouterBenchmarkResult {
+    pub total_operations: usize,
+    pub successful_routes: usize,
+    pub total_duration: std::time::Duration,
+    pub avg_duration_nanos: u64,
+    pub operations_per_second: u64,
+}
+
+/// Router statistics
+#[derive(Debug, Clone)]
+pub struct RouterStats {
+    pub matcher_stats: OptimizedMatcherStats,
+    pub load_balancer_stats: LoadBalancerStats,
+    pub registry_stats: crate::registry::RegistryStats,
+}
+
+/// Legacy router statistics
+#[derive(Debug, Clone)]
+pub struct LegacyRouterStats {
+    pub matcher_stats: MatcherStats,
+    pub load_balancer_stats: LoadBalancerStats,
+    pub registry_backend_stats:
+        std::collections::HashMap<String, Result<dbx_core::BackendStats, dbx_core::DbxError>>,
 }
 
 /// Routing statistics

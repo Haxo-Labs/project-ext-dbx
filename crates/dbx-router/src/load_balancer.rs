@@ -65,8 +65,9 @@ impl ConsistentHashRing {
         for backend in backends {
             for i in 0..virtual_nodes {
                 let virtual_key = format!("{}:{}", backend, i);
-                let hash = Self::hash_key(&virtual_key);
-                ring.insert(hash, backend.clone());
+                if let Ok(hash) = Self::hash_key(&virtual_key) {
+                    ring.insert(hash, backend.clone());
+                }
             }
         }
 
@@ -81,7 +82,10 @@ impl ConsistentHashRing {
             return None;
         }
 
-        let hash = Self::hash_key(key);
+        let hash = match Self::hash_key(key) {
+            Ok(h) => h,
+            Err(_) => return None,
+        };
 
         // Find the first backend with hash >= key hash, or wrap to the first backend
         self.ring
@@ -91,18 +95,23 @@ impl ConsistentHashRing {
             .map(|(_, backend)| backend)
     }
 
-    fn hash_key(key: &str) -> u64 {
+    fn hash_key(key: &str) -> Result<u64, RouterError> {
         let mut hasher = Sha256::new();
         hasher.update(key.as_bytes());
         let result = hasher.finalize();
-        u64::from_be_bytes(result[..8].try_into().unwrap())
+        result[..8].try_into().map(u64::from_be_bytes).map_err(|e| {
+            RouterError::LoadBalancingError {
+                message: format!("Hash generation failed for key '{}': {}", key, e),
+            }
+        })
     }
 
-    fn add_backend(&mut self, backend: &str) {
+    fn add_backend(&mut self, backend: String) {
         for i in 0..self.virtual_nodes {
             let virtual_key = format!("{}:{}", backend, i);
-            let hash = Self::hash_key(&virtual_key);
-            self.ring.insert(hash, backend.to_string());
+            if let Ok(hash) = Self::hash_key(&virtual_key) {
+                self.ring.insert(hash, backend.clone());
+            }
         }
     }
 
@@ -246,8 +255,27 @@ impl LoadBalancer {
             if healthy_list.contains(backend) {
                 Ok(Some(backend.clone()))
             } else {
-                // If the selected backend is not healthy, fall back to first healthy backend
-                // In a production system, you might want to find the next healthy backend in the ring
+                // Find the next healthy backend in the ring by traversing forward
+                if let Ok(start_hash) = ConsistentHashRing::hash_key(key) {
+                    // Find all backends in ring order starting from the hash position
+                    let mut candidates: Vec<_> = ring
+                        .ring
+                        .range(start_hash..)
+                        .chain(ring.ring.range(..start_hash))
+                        .collect();
+
+                    // Remove the unhealthy backend we already tried
+                    candidates.retain(|(_, candidate_backend)| *candidate_backend != backend);
+
+                    // Find the first healthy backend in ring order
+                    for (_, candidate_backend) in candidates {
+                        if healthy_list.contains(candidate_backend) {
+                            return Ok(Some(candidate_backend.clone()));
+                        }
+                    }
+                }
+
+                // If no healthy backend found in ring traversal, use any healthy backend
                 Ok(healthy_list.first().cloned())
             }
         } else {
@@ -289,96 +317,36 @@ impl LoadBalancer {
         &self,
         healthy_list: &[String],
     ) -> DbxResult<Option<String>> {
-        // Periodically rebuild the heap to maintain accuracy (every 100 requests)
-        let counter = self.heap_rebuild_counter.fetch_add(1, Ordering::Relaxed);
-        if counter % 100 == 0 {
-            self.rebuild_least_connections_heap(healthy_list).await;
+        if healthy_list.is_empty() {
+            return Ok(None);
         }
 
-        let mut heap = self.least_connections_heap.write().await;
-
-        // Find the backend with least connections that is also healthy
-        let mut candidates = Vec::new();
-        while let Some(backend_conn) = heap.pop() {
-            candidates.push(backend_conn.clone());
-
-            if healthy_list.contains(&backend_conn.backend_name) {
-                // Found a healthy backend with least connections
-                let selected_backend = backend_conn.backend_name.clone();
-
-                // Put back all candidates except the selected one
-                for candidate in candidates {
-                    if candidate.backend_name != selected_backend {
-                        heap.push(candidate);
-                    } else {
-                        // Push back the selected backend with incremented connection count
-                        heap.push(BackendConnection {
-                            backend_name: candidate.backend_name,
-                            connection_count: candidate.connection_count + 1,
-                        });
-                    }
-                }
-
-                return Ok(Some(selected_backend));
-            }
-
-            // If we've checked too many backends, rebuild and try again
-            if candidates.len() > healthy_list.len() * 2 {
-                // Put back all candidates
-                for candidate in candidates {
-                    heap.push(candidate);
-                }
-                drop(heap);
-
-                // Rebuild heap and try simple approach
-                self.rebuild_least_connections_heap(healthy_list).await;
-                return self
-                    .select_backend_least_connections_simple(healthy_list)
-                    .await;
-            }
-        }
-
-        // Put back all candidates if no healthy backend found
-        for candidate in candidates {
-            heap.push(candidate);
-        }
-
-        // Fallback to simple approach
-        self.select_backend_least_connections_simple(healthy_list)
-            .await
-    }
-
-    async fn select_backend_least_connections_simple(
-        &self,
-        healthy_list: &[String],
-    ) -> DbxResult<Option<String>> {
+        // Direct linear scan approach for reliable production operation
         let mut min_connections = usize::MAX;
         let mut selected_backend = None;
 
         for backend in healthy_list {
-            if let Some(connections) = self.backend_connections.get(backend) {
-                if *connections < min_connections {
-                    min_connections = *connections;
-                    selected_backend = Some(backend.clone());
-                }
+            let connections = self
+                .backend_connections
+                .get(backend)
+                .map(|v| *v)
+                .unwrap_or(0);
+
+            if connections < min_connections {
+                min_connections = connections;
+                selected_backend = Some(backend.clone());
             }
+        }
+
+        // Increment connection count for selected backend
+        if let Some(ref backend) = selected_backend {
+            self.backend_connections
+                .entry(backend.clone())
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
         }
 
         Ok(selected_backend)
-    }
-
-    async fn rebuild_least_connections_heap(&self, healthy_list: &[String]) {
-        let mut heap = self.least_connections_heap.write().await;
-        heap.clear();
-
-        for backend in healthy_list {
-            if let Some(connections) = self.backend_connections.get(backend) {
-                heap.push(BackendConnection {
-                    backend_name: backend.clone(),
-                    connection_count: *connections,
-                });
-            }
-        }
     }
 
     /// Increment connection count for a backend
@@ -422,7 +390,7 @@ impl LoadBalancer {
         self.consistent_hash_ring
             .write()
             .await
-            .add_backend(&backend_name);
+            .add_backend(backend_name.clone());
         self.least_connections_heap
             .write()
             .await
@@ -448,11 +416,9 @@ impl LoadBalancer {
             .await
             .remove_backend(backend_name);
 
-        // Rebuild heap after removing backend to maintain integrity
         let healthy_backends = self.healthy_backends.read().await;
         let healthy_list: Vec<String> = healthy_backends.iter().cloned().collect();
         drop(healthy_backends);
-        self.rebuild_least_connections_heap(&healthy_list).await;
 
         self.healthy_backends.write().await.remove(backend_name);
         self.health_tracker.remove_backend(backend_name).await;
