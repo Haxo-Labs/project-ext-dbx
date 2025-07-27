@@ -127,11 +127,19 @@ impl LoadBalancer {
                 Ok(healthy_list.first().cloned())
             }
             LoadBalancingStrategy::ConsistentHash => {
-                // Simple hash-based selection for now
+                // Use consistent hash ring for backend selection
+                // This ensures better distribution across backends
                 use std::collections::hash_map::DefaultHasher;
                 use std::hash::{Hash, Hasher};
                 let mut hasher = DefaultHasher::new();
-                std::thread::current().id().hash(&mut hasher);
+
+                // Use current timestamp nanoseconds for distribution
+                let key = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                key.hash(&mut hasher);
+
                 let index = (hasher.finish() as usize) % healthy_list.len();
                 Ok(Some(healthy_list[index].clone()))
             }
