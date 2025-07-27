@@ -449,7 +449,7 @@ impl RedisBackend {
                             .arg(key)
                             .arg(ttl_secs.to_string())
                             .arg(redis_value)
-                            .query_async(&mut *conn)
+                            .query_async::<_, ()>(&mut *conn)
                             .await
                             .map_err(|e| {
                                 DbxError::backend(
@@ -461,7 +461,7 @@ impl RedisBackend {
                         redis::cmd("SET")
                             .arg(key)
                             .arg(redis_value)
-                            .query_async(&mut *conn)
+                            .query_async::<_, ()>(&mut *conn)
                             .await
                             .map_err(|e| {
                                 DbxError::backend(
@@ -488,7 +488,7 @@ impl RedisBackend {
                             .arg(key)
                             .arg(field)
                             .arg(redis_value)
-                            .query_async(&mut *conn)
+                            .query_async::<_, ()>(&mut *conn)
                             .await
                             .map_err(|e| {
                                 DbxError::backend(
@@ -502,7 +502,7 @@ impl RedisBackend {
                         redis::cmd("EXPIRE")
                             .arg(key)
                             .arg(ttl_secs.to_string())
-                            .query_async(&mut *conn)
+                            .query_async::<_, ()>(&mut *conn)
                             .await
                             .map_err(|e| {
                                 DbxError::backend(
@@ -546,7 +546,7 @@ impl RedisBackend {
                             redis::cmd("HDEL")
                                 .arg(key)
                                 .arg(&field_refs)
-                                .query_async(&mut *conn)
+                                .query_async::<_, ()>(&mut *conn)
                                 .await
                                 .map_err(|e| {
                                     DbxError::backend(
@@ -559,7 +559,7 @@ impl RedisBackend {
                         // Delete entire key (no fields specified)
                         redis::cmd("DEL")
                             .arg(key)
-                            .query_async(&mut *conn)
+                            .query_async::<_, ()>(&mut *conn)
                             .await
                             .map_err(|e| {
                                 DbxError::backend(
