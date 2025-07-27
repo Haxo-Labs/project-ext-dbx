@@ -44,6 +44,14 @@ pub struct RateLimitPolicyInfo {
     pub burst_allowance: Option<u32>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RateLimitMetrics {
+    pub total_requests: u64,
+    pub rate_limited_requests: u64,
+    pub policies_count: u32,
+    pub active_limiters: u32,
+}
+
 impl From<RateLimitPolicy> for RateLimitPolicyInfo {
     fn from(policy: RateLimitPolicy) -> Self {
         Self {
@@ -63,7 +71,7 @@ pub fn create_rate_limit_routes() -> Router<Arc<RateLimitService>> {
         .route("/policies/:endpoint", put(update_rate_limit_policy))
         .route("/policies/:endpoint", delete(delete_rate_limit_policy))
         .route("/reset/:identifier/:endpoint", post(reset_rate_limit))
-        // .route("/metrics", get(get_rate_limit_metrics)) // Temporarily disabled
+        .route("/metrics", get(get_rate_limit_metrics))
         .route("/metrics/reset", post(reset_rate_limit_metrics))
 }
 
@@ -287,8 +295,13 @@ pub async fn get_rate_limit_metrics(
     let policies_count = policies.len() as u32;
 
     // Add global policy if exists
-    let global_policy = rate_limit_service.global_policy.read().unwrap();
-    let total_policies = if global_policy.is_some() {
+    let global_policy_exists = rate_limit_service
+        .global_policy
+        .read()
+        .map(|policy| policy.is_some())
+        .unwrap_or(false);
+
+    let total_policies = if global_policy_exists {
         policies_count + 1
     } else {
         policies_count
@@ -317,18 +330,10 @@ pub async fn get_rate_limit_metrics(
     Ok(Json(ApiResponse::success(metrics)))
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RateLimitMetrics {
-    pub total_requests: u64,
-    pub rate_limited_requests: u64,
-    pub policies_count: u32,
-    pub active_limiters: u32,
-}
-
 /// Reset rate limiting metrics
 pub async fn reset_rate_limit_metrics(
     State(rate_limit_service): State<Arc<RateLimitService>>,
-    _rbac_context: RbacContext,
+    Extension(_rbac_context): Extension<RbacContext>,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
     match rate_limit_service.reset_metrics().await {
         Ok(_) => Ok(Json(ApiResponse::success(
@@ -336,7 +341,7 @@ pub async fn reset_rate_limit_metrics(
         ))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::error(format!(
+            Json(ApiResponse::<()>::error(format!(
                 "Failed to reset metrics: {}",
                 e
             ))),

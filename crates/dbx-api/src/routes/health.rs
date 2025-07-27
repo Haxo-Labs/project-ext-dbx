@@ -108,7 +108,13 @@ async fn get_system_health(
         )
         .await;
 
-    if !permission_check.unwrap_or(false) {
+    // Handle permission check result safely
+    let has_permission = match permission_check {
+        Ok(has_perm) => has_perm,
+        Err(_) => false, // Graceful degradation on permission check failure
+    };
+
+    if !has_permission {
         return Err(StatusCode::FORBIDDEN);
     }
     // Get all configured backends
@@ -215,7 +221,13 @@ async fn get_backend_health(
         )
         .await;
 
-    if !permission_check.unwrap_or(false) {
+    // Handle permission check result safely
+    let has_permission = match permission_check {
+        Ok(has_perm) => has_perm,
+        Err(_) => false, // Graceful degradation on permission check failure
+    };
+
+    if !has_permission {
         return Err(StatusCode::FORBIDDEN);
     }
     match router.get_backend(&backend_name).await {
