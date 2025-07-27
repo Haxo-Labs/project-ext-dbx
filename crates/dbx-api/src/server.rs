@@ -17,7 +17,7 @@ use crate::{
 use axum::{middleware::from_fn_with_state, routing::get, Router};
 use dbx_adapter::redis::factory::RedisBackendFactory;
 use dbx_config::{AdminConfig, BackendConfig, DbxConfig, RoutingConfig};
-use dbx_router::{BackendRegistryBuilder, BackendRouter};
+use dbx_router::{registry::BackendRegistryBuilder, BackendRouter};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
@@ -129,7 +129,7 @@ impl AppState {
         let api_key_service = Arc::new(ApiKeyService::new(backend.clone()));
         let rbac_service = Arc::new(RbacService::new(backend.clone(), app_config.rbac.clone()));
 
-        let rate_limit_service = RateLimitService::new(backend.clone());
+        let rate_limit_service = RateLimitService::new(backend.clone(), true);
         if app_config.rate_limit.enabled {
             let global_policy = crate::models::RateLimitPolicy {
                 requests: app_config.rate_limit.global_requests_per_window,

@@ -391,6 +391,7 @@ pub enum AuditEventType {
     RoleCreation,
     RoleUpdate,
     RoleDeletion,
+    RoleManagement,
     PermissionCheck,
     AccessDenied,
     AccessGranted,
@@ -406,6 +407,7 @@ impl std::fmt::Display for AuditEventType {
             AuditEventType::RoleCreation => write!(f, "role_creation"),
             AuditEventType::RoleUpdate => write!(f, "role_update"),
             AuditEventType::RoleDeletion => write!(f, "role_deletion"),
+            AuditEventType::RoleManagement => write!(f, "role_management"),
             AuditEventType::PermissionCheck => write!(f, "permission_check"),
             AuditEventType::AccessDenied => write!(f, "access_denied"),
             AuditEventType::AccessGranted => write!(f, "access_granted"),
@@ -477,6 +479,15 @@ pub struct RateLimitPolicy {
     pub requests: u32,
     pub window_seconds: u32,
     pub burst_allowance: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitInfo {
+    pub allowed: bool,
+    pub limit: u32,
+    pub remaining: u32,
+    pub reset_time: DateTime<Utc>,
+    pub retry_after: Option<u32>,
 }
 
 #[cfg(test)]

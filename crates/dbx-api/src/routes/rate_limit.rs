@@ -141,7 +141,7 @@ pub async fn get_rate_limit_policy(
     let policy = rate_limit_service.get_policy_for_endpoint(&endpoint).await;
 
     match policy {
-        Some(policy) => {
+        Ok(policy) => {
             let response = RateLimitPolicyResponse {
                 endpoint,
                 policy: RateLimitPolicyInfo {
@@ -152,11 +152,11 @@ pub async fn get_rate_limit_policy(
             };
             Ok(Json(ApiResponse::success(response)))
         }
-        None => Err((
+        Err(error) => Err((
             StatusCode::NOT_FOUND,
             Json(ApiResponse::<()>::error(format!(
-                "No rate limit policy found for endpoint '{}'",
-                endpoint
+                "No rate limit policy found for endpoint '{}': {}",
+                endpoint, error
             ))),
         )),
     }
@@ -243,7 +243,15 @@ pub async fn delete_rate_limit_policy(
     Path(endpoint): Path<String>,
     _rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
-    let removed = rate_limit_service.remove_endpoint_policy(&endpoint).await;
+    let removed = rate_limit_service
+        .remove_endpoint_policy(&endpoint)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(e)),
+            )
+        })?;
 
     if removed {
         Ok(Json(ApiResponse::success(format!(
@@ -295,11 +303,7 @@ pub async fn get_rate_limit_metrics(
     let policies_count = policies.len() as u32;
 
     // Add global policy if exists
-    let global_policy_exists = rate_limit_service
-        .global_policy
-        .read()
-        .map(|policy| policy.is_some())
-        .unwrap_or(false);
+    let global_policy_exists = rate_limit_service.global_policy.is_some();
 
     let total_policies = if global_policy_exists {
         policies_count + 1
@@ -309,7 +313,7 @@ pub async fn get_rate_limit_metrics(
 
     // Count active rate limiters by scanning Redis keys
     let active_limiters = match rate_limit_service.count_active_limiters().await {
-        Ok(count) => count,
+        Ok(count) => count as u32,
         Err(_) => 0, // Graceful degradation if Redis is unavailable
     };
 

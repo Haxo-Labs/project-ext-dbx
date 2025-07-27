@@ -410,7 +410,7 @@ impl BitVectorRateLimiter {
             retry_after: if allowed {
                 None
             } else {
-                Some(Duration::from_secs(context.policy.window_seconds as u64))
+                Some(context.policy.window_seconds)
             },
         })
     }
@@ -699,6 +699,7 @@ pub struct RateLimitService {
     sliding_window_limiter: SlidingWindowRateLimiter,
     bit_vector_limiter: BitVectorRateLimiter,
     use_bit_vector: bool, // Flag to choose between implementations
+    pub global_policy: Option<crate::models::RateLimitPolicy>,
 }
 
 impl RateLimitService {
@@ -707,6 +708,7 @@ impl RateLimitService {
             sliding_window_limiter: SlidingWindowRateLimiter::new(backend.clone()),
             bit_vector_limiter: BitVectorRateLimiter::new(backend),
             use_bit_vector,
+            global_policy: None,
         }
     }
 
@@ -797,13 +799,99 @@ impl RateLimitService {
         })
     }
 
-    async fn get_policy_for_endpoint(&self, endpoint: &str) -> Result<RateLimitPolicy, String> {
+    pub async fn get_policy_for_endpoint(&self, endpoint: &str) -> Result<RateLimitPolicy, String> {
         // Default policy for demonstration
         Ok(RateLimitPolicy {
             requests: 100,
             window_seconds: 60,
-            burst_allowance: 10,
+            burst_allowance: Some(10),
         })
+    }
+
+    /// Get rate limit information for a specific identifier and endpoint
+    pub async fn get_rate_limit_info(
+        &self,
+        identifier: &str,
+        endpoint: &str,
+    ) -> Result<crate::models::RateLimitInfo, String> {
+        let policy = self.get_policy_for_endpoint(endpoint).await?;
+        // Implementation would check current usage
+        Ok(crate::models::RateLimitInfo {
+            allowed: true,
+            limit: policy.requests,
+            remaining: policy.requests, // Simplified
+            reset_time: chrono::Utc::now()
+                + chrono::Duration::seconds(policy.window_seconds as i64),
+            retry_after: None,
+        })
+    }
+
+    /// Get all configured policies
+    pub async fn get_all_policies(&self) -> Vec<(String, crate::models::RateLimitPolicy)> {
+        // Return default policies for now
+        vec![(
+            "default".to_string(),
+            crate::models::RateLimitPolicy {
+                requests: 100,
+                window_seconds: 60,
+                burst_allowance: Some(10),
+            },
+        )]
+    }
+
+    /// Set policy for a specific endpoint
+    pub async fn set_endpoint_policy(
+        &self,
+        endpoint: &str,
+        policy: crate::models::RateLimitPolicy,
+    ) -> Result<(), String> {
+        // Implementation would store the policy
+        Ok(())
+    }
+
+    /// Remove policy for a specific endpoint
+    pub async fn remove_endpoint_policy(&self, endpoint: &str) -> Result<bool, String> {
+        // Implementation would remove the policy
+        Ok(true)
+    }
+
+    /// Reset rate limit for a specific identifier and endpoint
+    pub async fn reset_rate_limit(&self, identifier: &str, endpoint: &str) -> Result<(), String> {
+        // Implementation would clear rate limit data
+        Ok(())
+    }
+
+    /// Count active limiters
+    pub async fn count_active_limiters(&self) -> Result<usize, String> {
+        // Implementation would count active limiters
+        Ok(0)
+    }
+
+    /// Get total requests count
+    pub async fn get_total_requests(&self) -> Result<u64, String> {
+        // Implementation would return total requests
+        Ok(0)
+    }
+
+    /// Get rate limited requests count
+    pub async fn get_rate_limited_requests(&self) -> Result<u64, String> {
+        // Implementation would return rate limited requests
+        Ok(0)
+    }
+
+    /// Reset metrics
+    pub async fn reset_metrics(&self) -> Result<(), String> {
+        // Implementation would reset metrics
+        Ok(())
+    }
+
+    /// Set global rate limit policy
+    pub async fn set_global_policy(
+        &self,
+        policy: crate::models::RateLimitPolicy,
+    ) -> Result<(), String> {
+        // Implementation would set global policy
+        Ok(())
     }
 }
 

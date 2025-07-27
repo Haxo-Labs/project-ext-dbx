@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 
 /// Database operation permission types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -251,6 +252,14 @@ impl PermissionType {
 
     pub fn permission_names(&self) -> Vec<&'static str> {
         vec![self.to_string()]
+    }
+}
+
+impl FromStr for PermissionType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_name(s).ok_or_else(|| format!("Invalid permission type: {}", s))
     }
 }
 
