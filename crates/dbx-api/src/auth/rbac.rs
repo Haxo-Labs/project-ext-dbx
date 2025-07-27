@@ -1011,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_inheritance_chain_simple_cycle() {
+    fn test_validate_inheritance_chain_cycle() {
         let redis_pool = create_test_redis_pool();
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 

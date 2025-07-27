@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn test_role_creation_and_validation() {
-        // Test basic role creation
+        // Test role creation
         let role = Role::new(
             "test_role".to_string(),
             "Test role description".to_string(),

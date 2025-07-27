@@ -5,7 +5,21 @@
 pub mod error;
 pub mod redis;
 pub mod traits;
-pub use redis::*;
+
+use error::AdapterError;
+
+/// Get Redis URL from environment variable with default
+pub fn get_redis_url() -> String {
+    std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string())
+}
+
+/// Create a Redis connection pool with default settings
+pub async fn create_redis_pool() -> Result<std::sync::Arc<redis::RedisConnectionPool>, AdapterError>
+{
+    let url = get_redis_url();
+    let pool = redis::RedisConnectionPool::new(&url, 10)?;
+    Ok(std::sync::Arc::new(pool))
+}
 
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -306,25 +306,16 @@ pub fn extract_client_ip_info(
     get_trusted_proxy_validator().extract_client_ip(headers, connect_info)
 }
 
-/// Host header validation for security
-///
-/// This function provides validation against:
-/// - Host header injection attacks
-/// - Domain confusion attacks
-/// - IPv6 bracket injection
-/// - Port number manipulation
-/// - IDN homograph attacks
-/// - Control character injection
-/// - Path traversal attempts
+/// Validates Host header to prevent injection attacks
 fn validate_host_header(host: &str, config: &SecurityConfig) -> Result<(), &'static str> {
     let host_config = &config.host_validation;
 
-    // Skip validation if disabled (not recommended for production)
+    // Skip validation if disabled
     if !host_config.enabled {
         return Ok(());
     }
 
-    // Basic format validation
+    // Format validation
     if host.is_empty() {
         return Err("Host header cannot be empty");
     }
@@ -625,7 +616,7 @@ pub async fn security_headers_middleware(
         headers.insert("x-xss-protection", value);
     }
 
-    // Add Strict-Transport-Security (HTTPS only in production)
+    // Add Strict-Transport-Security (HTTPS only in non-development mode)
     if security_config.strict_transport_security_enabled && !security_config.development_mode {
         if let Some(hsts_value) = &security_config.headers.strict_transport_security {
             if let Ok(value) = HeaderValue::from_str(hsts_value) {
@@ -715,7 +706,7 @@ pub fn create_cors_layer(cors_config: &CorsConfig) -> CorsLayer {
     cors
 }
 
-/// Security middleware with enterprise-grade policies
+/// Security middleware with validation policies
 pub async fn security_middleware(
     security_config: SecurityConfig,
     request: Request<Body>,
@@ -774,7 +765,7 @@ pub async fn security_validation_middleware(
         }
     }
 
-    // Validate request size (basic DoS protection)
+    // Validate request size (DoS protection)
     if let Some(content_length) = headers.get("content-length") {
         if let Ok(length_str) = content_length.to_str() {
             if let Ok(length) = length_str.parse::<usize>() {
@@ -796,7 +787,7 @@ pub async fn development_security_middleware(
     next: Next,
 ) -> Response {
     if security_config.development_mode {
-        // In development mode, just add basic headers and skip strict validation
+        // In development mode, add headers and skip strict validation
         let mut response = next.run(request).await;
         let headers = response.headers_mut();
 
