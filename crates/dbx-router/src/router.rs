@@ -331,8 +331,12 @@ impl BackendRouter {
                 // Read operations - prefer read replicas if available
                 for backend_name in &capable_backends {
                     if let Some(backend) = self.registry.get_backend(backend_name).await {
-                        // Check if this is a read replica (basic heuristic)
-                        if backend_name.contains("read") || backend_name.contains("replica") {
+                        // Check if this is a read replica
+                        if backend_name.contains("replica")
+                            || backend_name.contains("slave")
+                            || backend_name.contains("secondary")
+                            || backend_name.contains("readonly")
+                        {
                             debug!(backend = %backend_name, "Using read replica for read operation");
                             return Ok(Some(backend));
                         }
@@ -349,9 +353,10 @@ impl BackendRouter {
                 // Write operations - prefer primary/master backends
                 for backend_name in &capable_backends {
                     if let Some(backend) = self.registry.get_backend(backend_name).await {
-                        // Check if this is a primary/master (basic heuristic)
+                        // Check if this is a primary/master
                         if backend_name.contains("primary")
                             || backend_name.contains("master")
+                            || backend_name.contains("main")
                             || backend_name.contains("write")
                         {
                             debug!(backend = %backend_name, "Using primary backend for write operation");

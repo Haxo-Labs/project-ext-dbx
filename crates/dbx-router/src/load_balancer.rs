@@ -1,16 +1,16 @@
 use dashmap::DashMap;
+use ring::rand::{SecureRandom, SystemRandom};
 use sha2::{Digest, Sha256};
-use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, RwLock,
+};
 use tracing::{debug, warn};
 
-use dbx_config::LoadBalancingConfig;
-use dbx_core::{DbxResult, LoadBalancingStrategy};
-
-use crate::RouterError;
+use crate::error::RouterError;
+use dbx_config::config::LoadBalancingConfig;
+use dbx_core::{error::DbxResult, LoadBalancingStrategy};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BackendConnection {
@@ -200,7 +200,7 @@ impl LoadBalancer {
 
     /// Select a backend based on the configured strategy with optional key for consistent hashing
     pub async fn select_backend_with_key(&self, key: Option<&str>) -> DbxResult<Option<String>> {
-        let healthy_backends = self.healthy_backends.read().await;
+        let healthy_backends = self.healthy_backends.read().unwrap();
         if healthy_backends.is_empty() {
             warn!("No healthy backends available");
             return Ok(None);
@@ -219,11 +219,12 @@ impl LoadBalancer {
                 Ok(Some(healthy_list[index].clone()))
             }
             LoadBalancingStrategy::Random => {
-                use ring::rand::{SecureRandom, SystemRandom};
                 let rng = SystemRandom::new();
                 let mut random_bytes = [0u8; 4];
                 rng.fill(&mut random_bytes).map_err(|_| {
-                    dbx_core::DbxError::routing("Failed to generate random number".to_string())
+                    dbx_core::error::DbxError::routing(
+                        "Failed to generate random number".to_string(),
+                    )
                 })?;
                 let random_value = u32::from_be_bytes(random_bytes);
                 let index = (random_value as usize) % healthy_list.len();

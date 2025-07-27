@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use dbx_config::{BackendConfig, DbxConfig};
 use dbx_core::{DbxError, DbxResult, UniversalBackend};

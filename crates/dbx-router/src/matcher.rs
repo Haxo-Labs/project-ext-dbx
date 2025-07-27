@@ -1,7 +1,7 @@
 use radix_trie::{Trie, TrieCommon};
 use regex::Regex;
 use std::collections::HashMap;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use dbx_config::{KeyRoutingRule, PatternType};
 use dbx_core::DbxResult;
@@ -366,7 +366,7 @@ impl KeyRoutingAnalyzer {
                 regex_count
             ));
             suggestions.push(
-                "Consider using simpler pattern types (exact, prefix, suffix) where possible"
+                "Consider using direct pattern types (exact, prefix, suffix) where possible"
                     .to_string(),
             );
         }
@@ -382,7 +382,9 @@ impl KeyRoutingAnalyzer {
         for rule in rules {
             if matches!(rule.pattern_type, PatternType::Regex) && rule.pattern.len() > 100 {
                 warnings.push(format!("Very complex regex pattern: '{}'", rule.pattern));
-                suggestions.push("Consider simplifying complex regex patterns or breaking them into multiple simpler rules".to_string());
+                suggestions.push(
+                    "Consider breaking complex regex patterns into multiple rules".to_string(),
+                );
             }
         }
     }
@@ -393,7 +395,7 @@ impl KeyRoutingAnalyzer {
         pattern2: &str,
         type2: &PatternType,
     ) -> bool {
-        // Simple heuristic for potential overlaps
+        // Heuristic for potential overlaps
         match (type1, type2) {
             (PatternType::Exact, PatternType::Exact) => pattern1 == pattern2,
             (PatternType::Prefix, PatternType::Prefix) => {
@@ -413,7 +415,7 @@ impl KeyRoutingAnalyzer {
         pattern2: &str,
         type2: &PatternType,
     ) -> bool {
-        // Simple heuristic for pattern subsumption
+        // Heuristic for pattern subsumption
         match (type1, type2) {
             (PatternType::Exact, PatternType::Exact) => pattern1 == pattern2,
             (PatternType::Prefix, PatternType::Prefix) => pattern2.starts_with(pattern1),
