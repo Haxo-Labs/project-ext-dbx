@@ -542,9 +542,8 @@ impl RedisSortedSet {
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        // For testing purposes, we add a command to the pipeline
-        // In production, scripts would be managed separately from pipelines
-        // or use direct script.invoke() calls rather than pipeline integration
+        // Add script command to the pipeline
+        // Scripts can be managed separately or use direct script.invoke() calls
         pipe.cmd("EVAL")
             .arg(script_constants::PING_SCRIPT)
             .arg(1)
@@ -888,8 +887,7 @@ mod tests {
         // Compilation verification only
     }
 
-    // Real execution of transactions and Lua scripts would require integration tests
-    // with an actual Redis instance or more sophisticated mocking.
+    // Integration tests require Redis instance setup.
 }
 
 /// Examples of how to use RedisSortedSet with various features

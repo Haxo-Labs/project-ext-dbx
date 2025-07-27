@@ -612,7 +612,7 @@ mod tests {
         // Compilation verification only
     }
 
-    // Integration tests require Redis instance or mock setup.
+    // Integration tests require Redis instance setup.
 }
 
 /// Examples of how to use RedisString with various features
