@@ -900,10 +900,13 @@ mod tests {
         }
     }
 
-    fn create_test_redis_pool() -> Arc<dbx_adapter::redis::client::RedisPool> {
+    fn create_test_redis_pool() -> Arc<dyn UniversalBackend> {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
-        Arc::new(dbx_adapter::redis::client::RedisPool::new(&redis_url, 5).unwrap())
+        let client = dbx_adapter::redis::client::RedisClient::from_url(&redis_url).unwrap();
+        let backend =
+            dbx_adapter::redis::backend::RedisBackend::new(client, "test_backend".to_string());
+        Arc::new(backend)
     }
 
     #[tokio::test]
