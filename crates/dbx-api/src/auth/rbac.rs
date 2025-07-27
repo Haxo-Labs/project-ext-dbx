@@ -33,6 +33,14 @@ pub enum RbacError {
     RedisError(String),
     #[error("Serialization error: {0}")]
     SerializationError(String),
+    #[error("Role already exists: {0}")]
+    RoleAlreadyExists(String),
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+    #[error("System error: {0}")]
+    SystemError(String),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
 }
 
 /// RBAC service configuration
@@ -137,7 +145,14 @@ impl RbacService {
         let assignments = self.get_user_role_assignments(user_id).await?;
         let mut effective_permissions = Permission::empty();
 
-        let role_registry = self.role_registry.read().unwrap();
+        let role_registry = match self.role_registry.read() {
+            Ok(registry) => registry,
+            Err(_) => {
+                return Err(RbacError::SystemError(
+                    "Failed to access role registry".to_string(),
+                ))
+            }
+        };
 
         for assignment in assignments {
             if assignment.is_active {
@@ -289,7 +304,14 @@ impl RbacService {
 
         // Check if role already exists
         {
-            let role_registry = self.role_registry.read().unwrap();
+            let role_registry = match self.role_registry.read() {
+                Ok(registry) => registry,
+                Err(_) => {
+                    return Err(RbacError::SystemError(
+                        "Failed to access role registry".to_string(),
+                    ))
+                }
+            };
             if role_registry.get_role(name).is_some() {
                 return Err(RbacError::InvalidRoleName(format!(
                     "Role '{}' already exists",
@@ -300,20 +322,18 @@ impl RbacService {
 
         // Parse permissions
         let mut role_permissions = Permission::empty();
-        for perm_str in &permissions {
-            if let Some(perm) = Permission::from_name(perm_str) {
-                role_permissions = role_permissions.union(&perm);
-            } else {
-                return Err(RbacError::InvalidRoleName(format!(
-                    "Invalid permission: {}",
-                    perm_str
-                )));
+        for perm_str in permissions {
+            match perm_str.parse::<PermissionType>() {
+                Ok(perm_type) => {
+                    role_permissions = role_permissions.union(&Permission::single(perm_type));
+                }
+                Err(_) => {
+                    return Err(RbacError::InvalidRoleName(format!(
+                        "Invalid permission: {}",
+                        perm_str
+                    )));
+                }
             }
-        }
-
-        // Validate inheritance (prevent cycles)
-        if let Some(ref parents) = inherits_from {
-            self.validate_inheritance_chain(name, parents)?;
         }
 
         let mut role = Role::new(name.to_string(), description.to_string(), role_permissions);
@@ -326,7 +346,14 @@ impl RbacService {
 
         // Store role in registry
         {
-            let mut role_registry = self.role_registry.write().unwrap();
+            let mut role_registry = match self.role_registry.write() {
+                Ok(registry) => registry,
+                Err(_) => {
+                    return Err(RbacError::SystemError(
+                        "Failed to access role registry".to_string(),
+                    ))
+                }
+            };
             role_registry.register_role(role.clone());
         }
 
@@ -339,7 +366,7 @@ impl RbacService {
             self.log_audit_event(AuditLogEntry {
                 id: Uuid::new_v4().to_string(),
                 timestamp: Utc::now(),
-                event_type: AuditEventType::RoleCreation,
+                event_type: AuditEventType::RoleManagement,
                 user_id: None,
                 username: Some(created_by.to_string()),
                 resource: format!("role:{}", name),
@@ -349,10 +376,7 @@ impl RbacService {
                 role: Some(name.to_string()),
                 ip_address: None,
                 user_agent: None,
-                metadata: Some(serde_json::json!({
-                    "permissions": permissions,
-                    "inherits_from": role.inherits_from
-                })),
+                metadata: None,
             })
             .await?;
         }
@@ -435,7 +459,14 @@ impl RbacService {
     pub async fn delete_role(&self, name: &str, deleted_by: &str) -> Result<(), RbacError> {
         // Check if role exists and is not system role
         {
-            let role_registry = self.role_registry.read().unwrap();
+            let role_registry = match self.role_registry.read() {
+                Ok(registry) => registry,
+                Err(_) => {
+                    return Err(RbacError::SystemError(
+                        "Failed to access role registry".to_string(),
+                    ))
+                }
+            };
             if let Some(role) = role_registry.get_role(name) {
                 if role.is_system {
                     return Err(RbacError::SystemRoleModification);
@@ -447,7 +478,14 @@ impl RbacService {
 
         // Remove from registry
         {
-            let mut role_registry = self.role_registry.write().unwrap();
+            let mut role_registry = match self.role_registry.write() {
+                Ok(registry) => registry,
+                Err(_) => {
+                    return Err(RbacError::SystemError(
+                        "Failed to access role registry".to_string(),
+                    ))
+                }
+            };
             role_registry
                 .remove_role(name)
                 .map_err(|e| RbacError::InvalidRoleName(e))?;
@@ -471,7 +509,7 @@ impl RbacService {
             self.log_audit_event(AuditLogEntry {
                 id: Uuid::new_v4().to_string(),
                 timestamp: Utc::now(),
-                event_type: AuditEventType::RoleDeletion,
+                event_type: AuditEventType::RoleManagement,
                 user_id: None,
                 username: Some(deleted_by.to_string()),
                 resource: format!("role:{}", name),
