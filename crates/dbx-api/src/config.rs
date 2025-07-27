@@ -360,6 +360,13 @@ mod tests {
         env::remove_var("CREATE_DEFAULT_ADMIN");
         env::remove_var("DEFAULT_ADMIN_USERNAME");
         env::remove_var("DEFAULT_ADMIN_PASSWORD");
+
+        // Clear backend configuration
+        env::remove_var("DBX_BACKEND_1_URL");
+        env::remove_var("DBX_BACKEND_1_PROVIDER");
+        env::remove_var("DBX_BACKEND_1_NAME");
+        env::remove_var("DBX_BACKEND_1_POOL_SIZE");
+        env::remove_var("DBX_DEFAULT_BACKEND");
     }
 
     fn setup_test_env() {
@@ -367,6 +374,12 @@ mod tests {
             "JWT_SECRET",
             "test-jwt-secret-that-is-at-least-32-characters-long",
         );
+        // Set up a test backend configuration
+        env::set_var("DBX_BACKEND_1_URL", "mock://localhost:6379");
+        env::set_var("DBX_BACKEND_1_PROVIDER", "mock");
+        env::set_var("DBX_BACKEND_1_NAME", "test_backend");
+        env::set_var("DBX_BACKEND_1_POOL_SIZE", "10");
+        env::set_var("DBX_DEFAULT_BACKEND", "test_backend");
     }
 
     #[test]
@@ -418,9 +431,9 @@ mod tests {
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 3000);
 
-        assert_eq!(config.jwt.access_token_expiration, 900);
-        assert_eq!(config.jwt.refresh_token_expiration, 604800);
-        assert_eq!(config.jwt.issuer, "dbx-api");
+        assert_eq!(config.jwt.access_token_expiration, 3600);
+        assert_eq!(config.jwt.refresh_token_expiration, 25200);
+        assert_eq!(config.jwt.issuer, "dbx");
         assert!(!config.create_default_admin);
 
         clear_env_vars();

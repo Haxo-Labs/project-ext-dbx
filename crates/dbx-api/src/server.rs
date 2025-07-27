@@ -64,6 +64,13 @@ impl AppState {
         let redis_factory = RedisBackendFactory::new();
         registry_builder = registry_builder.with_factory("redis", redis_factory);
 
+        // Register mock backend factory for testing
+        #[cfg(test)]
+        {
+            let mock_factory = crate::test_utils::MockBackendFactory::new();
+            registry_builder = registry_builder.with_factory("mock", mock_factory);
+        }
+
         // Build the registry
         let registry = registry_builder.build();
 
@@ -344,8 +351,8 @@ mod tests {
     use crate::config::JwtConfig;
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
-    use axum::ServiceExt;
     use std::sync::Arc;
+    use tower::util::ServiceExt;
 
     /// Helper function to set up required environment variables for tests
     fn setup_test_env() {
@@ -353,7 +360,12 @@ mod tests {
             "JWT_SECRET",
             "test-jwt-secret-that-is-at-least-32-characters-long-for-security",
         );
-        std::env::set_var("REDIS_URL", "redis://localhost:6379");
+        // Set up mock backend instead of Redis
+        std::env::set_var("DBX_BACKEND_1_URL", "mock://localhost:6379");
+        std::env::set_var("DBX_BACKEND_1_PROVIDER", "mock");
+        std::env::set_var("DBX_BACKEND_1_NAME", "test_backend");
+        std::env::set_var("DBX_BACKEND_1_POOL_SIZE", "10");
+        std::env::set_var("DBX_DEFAULT_BACKEND", "test_backend");
         std::env::set_var("HOST", "127.0.0.1");
         std::env::set_var("PORT", "3000");
     }
@@ -361,7 +373,11 @@ mod tests {
     /// Helper function to clean up test environment variables
     fn cleanup_test_env() {
         std::env::remove_var("JWT_SECRET");
-        std::env::remove_var("REDIS_URL");
+        std::env::remove_var("DBX_BACKEND_1_URL");
+        std::env::remove_var("DBX_BACKEND_1_PROVIDER");
+        std::env::remove_var("DBX_BACKEND_1_NAME");
+        std::env::remove_var("DBX_BACKEND_1_POOL_SIZE");
+        std::env::remove_var("DBX_DEFAULT_BACKEND");
         std::env::remove_var("HOST");
         std::env::remove_var("PORT");
         std::env::remove_var("CREATE_DEFAULT_ADMIN");

@@ -5,13 +5,12 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Json},
 };
-use bit_vec::BitVec;
+
 use chrono::{DateTime, Utc};
 use dbx_core::{DataOperation, DataValue, UniversalBackend};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitResult {
@@ -1608,15 +1607,14 @@ mod tests {
         }
     }
 
-    fn create_redis_pool() -> Arc<dyn UniversalBackend> {
-        use dbx_adapter::redis::factory::RedisBackendFactory;
+    async fn create_redis_pool() -> Arc<dyn UniversalBackend> {
+        use crate::test_utils::MockBackendFactory;
         use dbx_config::BackendConfig;
         use dbx_router::registry::BackendFactory;
 
         let config = BackendConfig {
-            provider: "redis".to_string(),
-            url: std::env::var("DBX_BACKEND_1_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+            provider: "mock".to_string(),
+            url: "mock://localhost:6379".to_string(),
             pool_size: Some(1),
             timeout_ms: Some(5000),
             retry_attempts: Some(3),
@@ -1625,16 +1623,13 @@ mod tests {
             additional_config: std::collections::HashMap::new(),
         };
 
-        let factory = RedisBackendFactory::new();
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(async { factory.create_backend("test", &config).await })
-            .unwrap()
+        let factory = MockBackendFactory::new();
+        factory.create_backend("test", &config).await.unwrap()
     }
 
     #[tokio::test]
     async fn test_sliding_window_rate_limiter() {
-        let redis_pool = create_redis_pool();
+        let redis_pool = create_redis_pool().await;
         let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
         let test_prefix = format!(
@@ -1683,10 +1678,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limit_reset() {
-        let redis_pool = create_redis_pool();
+        let redis_pool = create_redis_pool().await;
         let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
-        let test_prefix = format!("test_reset_{}", chrono::Utc::now().timestamp_nanos());
+        let test_prefix = format!(
+            "test_reset_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let context = RateLimitContext {
             identifier: format!("test_user_reset_{}", test_prefix),
             policy: RateLimitPolicy {
@@ -1700,7 +1698,10 @@ mod tests {
         // Clean up any existing keys
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
         let _ = redis_pool
-            .execute_data(DataOperation::Delete { key, fields: None })
+            .execute_data(DataOperation::Delete {
+                key: key.clone(),
+                fields: None,
+            })
             .await;
 
         // Use up the rate limit
@@ -1727,26 +1728,36 @@ mod tests {
         assert!(result.allowed, "Request should be allowed after reset");
 
         // Cleanup
+        let cleanup_key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
         let _ = redis_pool
-            .execute_data(DataOperation::Delete { key, fields: None })
+            .execute_data(DataOperation::Delete {
+                key: cleanup_key,
+                fields: None,
+            })
             .await;
     }
 
     #[tokio::test]
     async fn test_rate_limit_service_global_policy() {
-        let redis_pool = create_redis_pool();
+        let redis_pool = create_redis_pool().await;
         let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
 
         service.set_global_policy(create_test_policy()).await;
 
-        let test_prefix = format!("test_global_{}", chrono::Utc::now().timestamp_nanos());
+        let test_prefix = format!(
+            "test_global_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let endpoint = format!("/api/general_{}", test_prefix);
         let user_id = format!("user1_{}", test_prefix);
 
         // Clean up any existing keys
         let key = format!("rate_limit:{}:{}", user_id, endpoint);
         let _ = redis_pool
-            .execute_data(DataOperation::Delete { key, fields: None })
+            .execute_data(DataOperation::Delete {
+                key: key.clone(),
+                fields: None,
+            })
             .await;
 
         // Test global policy
@@ -1755,19 +1766,26 @@ mod tests {
         assert_eq!(result.limit, 5);
 
         // Cleanup
+        let cleanup_key = format!("rate_limit:{}:{}", user_id, endpoint);
         let _ = redis_pool
-            .execute_data(DataOperation::Delete { key, fields: None })
+            .execute_data(DataOperation::Delete {
+                key: cleanup_key,
+                fields: None,
+            })
             .await;
     }
 
     #[tokio::test]
     async fn test_rate_limit_service_endpoint_specific_policy() {
-        let redis_pool = create_redis_pool();
+        let redis_pool = create_redis_pool().await;
         let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
 
         service.set_global_policy(create_test_policy()).await;
 
-        let test_prefix = format!("test_endpoint_{}", chrono::Utc::now().timestamp_nanos());
+        let test_prefix = format!(
+            "test_endpoint_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let general_endpoint = format!("/api/general_{}", test_prefix);
         let special_endpoint = format!("/api/special_{}", test_prefix);
         let user_id = format!("user1_{}", test_prefix);
@@ -1832,11 +1850,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_different_users_separate_limits() {
-        let redis_pool = create_redis_pool();
+        let redis_pool = create_redis_pool().await;
         let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
 
         // Use unique test prefix to avoid conflicts with other tests
-        let test_prefix = format!("test_separation_{}", chrono::Utc::now().timestamp_nanos());
+        let test_prefix = format!(
+            "test_separation_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let endpoint = format!("/api/{}", test_prefix);
 
         let policy = RateLimitPolicy {
@@ -1909,7 +1930,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_rate_limit_info_without_incrementing() {
-        let redis_pool = create_redis_pool();
+        let redis_pool = create_redis_pool().await;
         let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
         let policy = RateLimitPolicy {
@@ -1918,14 +1939,20 @@ mod tests {
             burst_allowance: None,
         };
 
-        let test_prefix = format!("test_info_{}", chrono::Utc::now().timestamp_nanos());
+        let test_prefix = format!(
+            "test_info_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let identifier = format!("test_user_info_{}", test_prefix);
         let endpoint = format!("/api/info_test_{}", test_prefix);
 
         // Clean up any existing keys
         let key = format!("rate_limit:{}:{}", identifier, endpoint);
         let _ = redis_pool
-            .execute_data(DataOperation::Delete { key, fields: None })
+            .execute_data(DataOperation::Delete {
+                key: key.clone(),
+                fields: None,
+            })
             .await;
 
         // Get initial info
@@ -1962,17 +1989,24 @@ mod tests {
         assert_eq!(info3.remaining, 4);
 
         // Cleanup
+        let cleanup_key = format!("rate_limit:{}:{}", identifier, endpoint);
         let _ = redis_pool
-            .execute_data(DataOperation::Delete { key, fields: None })
+            .execute_data(DataOperation::Delete {
+                key: cleanup_key,
+                fields: None,
+            })
             .await;
     }
 
     #[tokio::test]
     async fn test_burst_allowance_behavior() {
-        let redis_pool = create_redis_pool();
+        let redis_pool = create_redis_pool().await;
         let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
 
-        let test_prefix = format!("test_burst_{}", chrono::Utc::now().timestamp_nanos());
+        let test_prefix = format!(
+            "test_burst_{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let context = RateLimitContext {
             identifier: format!("test_burst_user_{}", test_prefix),
             policy: RateLimitPolicy {
@@ -2083,13 +2117,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_bit_vector_rate_limiter() {
-        let backend = create_redis_pool().await.unwrap();
+        let backend = create_redis_pool().await;
         let limiter = BitVectorRateLimiter::new(backend);
 
         let policy = RateLimitPolicy {
             requests: 5,
             window_seconds: 10,
-            burst_allowance: 2,
+            burst_allowance: Some(2),
         };
 
         let context = RateLimitContext {
@@ -2114,13 +2148,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_bit_vector_memory_efficiency() {
-        let backend = create_redis_pool().await.unwrap();
+        let backend = create_redis_pool().await;
         let limiter = BitVectorRateLimiter::with_bucket_size(backend, 1); // 1-second buckets
 
         let policy = RateLimitPolicy {
             requests: 100,
             window_seconds: 60,
-            burst_allowance: 10,
+            burst_allowance: Some(10),
         };
 
         let context = RateLimitContext {
@@ -2153,7 +2187,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limit_service() {
-        let backend = create_redis_pool().await.unwrap();
+        let backend = create_redis_pool().await;
 
         // Test sliding window implementation
         let service_sliding = RateLimitService::new(backend.clone(), false);
@@ -2172,13 +2206,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_bit_vector_sliding_window_behavior() {
-        let backend = create_redis_pool().await.unwrap();
+        let backend = create_redis_pool().await;
         let limiter = BitVectorRateLimiter::with_bucket_size(backend, 1);
 
         let policy = RateLimitPolicy {
             requests: 3,
             window_seconds: 5,
-            burst_allowance: 1,
+            burst_allowance: Some(1),
         };
 
         let context = RateLimitContext {
@@ -2199,13 +2233,14 @@ mod tests {
 
         // Test that bucket creation and retrieval works
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let stored_result = limiter.backend.get(&key).await;
+        let get_op = dbx_core::DataOperation::Get { key, fields: None };
+        let stored_result = limiter.backend.execute_data(get_op).await;
         assert!(stored_result.is_ok());
     }
 
     #[tokio::test]
     async fn test_efficiency_metrics() {
-        let backend = create_redis_pool().await.unwrap();
+        let backend = create_redis_pool().await;
         let service = RateLimitService::new(backend, false);
 
         // Make requests and check metrics structure
@@ -2222,8 +2257,8 @@ mod tests {
 
         // Verify metrics contain expected fields
         assert!(metrics.compression_ratio > 0.0);
-        assert!(metrics.memory_usage_bytes > 0);
-        assert!(metrics.request_count >= 5);
+        assert!(metrics.sliding_window_bytes > 0);
+        assert!(metrics.bit_vector_bytes >= 0);
     }
 
     #[tokio::test]

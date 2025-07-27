@@ -938,17 +938,14 @@ mod tests {
         }
     }
 
-    fn create_test_redis_pool() -> Arc<dyn UniversalBackend> {
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
-
-        use dbx_adapter::redis::factory::RedisBackendFactory;
+    async fn create_test_redis_pool() -> Arc<dyn UniversalBackend> {
+        use crate::test_utils::MockBackendFactory;
         use dbx_config::BackendConfig;
         use dbx_router::registry::BackendFactory;
 
         let config = BackendConfig {
-            provider: "redis".to_string(),
-            url: redis_url,
+            provider: "mock".to_string(),
+            url: "mock://localhost:6379".to_string(),
             pool_size: Some(1),
             timeout_ms: Some(5000),
             retry_attempts: Some(3),
@@ -957,10 +954,10 @@ mod tests {
             additional_config: std::collections::HashMap::new(),
         };
 
-        let factory = RedisBackendFactory::new();
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(factory.create_backend("test_backend", &config))
+        let factory = MockBackendFactory::new();
+        factory
+            .create_backend("test_backend", &config)
+            .await
             .unwrap()
     }
 
@@ -1027,9 +1024,9 @@ mod tests {
         assert_eq!(params.offset.unwrap(), 0);
     }
 
-    #[test]
-    fn test_validate_inheritance_chain_cycle() {
-        let redis_pool = create_test_redis_pool();
+    #[tokio::test]
+    async fn test_validate_inheritance_chain_cycle() {
+        let redis_pool = create_test_redis_pool().await;
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Set up roles in registry: A -> B
@@ -1063,9 +1060,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_validate_inheritance_chain_self_cycle() {
-        let redis_pool = create_test_redis_pool();
+    #[tokio::test]
+    async fn test_validate_inheritance_chain_self_cycle() {
+        let redis_pool = create_test_redis_pool().await;
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Test self-inheritance: A -> A
@@ -1078,9 +1075,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_validate_inheritance_chain_deep_cycle() {
-        let redis_pool = create_test_redis_pool();
+    #[tokio::test]
+    async fn test_validate_inheritance_chain_deep_cycle() {
+        let redis_pool = create_test_redis_pool().await;
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Set up deep chain: A -> B -> C -> D
@@ -1130,9 +1127,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_validate_inheritance_chain_depth_limit() {
-        let redis_pool = create_test_redis_pool();
+    #[tokio::test]
+    async fn test_validate_inheritance_chain_depth_limit() {
+        let redis_pool = create_test_redis_pool().await;
         let mut config = create_test_rbac_config();
         config.max_role_inheritance_depth = 2; // Set low depth limit
         let rbac = RbacService::new(redis_pool, config);
@@ -1176,9 +1173,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_validate_inheritance_chain_multiple_parents() {
-        let redis_pool = create_test_redis_pool();
+    #[tokio::test]
+    async fn test_validate_inheritance_chain_multiple_parents() {
+        let redis_pool = create_test_redis_pool().await;
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Set up: A -> B, A -> C, C -> D
@@ -1229,9 +1226,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_validate_inheritance_chain_valid_cases() {
-        let redis_pool = create_test_redis_pool();
+    #[tokio::test]
+    async fn test_validate_inheritance_chain_valid_cases() {
+        let redis_pool = create_test_redis_pool().await;
         let rbac = RbacService::new(redis_pool, create_test_rbac_config());
 
         // Set up valid chain: A -> B -> C
