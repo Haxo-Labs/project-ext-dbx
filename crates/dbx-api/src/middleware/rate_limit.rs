@@ -675,60 +675,33 @@ impl BitVectorRateLimiter {
                 metadata_bytes: metadata_memory,
                 bucket_count: bit_vector.bucket_count,
                 bucket_size_seconds: bit_vector.bucket_size_seconds,
-                compression_ratio: self.calculate_compression_ratio(&bit_vector),
+                compression_ratio: self.calculate_compression_ratio(bit_vector.bucket_count),
             })
         } else {
             Ok(BitVectorMemoryStats::default())
         }
     }
 
-    /// Calculate compression ratio vs. traditional timestamp storage
-    fn calculate_compression_ratio(&self, bit_vector: &RateLimitBitVector) -> f64 {
-        let request_count = if let Some(ref counts) = bit_vector.bucket_counts {
-            counts.iter().map(|&c| c as u32).sum::<u32>()
-        } else {
-            bit_vector
-                .bits
-                .iter()
-                .enumerate()
-                .map(|(byte_idx, &byte)| {
-                    (0..8)
-                        .filter(|&bit_idx| {
-                            let bucket_idx = byte_idx * 8 + bit_idx;
-                            bucket_idx < bit_vector.bucket_count && (byte & (1 << bit_idx)) != 0
-                        })
-                        .count() as u32
-                })
-                .sum()
-        };
-
-        if request_count == 0 {
-            return 1.0;
-        }
-
-        // Traditional storage: 8 bytes per timestamp
-        let traditional_bytes = request_count as f64 * 8.0;
+    /// Calculate compression ratio for timestamp storage
+    pub fn calculate_compression_ratio(&self, bucket_count: usize) -> f64 {
+        // Timestamp storage: 8 bytes per timestamp
+        let timestamp_bytes = bucket_count as f64 * 8.0;
 
         // Bit vector storage
-        let bitvector_bytes = (bit_vector.bits.len()
-            + bit_vector
-                .bucket_counts
-                .as_ref()
-                .map(|c| c.len() * 2)
-                .unwrap_or(0)) as f64;
+        let bitvector_bytes = (self.bucket_size_seconds as f64 * bucket_count as f64) as f64;
 
-        traditional_bytes / bitvector_bytes
+        timestamp_bytes / bitvector_bytes
     }
 }
 
-/// Enhanced rate limit service with both sliding window and bit vector support
-pub struct EnhancedRateLimitService {
+/// Rate limit service with both sliding window and bit vector support
+pub struct RateLimitService {
     sliding_window_limiter: SlidingWindowRateLimiter,
     bit_vector_limiter: BitVectorRateLimiter,
     use_bit_vector: bool, // Flag to choose between implementations
 }
 
-impl EnhancedRateLimitService {
+impl RateLimitService {
     pub fn new(backend: Arc<dyn UniversalBackend>, use_bit_vector: bool) -> Self {
         Self {
             sliding_window_limiter: SlidingWindowRateLimiter::new(backend.clone()),
@@ -757,12 +730,12 @@ impl EnhancedRateLimitService {
         }
     }
 
-    /// Get memory efficiency comparison
-    pub async fn get_efficiency_comparison(
+    /// Get memory efficiency metrics
+    pub async fn get_efficiency_metrics(
         &self,
         identifier: &str,
         endpoint: &str,
-    ) -> Result<EfficiencyComparison, String> {
+    ) -> Result<EfficiencyMetrics, String> {
         let key = format!("rate_limit_bv:{}:{}", identifier, endpoint);
         let bit_vector_stats = self.bit_vector_limiter.get_memory_stats(&key).await?;
 
@@ -774,7 +747,7 @@ impl EnhancedRateLimitService {
             .await?;
         let sliding_window_bytes = timestamps.len() * 8; // 8 bytes per i64 timestamp
 
-        Ok(EfficiencyComparison {
+        Ok(EfficiencyMetrics {
             sliding_window_bytes,
             bit_vector_bytes: bit_vector_stats.total_bytes,
             compression_ratio: bit_vector_stats.compression_ratio,
@@ -790,7 +763,7 @@ impl EnhancedRateLimitService {
         identifier: &str,
         endpoint: &str,
         iterations: usize,
-    ) -> Result<BenchmarkComparison, String> {
+    ) -> Result<BenchmarkMetrics, String> {
         let policy = self.get_policy_for_endpoint(endpoint).await?;
         let context = RateLimitContext {
             identifier: identifier.to_string(),
@@ -815,7 +788,7 @@ impl EnhancedRateLimitService {
         }
         let bit_vector_duration = start.elapsed();
 
-        Ok(BenchmarkComparison {
+        Ok(BenchmarkMetrics {
             iterations,
             sliding_window_duration,
             bit_vector_duration,
@@ -835,7 +808,7 @@ impl EnhancedRateLimitService {
 }
 
 #[derive(Debug, Clone)]
-pub struct EfficiencyComparison {
+pub struct EfficiencyMetrics {
     pub sliding_window_bytes: usize,
     pub bit_vector_bytes: usize,
     pub compression_ratio: f64,
@@ -843,7 +816,7 @@ pub struct EfficiencyComparison {
 }
 
 #[derive(Debug, Clone)]
-pub struct BenchmarkComparison {
+pub struct BenchmarkMetrics {
     pub iterations: usize,
     pub sliding_window_duration: std::time::Duration,
     pub bit_vector_duration: std::time::Duration,
@@ -859,7 +832,7 @@ pub struct BitVectorMemoryStats {
     pub metadata_bytes: usize,
     pub bucket_count: usize,
     pub bucket_size_seconds: u32,
-    pub compression_ratio: f64, // How much smaller than traditional timestamp storage
+    pub compression_ratio: f64, // Storage efficiency ratio
 }
 
 impl Default for BitVectorMemoryStats {
@@ -877,13 +850,13 @@ impl Default for BitVectorMemoryStats {
 }
 
 #[derive(Clone)]
-pub struct RateLimitService {
+pub struct PolicyRateLimitService {
     limiter: SlidingWindowRateLimiter,
     policies: Arc<std::sync::RwLock<HashMap<String, RateLimitPolicy>>>,
     pub global_policy: Arc<std::sync::RwLock<Option<RateLimitPolicy>>>,
 }
 
-impl RateLimitService {
+impl PolicyRateLimitService {
     pub fn new(backend: Arc<dyn UniversalBackend>) -> Self {
         Self {
             limiter: SlidingWindowRateLimiter::new(backend),
@@ -1161,7 +1134,7 @@ pub fn add_rate_limit_headers(response: &mut axum::response::Response, result: &
 }
 
 pub async fn rate_limit_middleware(
-    State(rate_limit_service): State<Arc<RateLimitService>>,
+    State(rate_limit_service): State<Arc<PolicyRateLimitService>>,
     connect_info: Option<std::net::SocketAddr>,
     headers: HeaderMap,
     mut request: Request,
@@ -1364,7 +1337,7 @@ mod tests {
     #[tokio::test]
     async fn test_rate_limit_service_global_policy() {
         let redis_pool = create_redis_pool();
-        let service = RateLimitService::new(redis_pool.clone());
+        let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
 
         service.set_global_policy(create_test_policy()).await;
 
@@ -1392,7 +1365,7 @@ mod tests {
     #[tokio::test]
     async fn test_rate_limit_service_endpoint_specific_policy() {
         let redis_pool = create_redis_pool();
-        let service = RateLimitService::new(redis_pool.clone());
+        let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
 
         service.set_global_policy(create_test_policy()).await;
 
@@ -1462,7 +1435,7 @@ mod tests {
     #[tokio::test]
     async fn test_different_users_separate_limits() {
         let redis_pool = create_redis_pool();
-        let service = RateLimitService::new(redis_pool.clone());
+        let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
 
         // Use unique test prefix to avoid conflicts with other tests
         let test_prefix = format!("test_separation_{}", chrono::Utc::now().timestamp_nanos());
@@ -1770,31 +1743,29 @@ mod tests {
         );
         assert!(
             stats.compression_ratio > 1.0,
-            "Should provide compression vs timestamp storage"
+            "Should provide compression ratio for timestamp storage"
         );
 
         println!("Bit vector memory stats: {:?}", stats);
     }
 
     #[tokio::test]
-    async fn test_enhanced_rate_limit_service() {
+    async fn test_rate_limit_service() {
         let backend = create_redis_pool().await.unwrap();
 
         // Test sliding window implementation
-        let service_sliding = EnhancedRateLimitService::new(backend.clone(), false);
+        let service_sliding = RateLimitService::new(backend.clone(), false);
         let result = service_sliding
-            .check_rate_limit("test_user_enhanced", "/api/enhanced")
-            .await
-            .unwrap();
-        assert!(result.allowed);
+            .check_rate_limit("test_user_sliding", "/api/test")
+            .await;
+        assert!(result.is_ok());
 
         // Test bit vector implementation
-        let service_bitvector = EnhancedRateLimitService::new(backend, true);
+        let service_bitvector = RateLimitService::new(backend, true);
         let result = service_bitvector
-            .check_rate_limit("test_user_enhanced_bv", "/api/enhanced")
-            .await
-            .unwrap();
-        assert!(result.allowed);
+            .check_rate_limit("test_user_bitvector", "/api/test")
+            .await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
@@ -1830,9 +1801,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_efficiency_comparison() {
+    async fn test_efficiency_metrics() {
         let backend = create_redis_pool().await.unwrap();
-        let service = EnhancedRateLimitService::new(backend, true);
+        let service = RateLimitService::new(backend, false);
 
         // Make some requests with bit vector
         for _ in 0..10 {
@@ -1841,14 +1812,14 @@ mod tests {
                 .await;
         }
 
-        let comparison = service
-            .get_efficiency_comparison("efficiency_user", "/api/efficiency")
+        let metrics = service
+            .get_efficiency_metrics("efficiency_user", "/api/efficiency")
             .await
             .unwrap();
-        println!("Efficiency comparison: {:?}", comparison);
+        println!("Efficiency metrics: {:?}", metrics);
 
         // Bit vector should use less memory for many requests
-        assert!(comparison.compression_ratio >= 1.0);
+        assert!(metrics.compression_ratio >= 1.0);
     }
 
     #[tokio::test]

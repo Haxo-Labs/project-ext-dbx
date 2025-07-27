@@ -14,7 +14,7 @@ path = "src/lib.rs"
 dbx-core = { path = "../dbx-core" }
 dbx-config = { path = "../dbx-config" }
 dbx-router = { path = "../dbx-router" }
-redis = { version = "0.23", features = ["tokio-comp", "aio"] }
+redis = { version = "0.24", features = ["tokio-comp", "aio"] }
 deadpool-redis = { version = "0.14", features = ["rt_tokio_1"] }
 async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }

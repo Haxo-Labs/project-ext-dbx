@@ -4,7 +4,8 @@ use tracing::{debug, info};
 
 use dbx_config::BackendConfig;
 use dbx_core::UniversalBackend;
-use dbx_router::{BackendFactory, RouterError, RouterResult};
+use dbx_router::registry::BackendFactory;
+use dbx_router::{RouterError, RouterResult};
 
 use super::backend::RedisBackend;
 
