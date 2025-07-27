@@ -1335,12 +1335,11 @@ pub async fn rbac_auth_middleware(
                     role: roles.first().cloned(),
                     roles,
                     rbac_service: rbac_service.clone(),
-                    ip_address: request
-                        .headers()
-                        .get("x-forwarded-for")
-                        .or_else(|| request.headers().get("x-real-ip"))
-                        .and_then(|h| h.to_str().ok())
-                        .map(|ip| ip.split(',').next().unwrap_or(ip).trim().to_string()),
+                    ip_address: crate::middleware::security::extract_trusted_client_ip(
+                        request.headers(),
+                        request.extensions().get::<std::net::SocketAddr>(),
+                    )
+                    .map(|ip| ip.to_string()),
                     user_agent: request
                         .headers()
                         .get("user-agent")
@@ -1388,12 +1387,11 @@ pub async fn rbac_auth_middleware(
                     role: roles.first().cloned(),
                     roles,
                     rbac_service: rbac_service.clone(),
-                    ip_address: request
-                        .headers()
-                        .get("x-forwarded-for")
-                        .or_else(|| request.headers().get("x-real-ip"))
-                        .and_then(|h| h.to_str().ok())
-                        .map(|ip| ip.split(',').next().unwrap_or(ip).trim().to_string()),
+                    ip_address: crate::middleware::security::extract_trusted_client_ip(
+                        request.headers(),
+                        request.extensions().get::<std::net::SocketAddr>(),
+                    )
+                    .map(|ip| ip.to_string()),
                     user_agent: request
                         .headers()
                         .get("user-agent")

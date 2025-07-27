@@ -570,11 +570,18 @@ fn extract_identifier_from_request(
             }
             _ => "unknown".to_string(),
         }
-    } else if let Some(connect_info) = connect_info {
-        // Use IP address as fallback
-        format!("ip:{}", connect_info.ip())
     } else {
-        "unknown".to_string()
+        // Use trusted IP address extraction as fallback
+        if let Some(trusted_ip) =
+            crate::middleware::security::extract_trusted_client_ip(headers, connect_info)
+        {
+            format!("ip:{}", trusted_ip)
+        } else if let Some(connect_info) = connect_info {
+            // Fallback to direct connection if trusted extraction fails
+            format!("ip:{}", connect_info.ip())
+        } else {
+            "unknown".to_string()
+        }
     }
 }
 

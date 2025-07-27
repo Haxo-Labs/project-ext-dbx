@@ -1,13 +1,310 @@
 use axum::{
     body::Body,
-    http::{header, HeaderValue, Method, Request, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use std::collections::HashSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::config::{CorsConfig, SecurityConfig, SecurityHeadersConfig};
+
+#[derive(Debug, Clone)]
+pub struct TrustedProxyConfig {
+    trusted_proxies: HashSet<IpAddr>,
+    trusted_networks: Vec<(IpAddr, u8)>, // CIDR blocks
+    proxy_headers: Vec<String>,
+    max_chain_length: usize,
+    require_trusted_path: bool,
+}
+
+impl Default for TrustedProxyConfig {
+    fn default() -> Self {
+        let mut trusted_proxies = HashSet::new();
+        // Common trusted proxy IPs (should be configured per environment)
+        trusted_proxies.insert(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))); // localhost
+        trusted_proxies.insert(IpAddr::V6(Ipv6Addr::LOCALHOST)); // IPv6 localhost
+
+        let mut trusted_networks = Vec::new();
+        // RFC 1918 private networks (commonly used by load balancers)
+        trusted_networks.push((IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0)), 8)); // 10.0.0.0/8
+        trusted_networks.push((IpAddr::V4(Ipv4Addr::new(172, 16, 0, 0)), 12)); // 172.16.0.0/12
+        trusted_networks.push((IpAddr::V4(Ipv4Addr::new(192, 168, 0, 0)), 16)); // 192.168.0.0/16
+
+        Self {
+            trusted_proxies,
+            trusted_networks,
+            proxy_headers: vec![
+                "x-forwarded-for".to_string(),
+                "x-real-ip".to_string(),
+                "x-client-ip".to_string(),
+                "cf-connecting-ip".to_string(), // Cloudflare
+                "x-cluster-client-ip".to_string(),
+                "true-client-ip".to_string(), // Akamai
+            ],
+            max_chain_length: 10,
+            require_trusted_path: true,
+        }
+    }
+}
+
+impl TrustedProxyConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_trusted_proxies(mut self, proxies: Vec<IpAddr>) -> Self {
+        self.trusted_proxies.extend(proxies);
+        self
+    }
+
+    pub fn with_trusted_networks(mut self, networks: Vec<(IpAddr, u8)>) -> Self {
+        self.trusted_networks.extend(networks);
+        self
+    }
+
+    pub fn require_trusted_path(mut self, require: bool) -> Self {
+        self.require_trusted_path = require;
+        self
+    }
+
+    fn is_trusted_proxy(&self, ip: &IpAddr) -> bool {
+        if self.trusted_proxies.contains(ip) {
+            return true;
+        }
+
+        for (network, prefix_len) in &self.trusted_networks {
+            if self.ip_in_network(ip, network, *prefix_len) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn ip_in_network(&self, ip: &IpAddr, network: &IpAddr, prefix_len: u8) -> bool {
+        match (ip, network) {
+            (IpAddr::V4(ip), IpAddr::V4(net)) => {
+                let ip_bits = u32::from(*ip);
+                let net_bits = u32::from(*net);
+                let mask = !((1u32 << (32 - prefix_len)) - 1);
+                (ip_bits & mask) == (net_bits & mask)
+            }
+            (IpAddr::V6(ip), IpAddr::V6(net)) => {
+                let ip_bits = u128::from(*ip);
+                let net_bits = u128::from(*net);
+                let mask = !((1u128 << (128 - prefix_len)) - 1);
+                (ip_bits & mask) == (net_bits & mask)
+            }
+            _ => false, // Different IP versions
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClientIpInfo {
+    pub ip: IpAddr,
+    pub source: String, // Which header or direct connection
+    pub proxy_chain: Vec<IpAddr>,
+    pub is_trusted: bool,
+    pub validation_errors: Vec<String>,
+}
+
+pub struct TrustedProxyValidator {
+    config: TrustedProxyConfig,
+}
+
+impl TrustedProxyValidator {
+    pub fn new(config: TrustedProxyConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn extract_client_ip(
+        &self,
+        headers: &HeaderMap,
+        connect_info: Option<&std::net::SocketAddr>,
+    ) -> ClientIpInfo {
+        let mut validation_errors = Vec::new();
+
+        // Get the direct connection IP as fallback
+        let direct_ip = connect_info.map(|addr| addr.ip());
+
+        // Try each proxy header in order of preference
+        for header_name in &self.config.proxy_headers {
+            if let Some(header_value) = headers.get(header_name) {
+                if let Ok(header_str) = header_value.to_str() {
+                    if let Some(client_ip_info) =
+                        self.parse_proxy_header(header_str, header_name, direct_ip)
+                    {
+                        return client_ip_info;
+                    }
+                }
+            }
+        }
+
+        // Fallback to direct connection
+        if let Some(ip) = direct_ip {
+            ClientIpInfo {
+                ip,
+                source: "direct_connection".to_string(),
+                proxy_chain: vec![],
+                is_trusted: true, // Direct connections are considered trusted
+                validation_errors,
+            }
+        } else {
+            validation_errors.push("No IP address available".to_string());
+            ClientIpInfo {
+                ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                source: "unknown".to_string(),
+                proxy_chain: vec![],
+                is_trusted: false,
+                validation_errors,
+            }
+        }
+    }
+
+    fn parse_proxy_header(
+        &self,
+        header_value: &str,
+        header_name: &str,
+        direct_ip: Option<IpAddr>,
+    ) -> Option<ClientIpInfo> {
+        let mut validation_errors = Vec::new();
+
+        // Parse comma-separated IPs (standard for X-Forwarded-For)
+        let ips: Vec<&str> = header_value
+            .split(',')
+            .map(|ip| ip.trim())
+            .filter(|ip| !ip.is_empty())
+            .collect();
+
+        if ips.is_empty() {
+            return None;
+        }
+
+        if ips.len() > self.config.max_chain_length {
+            validation_errors.push(format!(
+                "Proxy chain too long: {} (max: {})",
+                ips.len(),
+                self.config.max_chain_length
+            ));
+            return None;
+        }
+
+        // Parse IPs and build proxy chain
+        let mut parsed_ips = Vec::new();
+        for ip_str in ips {
+            match ip_str.parse::<IpAddr>() {
+                Ok(ip) => parsed_ips.push(ip),
+                Err(_) => {
+                    validation_errors.push(format!("Invalid IP format: {}", ip_str));
+                    return None;
+                }
+            }
+        }
+
+        if parsed_ips.is_empty() {
+            return None;
+        }
+
+        // The first IP in X-Forwarded-For is typically the client IP
+        let client_ip = parsed_ips[0];
+        let proxy_chain = parsed_ips[1..].to_vec();
+
+        // Validate proxy chain if required
+        let is_trusted = if self.config.require_trusted_path {
+            self.validate_proxy_chain(&proxy_chain, direct_ip, &mut validation_errors)
+        } else {
+            true
+        };
+
+        Some(ClientIpInfo {
+            ip: client_ip,
+            source: header_name.to_string(),
+            proxy_chain,
+            is_trusted,
+            validation_errors,
+        })
+    }
+
+    fn validate_proxy_chain(
+        &self,
+        proxy_chain: &[IpAddr],
+        direct_ip: Option<IpAddr>,
+        validation_errors: &mut Vec<String>,
+    ) -> bool {
+        // If we have a direct IP, it should be the last proxy in the chain
+        if let Some(direct) = direct_ip {
+            if !proxy_chain.is_empty() {
+                let last_proxy = proxy_chain[proxy_chain.len() - 1];
+                if last_proxy != direct {
+                    validation_errors.push(format!(
+                        "Proxy chain mismatch: last proxy {} != direct connection {}",
+                        last_proxy, direct
+                    ));
+                    return false;
+                }
+            }
+
+            // Check if direct connection is from trusted proxy
+            if !self.config.is_trusted_proxy(&direct) {
+                validation_errors.push(format!("Untrusted direct proxy: {}", direct));
+                return false;
+            }
+        }
+
+        // Validate each proxy in the chain
+        for (i, proxy_ip) in proxy_chain.iter().enumerate() {
+            if !self.config.is_trusted_proxy(proxy_ip) {
+                validation_errors.push(format!("Untrusted proxy at position {}: {}", i, proxy_ip));
+                return false;
+            }
+        }
+
+        true
+    }
+
+    pub fn get_trusted_client_ip(
+        &self,
+        headers: &HeaderMap,
+        connect_info: Option<&std::net::SocketAddr>,
+    ) -> Option<IpAddr> {
+        let client_ip_info = self.extract_client_ip(headers, connect_info);
+
+        if client_ip_info.is_trusted && client_ip_info.validation_errors.is_empty() {
+            Some(client_ip_info.ip)
+        } else {
+            None
+        }
+    }
+}
+
+// Create a static instance for the trusted proxy validator
+static DEFAULT_TRUSTED_PROXY_VALIDATOR: std::sync::OnceLock<TrustedProxyValidator> =
+    std::sync::OnceLock::new();
+
+pub fn get_trusted_proxy_validator() -> &'static TrustedProxyValidator {
+    DEFAULT_TRUSTED_PROXY_VALIDATOR.get_or_init(|| {
+        let config = TrustedProxyConfig::default();
+        TrustedProxyValidator::new(config)
+    })
+}
+
+pub fn extract_trusted_client_ip(
+    headers: &HeaderMap,
+    connect_info: Option<&std::net::SocketAddr>,
+) -> Option<IpAddr> {
+    get_trusted_proxy_validator().get_trusted_client_ip(headers, connect_info)
+}
+
+pub fn extract_client_ip_info(
+    headers: &HeaderMap,
+    connect_info: Option<&std::net::SocketAddr>,
+) -> ClientIpInfo {
+    get_trusted_proxy_validator().extract_client_ip(headers, connect_info)
+}
 
 /// Security headers middleware that adds comprehensive security headers to all responses
 pub async fn security_headers_middleware(
