@@ -359,31 +359,6 @@ impl ConfigLoader {
 
         Ok(())
     }
-
-    /// Detect provider type from URL scheme
-    fn detect_provider_from_url(url: &str) -> ConfigResult<String> {
-        let parsed = url::Url::parse(url).map_err(|e| ConfigError::InvalidUrl {
-            url: url.to_string(),
-            error: e.to_string(),
-        })?;
-
-        let provider = match parsed.scheme() {
-            "redis" | "rediss" => "redis",
-            "postgres" | "postgresql" => "postgresql",
-            "mongodb" | "mongodb+srv" => "mongodb",
-            "mysql" => "mysql",
-            "sqlite" => "sqlite",
-            "mdbx" => "mdbx",
-            _ => {
-                return Err(ConfigError::InvalidUrl {
-                    url: url.to_string(),
-                    error: format!("Unknown provider scheme: {}", parsed.scheme()),
-                });
-            }
-        };
-
-        Ok(provider.to_string())
-    }
 }
 
 /// Configuration builder for programmatic configuration
