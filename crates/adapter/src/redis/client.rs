@@ -4,159 +4,199 @@
 //! Redis connections, including support for connection pooling and different
 //! connection types.
 
-use redis::{Client, Connection, RedisError, RedisResult};
-use std::sync::{Arc, Mutex, MutexGuard};
-use tracing::error;
+use crate::error::AdapterError;
+use deadpool_redis::{Config, Pool, Runtime};
+use redis::{aio::Connection, Client, RedisResult};
+use std::sync::{Arc, Mutex, PoisonError};
+use tracing::{debug, error, warn};
 
 use super::primitives::hash::RedisHash;
 use super::primitives::set::RedisSet;
 use super::primitives::string::RedisString;
 
-/// Type alias for connection result
-type ConnectionResult<'a> = Result<MutexGuard<'a, Connection>, RedisError>;
+/// Result type for connection operations
+pub type ConnectionResult<T> = Result<T, AdapterError>;
 
-/// Redis client wrapper that manages a single connection
-#[derive(Clone)]
-pub struct RedisClient {
-    client: Arc<Client>,
-    connection: Arc<Mutex<Connection>>,
+/// Redis connection handler trait for safe connection acquisition
+pub trait RedisConnectionHandler {
+    fn acquire_connection(&self) -> ConnectionResult<std::sync::MutexGuard<Connection>>;
 }
 
-impl RedisClient {
-    /// Create a new Redis client from a connection string
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use dbx_adapter::redis::client::RedisClient;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let client = RedisClient::from_url(&redis_url).unwrap();
-    /// ```
-    pub fn from_url(url: &str) -> RedisResult<Self> {
-        let client = Client::open(url)?;
-        let connection = client.get_connection()?;
+/// High-performance Redis connection pool using deadpool-redis
+#[derive(Clone)]
+pub struct RedisConnectionPool {
+    pool: Pool,
+    url: String,
+}
+
+impl RedisConnectionPool {
+    /// Create a new Redis connection pool
+    pub fn new(redis_url: &str, max_connections: usize) -> Result<Self, AdapterError> {
+        let config = Config::from_url(redis_url);
+        let pool = config
+            .create_pool(Some(Runtime::Tokio1))
+            .map_err(|e| AdapterError::ConnectionError(format!("Failed to create pool: {}", e)))?;
+
         Ok(Self {
-            client: Arc::new(client),
-            connection: Arc::new(Mutex::new(connection)),
+            pool,
+            url: redis_url.to_string(),
         })
     }
 
-    /// Create a new Redis client from an existing client and connection
-    pub fn new(client: Client, connection: Connection) -> Self {
-        Self {
-            client: Arc::new(client),
-            connection: Arc::new(Mutex::new(connection)),
+    /// Get a connection from the pool
+    pub async fn get(&self) -> Result<deadpool_redis::Connection, AdapterError> {
+        self.pool
+            .get()
+            .await
+            .map_err(|e| AdapterError::ConnectionError(format!("Failed to get connection: {}", e)))
+    }
+
+    /// Get pool status and metrics
+    pub fn status(&self) -> PoolStatus {
+        let status = self.pool.status();
+        PoolStatus {
+            available: status.available,
+            size: status.size,
+            max_size: status.max_size,
+            waiting: status.waiting,
         }
     }
 
-    /// Get the raw Redis client
-    pub fn client(&self) -> &Arc<Client> {
-        &self.client
-    }
-
-    /// Get the connection
-    pub fn connection(&self) -> &Arc<Mutex<Connection>> {
-        &self.connection
-    }
-
-    /// Acquire connection with poison recovery
-    pub fn acquire_connection(&self) -> ConnectionResult {
-        match self.connection.lock() {
-            Ok(guard) => Ok(guard),
-            Err(poisoned) => {
-                error!("Redis connection mutex poisoned, recovering");
-                Ok(poisoned.into_inner())
+    /// Perform health check on the pool
+    pub async fn health_check(&self) -> Result<bool, AdapterError> {
+        match self.get().await {
+            Ok(mut conn) => {
+                match redis::cmd("PING")
+                    .query_async::<_, String>(&mut *conn)
+                    .await
+                {
+                    Ok(response) => Ok(response == "PONG"),
+                    Err(e) => {
+                        warn!("Health check failed: {}", e);
+                        Ok(false)
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to get connection for health check: {}", e);
+                Ok(false)
             }
         }
     }
 
-    /// Get a new connection from the client
-    pub fn get_new_connection(&self) -> RedisResult<Connection> {
-        self.client.get_connection()
-    }
+    /// Get connection pool statistics
+    pub async fn get_stats(&self) -> PoolStats {
+        let status = self.status();
+        let health = self.health_check().await.unwrap_or(false);
 
-    /// Test the connection to ensure it's working
-    pub fn test_connection(&self) -> RedisResult<bool> {
-        let mut conn = self.acquire_connection()?;
-        let pong: String = redis::cmd("PING").query(&mut *conn)?;
-        Ok(pong == "PONG")
-    }
-
-    /// Check if the connection is valid (legacy method for backward compatibility)
-    pub fn ping(&self) -> RedisResult<bool> {
-        self.test_connection()
-    }
-
-    /// Get a RedisString primitive for string operations
-    pub fn string(&self) -> RedisString {
-        RedisString::new(self.connection.clone())
-    }
-
-    /// Get a RedisSet primitive for set operations
-    pub fn set(&self) -> RedisSet {
-        RedisSet::new(self.connection.clone())
-    }
-
-    /// Get a RedisHash primitive for hash operations
-    pub fn hash(&self) -> RedisHash {
-        RedisHash::new(self.connection.clone())
+        PoolStats {
+            total_connections: status.size,
+            active_connections: status.size - status.available,
+            idle_connections: status.available,
+            max_connections: status.max_size,
+            waiting_requests: status.waiting,
+            is_healthy: health,
+            url: self.url.clone(),
+        }
     }
 }
 
-/// A Redis connection pool for handling concurrent requests
-/// This is available when the "connection-pool" feature is enabled
-#[cfg(feature = "connection-pool")]
-pub struct RedisPool {
-    client: Arc<Client>,
-    pool_size: u32,
+#[derive(Debug, Clone)]
+pub struct PoolStatus {
+    pub available: usize,
+    pub size: usize,
+    pub max_size: usize,
+    pub waiting: usize,
 }
 
-#[cfg(feature = "connection-pool")]
-impl RedisPool {
-    /// Create a new Redis pool with the specified pool size
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use dbx_adapter::redis::client::RedisPool;
-    /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let pool = RedisPool::new(&redis_url, 10).unwrap();
-    /// ```
-    pub fn new(url: &str, pool_size: u32) -> RedisResult<Self> {
+#[derive(Debug, Clone)]
+pub struct PoolStats {
+    pub total_connections: usize,
+    pub active_connections: usize,
+    pub idle_connections: usize,
+    pub max_connections: usize,
+    pub waiting_requests: usize,
+    pub is_healthy: bool,
+    pub url: String,
+}
+
+/// Legacy Redis client implementation (kept for compatibility)
+pub struct RedisClient {
+    client: Client,
+    connection: Arc<Mutex<Connection>>,
+}
+
+impl RedisClient {
+    pub fn from_url(url: &str) -> RedisResult<Self> {
         let client = Client::open(url)?;
+        let connection = Arc::new(Mutex::new(
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(client.get_async_connection())?,
+        ));
+
+        Ok(Self { client, connection })
+    }
+
+    pub async fn ping(&self) -> ConnectionResult<bool> {
+        let mut conn = self.acquire_connection()?;
+        match redis::cmd("PING").query::<String>(&mut *conn) {
+            Ok(response) => Ok(response == "PONG"),
+            Err(e) => {
+                warn!("Ping failed: {}", e);
+                Ok(false)
+            }
+        }
+    }
+
+    pub async fn test_connection(&self) -> ConnectionResult<bool> {
+        self.ping().await
+    }
+}
+
+impl RedisConnectionHandler for RedisClient {
+    fn acquire_connection(&self) -> ConnectionResult<std::sync::MutexGuard<Connection>> {
+        match self.connection.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poisoned) => {
+                warn!("Mutex was poisoned, recovering connection");
+                Ok(poisoned.into_inner())
+            }
+        }
+    }
+}
+
+/// Legacy Redis pool implementation (kept for compatibility)
+pub struct RedisPool {
+    clients: Vec<Arc<RedisClient>>,
+    current_index: std::sync::atomic::AtomicUsize,
+}
+
+impl RedisPool {
+    pub fn new(redis_url: &str, pool_size: usize) -> RedisResult<Self> {
+        let mut clients = Vec::new();
+
+        for _ in 0..pool_size {
+            clients.push(Arc::new(RedisClient::from_url(redis_url)?));
+        }
+
         Ok(Self {
-            client: Arc::new(client),
-            pool_size,
+            clients,
+            current_index: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
-    /// Get the pool size
-    pub fn pool_size(&self) -> u32 {
-        self.pool_size
+    pub fn get_client(&self) -> Arc<RedisClient> {
+        let index = self
+            .current_index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.clients.len();
+        self.clients[index].clone()
     }
 
-    /// Get the raw Redis client
-    pub fn client(&self) -> &Arc<Client> {
-        &self.client
-    }
-
-    /// Get a synchronous connection from the pool
-    pub fn get_connection(&self) -> RedisResult<Connection> {
-        self.client.get_connection()
-    }
-
-    /// Get an asynchronous connection from the pool
-    #[cfg(feature = "async")]
-    pub async fn get_async_connection(&self) -> RedisResult<redis::aio::Connection> {
-        self.client.get_async_connection().await
-    }
-}
-
-#[cfg(feature = "connection-pool")]
-impl Clone for RedisPool {
-    fn clone(&self) -> Self {
-        Self {
-            client: self.client.clone(),
-            pool_size: self.pool_size,
-        }
+    pub async fn health_check(&self) -> ConnectionResult<bool> {
+        let client = self.get_client();
+        client.ping().await
     }
 }
 
