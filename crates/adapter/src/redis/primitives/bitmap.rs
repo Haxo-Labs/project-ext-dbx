@@ -750,9 +750,6 @@ mod tests {
         let _script = RedisBitmap::create_script("return redis.call('BITCOUNT', KEYS[1])");
         let setbit_script = RedisBitmap::setbit_and_get_previous_script();
 
-        // Test pipeline integration with scripts
-        let mut pipe = redis::pipe();
-        RedisBitmap::add_script_to_pipeline(&mut pipe, &setbit_script, &["bitmap1"], &["0", "1"]);
     }
 
     #[test]
@@ -826,14 +823,7 @@ mod examples {
                 .arg(3600)
         });
 
-        // Example 3: Using scripts in pipelines
-        let _: Result<(bool, u64), redis::RedisError> = redis_bitmap.with_pipeline(|pipe| {
-            RedisBitmap::add_script_to_pipeline(pipe, &setbit_script, &["bitmap1"], &["0", "1"]);
-
-            pipe.cmd("BITCOUNT").arg("bitmap1")
-        });
-
-        // Example 4: Batch operations
+        // Example 3: Batch operations
         let _ = redis_bitmap.setbit_many("batch:bitmap", vec![(0, true), (1, false), (2, true)]);
         let _ = redis_bitmap.getbit_many("batch:bitmap", vec![0, 1, 2]);
     }

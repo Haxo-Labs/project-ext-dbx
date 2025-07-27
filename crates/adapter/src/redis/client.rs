@@ -5,7 +5,6 @@
 
 use crate::error::{AdapterError, ConnectionError};
 use deadpool_redis::{Config, Pool, Runtime};
-use redis::RedisResult;
 
 /// Result type for connection operations
 pub type ConnectionResult<T> = Result<T, AdapterError>;

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use chrono::Utc;
 use futures::TryFutureExt;
-use serde_json::{Map, Value as JsonValue};
+use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, warn};
