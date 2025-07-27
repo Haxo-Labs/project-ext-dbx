@@ -1,7 +1,7 @@
 use crate::models::{ApiKey, ApiKeyContext, ApiKeyUsageStats, CreateApiKeyRequest, UserRole};
 use chrono::{Duration, Utc};
 use dbx_core::{DataOperation, DataValue, UniversalBackend};
-use rand::{thread_rng, Rng};
+use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -46,12 +46,17 @@ impl ApiKeyService {
 
     /// Generate a secure API key
     pub fn generate_api_key() -> Result<(String, String), ApiKeyError> {
-        // Generate a secure random key (64 characters: prefix + separator + random)
+        // Generate a secure random key using cryptographically secure RNG
         let prefix = "dbx";
         let separator = "_";
 
-        // Generate 32 bytes of random data and encode as hex (64 characters)
-        let random_bytes: Vec<u8> = (0..32).map(|_| thread_rng().gen()).collect();
+        // Generate 32 bytes of secure random data
+        let rng = SystemRandom::new();
+        let mut random_bytes = [0u8; 32];
+        rng.fill(&mut random_bytes)
+            .map_err(|_| ApiKeyError::KeyGenerationFailed)?;
+
+        // Encode as hex (64 characters)
         let random_part: String = random_bytes.iter().map(|b| format!("{:02x}", b)).collect();
 
         let full_key = format!("{}{}{}", prefix, separator, random_part);
@@ -64,11 +69,38 @@ impl ApiKeyService {
         Ok((full_key, key_prefix))
     }
 
-    /// Hash an API key for secure storage
+    /// Hash an API key for secure storage using SHA-256
     pub fn hash_api_key(key: &str) -> Result<String, ApiKeyError> {
         let mut hasher = Sha256::new();
         hasher.update(key.as_bytes());
         let result = hasher.finalize();
+        Ok(format!("{:x}", result))
+    }
+
+    /// Generate a cryptographically secure salt for key derivation
+    pub fn generate_salt() -> Result<[u8; 32], ApiKeyError> {
+        let rng = SystemRandom::new();
+        let mut salt = [0u8; 32];
+        rng.fill(&mut salt)
+            .map_err(|_| ApiKeyError::KeyGenerationFailed)?;
+        Ok(salt)
+    }
+
+    /// Create a key derivation hash
+    pub fn derive_key_hash(key: &str, salt: &[u8]) -> Result<String, ApiKeyError> {
+        let mut hasher = Sha256::new();
+        hasher.update(key.as_bytes());
+        hasher.update(salt);
+
+        // Multiple rounds for key stretching
+        let mut result = hasher.finalize();
+        for _ in 0..10000 {
+            let mut hasher = Sha256::new();
+            hasher.update(&result);
+            hasher.update(salt);
+            result = hasher.finalize();
+        }
+
         Ok(format!("{:x}", result))
     }
 
