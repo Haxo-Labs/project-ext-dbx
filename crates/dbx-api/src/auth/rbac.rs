@@ -842,7 +842,7 @@ impl RbacService {
     async fn add_to_redis_set(&self, key: &str, member: &str) -> Result<(), RbacError> {
         use dbx_core::{DataOperation, DataValue};
 
-        // Simulate set operations using JSON array
+        // Handle set operations using JSON array
         let mut members = self.get_redis_set_members(key).await?;
         if !members.contains(&member.to_string()) {
             members.push(member.to_string());
