@@ -28,7 +28,7 @@ impl RedisConnectionHandler for RedisHash {
     }
 }
 
-/// Core implementation with basic hash operations
+/// Core implementation with hash operations
 impl RedisHash {
     /// Creates a new RedisHash instance with the provided connection
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {

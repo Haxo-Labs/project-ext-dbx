@@ -9,7 +9,7 @@ use crate::redis::RedisConnectionHandler;
 /// The Redis crate doesn't expose script content after creation,
 /// so we store commonly used scripts as constants for reference.
 mod script_constants {
-    /// Simple ping script for testing script execution
+    /// Ping script for testing script execution
     pub const PING_SCRIPT: &str = "return redis.call('PING')";
 }
 
@@ -47,7 +47,7 @@ impl RedisConnectionHandler for RedisBitmap {
     }
 }
 
-/// Core implementation with basic bitmap operations
+/// Core implementation with bitmap operations
 impl RedisBitmap {
     /// Creates a new RedisBitmap instance with the provided connection
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {

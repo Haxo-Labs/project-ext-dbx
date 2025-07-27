@@ -1,7 +1,7 @@
 //! Redis primitive data type adapters
 //!
 //! This module provides implementations for Redis primitive data types:
-//! - String: Simple string values, numbers, and binary data
+//! - String: String values, numbers, and binary data
 //! - List: Lists of strings
 //! - Hash: Hash maps of string field-value pairs
 //! - Set: Unordered collections of unique strings

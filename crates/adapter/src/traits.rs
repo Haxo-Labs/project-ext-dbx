@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 
-/// Basic database operations that should be supported by all adapters
+/// Database operations that should be supported by all adapters
 pub trait DatabaseAdapter: Send + Sync {
     /// The error type returned by this adapter
     type Error: std::error::Error + Send + Sync;

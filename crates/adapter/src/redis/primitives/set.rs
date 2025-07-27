@@ -7,7 +7,7 @@ use tracing::error;
 /// The Redis crate doesn't expose script content after creation,
 /// so we store commonly used scripts as constants for reference.
 mod script_constants {
-    /// Simple ping script for testing script execution
+    /// Ping script for testing script execution
     pub const PING_SCRIPT: &str = "return redis.call('PING')";
 }
 
@@ -41,7 +41,7 @@ impl RedisConnectionHandler for RedisSet {
     }
 }
 
-/// Core implementation with basic set operations
+/// Core implementation with set operations
 impl RedisSet {
     /// Creates a new RedisSet instance with the provided connection
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
@@ -675,7 +675,7 @@ mod tests {
         let mut pipe = redis::pipe();
         _redis_set.add_script_to_pipeline(
             &mut pipe,
-            script_constants::ADD_SCRIPT,
+            script_constants::PING_SCRIPT,
             vec!["set1"],
             vec!["new_member"],
         );
@@ -752,7 +752,7 @@ mod examples {
         let _: Result<(usize, Vec<String>), redis::RedisError> = redis_set.with_pipeline(|pipe| {
             redis_set.add_script_to_pipeline(
                 pipe,
-                script_constants::ADD_SCRIPT,
+                script_constants::PING_SCRIPT,
                 vec!["set1"],
                 vec!["new_member"],
             );

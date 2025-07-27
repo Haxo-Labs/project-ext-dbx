@@ -244,7 +244,7 @@ impl RedisBackend {
                 DataOperation::Get { key, fields } => {
                     if let Some(fields) = fields {
                         if fields.is_empty() {
-                            // Simple key-value get
+                            // Key-value get operation
                             let redis_string = self.client.string();
                             let value = redis_string.get(key).map_err(|e| {
                                 DbxError::backend(
@@ -583,7 +583,7 @@ impl UniversalBackend for RedisBackend {
             "Executing query operation"
         );
 
-        // Redis supports basic pattern matching queries
+        // Redis supports pattern matching queries
         let start_time = std::time::Instant::now();
 
         match &operation.filter {
@@ -852,7 +852,7 @@ impl UniversalBackend for RedisBackend {
                 )
             })?;
 
-        // Parse basic stats from INFO output
+        // Parse stats from INFO output
         let mut total_commands = 0;
         let mut rejected_connections = 0;
         let mut used_memory = 0;

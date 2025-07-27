@@ -7,7 +7,7 @@ use tracing::error;
 /// The Redis crate doesn't expose script content after creation,
 /// so we store commonly used scripts as constants for reference.
 mod script_constants {
-    /// Simple ping script for testing script execution
+    /// Ping script for testing script execution
     pub const PING_SCRIPT: &str = "return redis.call('PING')";
 }
 
@@ -41,7 +41,7 @@ impl RedisConnectionHandler for RedisSortedSet {
     }
 }
 
-/// Core implementation with basic sorted set operations
+/// Core implementation with sorted set operations
 impl RedisSortedSet {
     /// Creates a new RedisSortedSet instance with the provided connection
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
@@ -542,7 +542,7 @@ impl RedisSortedSet {
         K: ToRedisArgs,
         A: ToRedisArgs,
     {
-        // For testing purposes, we add a simple command to the pipeline
+        // For testing purposes, we add a command to the pipeline
         // In production, scripts would be managed separately from pipelines
         // or use direct script.invoke() calls rather than pipeline integration
         pipe.cmd("EVAL")

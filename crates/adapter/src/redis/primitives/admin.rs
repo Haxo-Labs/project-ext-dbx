@@ -295,7 +295,7 @@ impl AdminOperations {
     /// Returns a health check of the Redis server.
     ///
     /// Performs multiple checks including ping, database size,
-    /// and basic server information to ensure the Redis server is healthy.
+    /// and server information to ensure the Redis server is healthy.
     ///
     /// # Returns
     ///
@@ -410,7 +410,7 @@ impl AdminOperations {
 /// Health check information for the Redis server.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HealthCheck {
-    /// Whether the server is responding to basic commands
+    /// Whether the server is responding to commands
     pub is_healthy: bool,
     /// Response from the PING command
     pub ping_response: String,
@@ -674,7 +674,7 @@ mod tests {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
 
-        // Test basic async operations
+        // Test async operations
         let response = admin.ping().unwrap();
         assert!(response);
 
