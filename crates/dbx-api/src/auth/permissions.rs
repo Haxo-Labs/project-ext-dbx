@@ -485,6 +485,11 @@ impl Role {
         self
     }
 
+    /// Set inheritance from multiple parent roles
+    pub fn set_inheritance(&mut self, parent_roles: Vec<String>) {
+        self.inherits_from = parent_roles;
+    }
+
     /// Compute effective permissions including inheritance
     pub fn effective_permissions(&self, role_registry: &RoleRegistry) -> Permission {
         let mut effective = self.permissions.clone();
@@ -899,14 +904,14 @@ mod tests {
             Permission::single(PermissionType::StringGet),
         );
 
-        let intermediate_role = Role::new(
+        let mut intermediate_role = Role::new(
             "intermediate".to_string(),
             "Intermediate role".to_string(),
             Permission::single(PermissionType::StringSet),
         );
         intermediate_role.set_inheritance(vec!["base".to_string()]);
 
-        let manager_role = Role::new(
+        let mut manager_role = Role::new(
             "manager".to_string(),
             "Manager role".to_string(),
             Permission::single(PermissionType::HashGet),

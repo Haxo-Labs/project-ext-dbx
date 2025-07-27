@@ -1171,10 +1171,10 @@ impl RateLimitService {
         Ok(())
     }
 
-        /// Increment rate limited requests counter
+    /// Increment rate limited requests counter
     pub async fn increment_rate_limited_requests(&self) -> Result<(), String> {
         let key = "rate_limit:metrics:rate_limited_requests";
-        
+
         // Try to increment, if key doesn't exist, set to 1
         let get_op = dbx_core::DataOperation::Get {
             key: key.to_string(),
@@ -1772,7 +1772,7 @@ mod tests {
         let special_endpoint = format!("/api/special_{}", test_prefix);
         let user_id = format!("user1_{}", test_prefix);
 
-        rate_limit_service
+        service
             .set_endpoint_policy(
                 &special_endpoint,
                 RateLimitPolicy {
@@ -2009,8 +2009,12 @@ mod tests {
         );
 
         // Cleanup
+        let cleanup_key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
         let _ = redis_pool
-            .execute_data(DataOperation::Delete { key, fields: None })
+            .execute_data(DataOperation::Delete {
+                key: cleanup_key,
+                fields: None,
+            })
             .await;
     }
 

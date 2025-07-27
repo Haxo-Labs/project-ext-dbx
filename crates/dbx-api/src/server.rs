@@ -344,8 +344,8 @@ mod tests {
     use crate::config::JwtConfig;
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
+    use axum::ServiceExt;
     use std::sync::Arc;
-    use tower::ServiceExt;
 
     /// Helper function to set up required environment variables for tests
     fn setup_test_env() {

@@ -941,10 +941,27 @@ mod tests {
     fn create_test_redis_pool() -> Arc<dyn UniversalBackend> {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
-        let client = dbx_adapter::redis::client::RedisClient::from_url(&redis_url).unwrap();
-        let backend =
-            dbx_adapter::redis::backend::RedisBackend::new(client, "test_backend".to_string());
-        Arc::new(backend)
+
+        use dbx_adapter::redis::factory::RedisBackendFactory;
+        use dbx_config::BackendConfig;
+        use dbx_router::registry::BackendFactory;
+
+        let config = BackendConfig {
+            provider: "redis".to_string(),
+            url: redis_url,
+            pool_size: Some(1),
+            timeout_ms: Some(5000),
+            retry_attempts: Some(3),
+            retry_delay_ms: Some(1000),
+            capabilities: None,
+            additional_config: std::collections::HashMap::new(),
+        };
+
+        let factory = RedisBackendFactory::new();
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(factory.create_backend("test_backend", &config))
+            .unwrap()
     }
 
     #[tokio::test]
