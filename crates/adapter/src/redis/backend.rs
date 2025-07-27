@@ -2,6 +2,7 @@ use crate::redis::client::RedisConnectionPool;
 use async_trait::async_trait;
 use base64::Engine;
 use chrono::Utc;
+use futures::TryFutureExt;
 use serde_json::{Map, Value as JsonValue};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -109,7 +110,9 @@ impl RedisBackend {
                     .iter()
                     .map(|(k, v)| Ok((k.clone(), self.data_value_to_json(v)?)))
                     .collect::<Result<HashMap<String, serde_json::Value>, DbxError>>()?;
-                serde_json::to_string(&serde_json::Value::Object(json_obj)).map_err(|e| {
+                let json_map: serde_json::Map<String, serde_json::Value> =
+                    json_obj.into_iter().collect();
+                serde_json::to_string(&serde_json::Value::Object(json_map)).map_err(|e| {
                     DbxError::serialization(format!("Failed to serialize object: {}", e))
                 })
             }
@@ -140,7 +143,9 @@ impl RedisBackend {
                     .iter()
                     .map(|(k, v)| Ok((k.clone(), self.data_value_to_json(v)?)))
                     .collect();
-                Ok(serde_json::Value::Object(json_obj?))
+                let json_map: serde_json::Map<String, serde_json::Value> =
+                    json_obj?.into_iter().collect();
+                Ok(serde_json::Value::Object(json_map))
             }
         }
     }
@@ -182,19 +187,23 @@ impl RedisBackend {
     }
 
     /// Get the Redis data type of a key
-    fn get_redis_type(&self, key: &str) -> Result<String, DbxError> {
-        let mut conn = self.pool.acquire_connection().map_err(|e| {
+    async fn get_redis_type(&self, key: &str) -> Result<String, DbxError> {
+        let mut conn = self.pool.acquire_connection().await.map_err(|e| {
             DbxError::backend(
                 self.backend_name.clone(),
                 format!("Failed to acquire lock: {}", e),
             )
         })?;
-        let key_type: String = redis::cmd("TYPE").arg(key).query(&mut *conn).map_err(|e| {
-            DbxError::backend(
-                self.backend_name.clone(),
-                format!("Failed to get key type: {}", e),
-            )
-        })?;
+        let key_type: String = redis::cmd("TYPE")
+            .arg(key)
+            .query_async(&mut *conn)
+            .await
+            .map_err(|e| {
+                DbxError::backend(
+                    self.backend_name.clone(),
+                    format!("Failed to get key type: {}", e),
+                )
+            })?;
         Ok(key_type)
     }
 
@@ -248,16 +257,26 @@ impl RedisBackend {
                     if let Some(fields) = fields {
                         if fields.is_empty() {
                             // Key-value get operation
-                            let value = self.pool.get(key).map_err(|e| {
+                            let mut conn = self.pool.get().await.map_err(|e| {
                                 DbxError::backend(
                                     self.backend_name.clone(),
-                                    format!("Get failed: {}", e),
+                                    format!("Failed to get connection: {}", e),
                                 )
                             })?;
+                            let value: Option<String> = redis::cmd("GET")
+                                .arg(key)
+                                .query_async(&mut *conn)
+                                .await
+                                .map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("Get failed: {}", e),
+                                    )
+                                })?;
                             self.redis_value_to_data_value(value)
                         } else {
                             // Hash field get
-                            let mut conn = self.pool.acquire_connection().map_err(|e| {
+                            let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                                 DbxError::backend(
                                     self.backend_name.clone(),
                                     format!("Failed to acquire lock: {}", e),
@@ -268,7 +287,8 @@ impl RedisBackend {
                                 let value = redis::cmd("HGET")
                                     .arg(key)
                                     .arg(field)
-                                    .query(&mut *conn)
+                                    .query_async(&mut *conn)
+                                    .await
                                     .map_err(|e| {
                                         DbxError::backend(
                                             self.backend_name.clone(),
@@ -282,19 +302,21 @@ impl RedisBackend {
                         }
                     } else {
                         // No fields specified - detect data type and handle accordingly
-                        let data_type = self.get_redis_type(key)?;
+                        let data_type = self.get_redis_type(key).await?;
                         match data_type.as_str() {
                             "hash" => {
                                 // Get all hash fields
-                                let mut conn = self.pool.acquire_connection().map_err(|e| {
-                                    DbxError::backend(
-                                        self.backend_name.clone(),
-                                        format!("Failed to acquire lock: {}", e),
-                                    )
-                                })?;
+                                let mut conn =
+                                    self.pool.acquire_connection().await.map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("Failed to acquire lock: {}", e),
+                                        )
+                                    })?;
                                 let hash_data: HashMap<String, String> = redis::cmd("HGETALL")
                                     .arg(key)
-                                    .query(&mut *conn)
+                                    .query_async(&mut *conn)
+                                    .await
                                     .map_err(|e| {
                                         DbxError::backend(
                                             self.backend_name.clone(),
@@ -313,27 +335,39 @@ impl RedisBackend {
                             }
                             "string" => {
                                 // Get string value
-                                let value = self.pool.get(key).map_err(|e| {
+                                let mut conn = self.pool.get().await.map_err(|e| {
                                     DbxError::backend(
                                         self.backend_name.clone(),
-                                        format!("Get failed: {}", e),
+                                        format!("Failed to get connection: {}", e),
                                     )
                                 })?;
+                                let value: Option<String> = redis::cmd("GET")
+                                    .arg(key)
+                                    .query_async(&mut *conn)
+                                    .await
+                                    .map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("Get failed: {}", e),
+                                        )
+                                    })?;
                                 self.redis_value_to_data_value(value)
                             }
                             "list" => {
                                 // Get list values
-                                let mut conn = self.pool.acquire_connection().map_err(|e| {
-                                    DbxError::backend(
-                                        self.backend_name.clone(),
-                                        format!("Failed to acquire lock: {}", e),
-                                    )
-                                })?;
+                                let mut conn =
+                                    self.pool.acquire_connection().await.map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("Failed to acquire lock: {}", e),
+                                        )
+                                    })?;
                                 let list_data: Vec<String> = redis::cmd("LRANGE")
                                     .arg(key)
                                     .arg(0)
                                     .arg(-1)
-                                    .query(&mut *conn)
+                                    .query_async(&mut *conn)
+                                    .await
                                     .map_err(|e| {
                                         DbxError::backend(
                                             self.backend_name.clone(),
@@ -349,15 +383,17 @@ impl RedisBackend {
                             }
                             "set" => {
                                 // Get set members
-                                let mut conn = self.pool.acquire_connection().map_err(|e| {
-                                    DbxError::backend(
-                                        self.backend_name.clone(),
-                                        format!("Failed to acquire lock: {}", e),
-                                    )
-                                })?;
+                                let mut conn =
+                                    self.pool.acquire_connection().await.map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("Failed to acquire lock: {}", e),
+                                        )
+                                    })?;
                                 let set_data: Vec<String> = redis::cmd("SMEMBERS")
                                     .arg(key)
-                                    .query(&mut *conn)
+                                    .query_async(&mut *conn)
+                                    .await
                                     .map_err(|e| {
                                         DbxError::backend(
                                             self.backend_name.clone(),
@@ -377,12 +413,22 @@ impl RedisBackend {
                             }
                             _ => {
                                 // Unsupported type, try string as fallback
-                                let value = self.pool.get(key).map_err(|e| {
+                                let mut conn = self.pool.get().await.map_err(|e| {
                                     DbxError::backend(
                                         self.backend_name.clone(),
-                                        format!("Get failed: {}", e),
+                                        format!("Failed to get connection: {}", e),
                                     )
                                 })?;
+                                let value: Option<String> = redis::cmd("GET")
+                                    .arg(key)
+                                    .query_async(&mut *conn)
+                                    .await
+                                    .map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("Get failed: {}", e),
+                                        )
+                                    })?;
                                 self.redis_value_to_data_value(value)
                             }
                         }
@@ -391,7 +437,7 @@ impl RedisBackend {
 
                 DataOperation::Set { key, value, ttl } => {
                     let redis_value = self.data_value_to_redis_value(value)?;
-                    let mut conn = self.pool.acquire_connection().map_err(|e| {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
                             format!("Failed to acquire lock: {}", e),
@@ -403,7 +449,8 @@ impl RedisBackend {
                             .arg(key)
                             .arg(ttl_secs.to_string())
                             .arg(redis_value)
-                            .query(&mut *conn)
+                            .query_async(&mut *conn)
+                            .await
                             .map_err(|e| {
                                 DbxError::backend(
                                     self.backend_name.clone(),
@@ -414,7 +461,8 @@ impl RedisBackend {
                         redis::cmd("SET")
                             .arg(key)
                             .arg(redis_value)
-                            .query(&mut *conn)
+                            .query_async(&mut *conn)
+                            .await
                             .map_err(|e| {
                                 DbxError::backend(
                                     self.backend_name.clone(),
@@ -427,7 +475,7 @@ impl RedisBackend {
                 }
 
                 DataOperation::Update { key, fields, ttl } => {
-                    let mut conn = self.pool.acquire_connection().map_err(|e| {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
                             format!("Failed to acquire lock: {}", e),
@@ -440,7 +488,8 @@ impl RedisBackend {
                             .arg(key)
                             .arg(field)
                             .arg(redis_value)
-                            .query(&mut *conn)
+                            .query_async(&mut *conn)
+                            .await
                             .map_err(|e| {
                                 DbxError::backend(
                                     self.backend_name.clone(),
@@ -453,7 +502,8 @@ impl RedisBackend {
                         redis::cmd("EXPIRE")
                             .arg(key)
                             .arg(ttl_secs.to_string())
-                            .query(&mut *conn)
+                            .query_async(&mut *conn)
+                            .await
                             .map_err(|e| {
                                 DbxError::backend(
                                     self.backend_name.clone(),
@@ -466,29 +516,38 @@ impl RedisBackend {
                 }
 
                 DataOperation::Delete { key, fields } => {
-                    let mut conn = self.pool.acquire_connection().map_err(|e| {
-                        DbxError::backend(
-                            self.backend_name.clone(),
-                            format!("Failed to acquire lock: {}", e),
-                        )
-                    })?;
+                    let mut conn = self
+                        .pool
+                        .acquire_connection()
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Failed to acquire lock: {}", e),
+                            )
+                        })
+                        .await?;
 
                     if let Some(fields) = fields {
                         if fields.is_empty() {
                             // Delete entire key
-                            redis::cmd("DEL").arg(key).query(&mut *conn).map_err(|e| {
-                                DbxError::backend(
-                                    self.backend_name.clone(),
-                                    format!("Delete failed: {}", e),
-                                )
-                            })?;
+                            redis::cmd("DEL")
+                                .arg(key)
+                                .query_async(&mut *conn)
+                                .await
+                                .map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("Delete failed: {}", e),
+                                    )
+                                })?;
                         } else {
                             // Delete hash fields
                             let field_refs: Vec<&str> = fields.iter().map(|s| s.as_str()).collect();
                             redis::cmd("HDEL")
                                 .arg(key)
                                 .arg(&field_refs)
-                                .query(&mut *conn)
+                                .query_async(&mut *conn)
+                                .await
                                 .map_err(|e| {
                                     DbxError::backend(
                                         self.backend_name.clone(),
@@ -498,18 +557,22 @@ impl RedisBackend {
                         }
                     } else {
                         // Delete entire key (no fields specified)
-                        redis::cmd("DEL").arg(key).query(&mut *conn).map_err(|e| {
-                            DbxError::backend(
-                                self.backend_name.clone(),
-                                format!("Delete failed: {}", e),
-                            )
-                        })?;
+                        redis::cmd("DEL")
+                            .arg(key)
+                            .query_async(&mut *conn)
+                            .await
+                            .map_err(|e| {
+                                DbxError::backend(
+                                    self.backend_name.clone(),
+                                    format!("Delete failed: {}", e),
+                                )
+                            })?;
                     }
                     Ok(DataValue::Bool(true))
                 }
 
                 DataOperation::Exists { key, fields } => {
-                    let mut conn = self.pool.acquire_connection().map_err(|e| {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
                             format!("Failed to acquire lock: {}", e),
@@ -519,25 +582,26 @@ impl RedisBackend {
                     if let Some(fields) = fields {
                         if fields.is_empty() {
                             // Check if key exists
-                            let exists =
-                                redis::cmd("EXISTS")
-                                    .arg(key)
-                                    .query(&mut *conn)
-                                    .map_err(|e| {
-                                        DbxError::backend(
-                                            self.backend_name.clone(),
-                                            format!("Exists check failed: {}", e),
-                                        )
-                                    })?;
+                            let exists: i32 = redis::cmd("EXISTS")
+                                .arg(key)
+                                .query_async(&mut *conn)
+                                .await
+                                .map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("Exists check failed: {}", e),
+                                    )
+                                })?;
                             Ok(DataValue::Bool(exists > 0))
                         } else {
                             // Check if hash fields exist
                             let mut result = HashMap::new();
                             for field in fields {
-                                let exists = redis::cmd("HEXISTS")
+                                let exists: i32 = redis::cmd("HEXISTS")
                                     .arg(key)
                                     .arg(field)
-                                    .query(&mut *conn)
+                                    .query_async(&mut *conn)
+                                    .await
                                     .map_err(|e| {
                                         DbxError::backend(
                                             self.backend_name.clone(),
@@ -550,31 +614,32 @@ impl RedisBackend {
                         }
                     } else {
                         // Check if key exists (no fields specified)
-                        let exists =
-                            redis::cmd("EXISTS")
-                                .arg(key)
-                                .query(&mut *conn)
-                                .map_err(|e| {
-                                    DbxError::backend(
-                                        self.backend_name.clone(),
-                                        format!("Exists check failed: {}", e),
-                                    )
-                                })?;
+                        let exists: i32 = redis::cmd("EXISTS")
+                            .arg(key)
+                            .query_async(&mut *conn)
+                            .await
+                            .map_err(|e| {
+                                DbxError::backend(
+                                    self.backend_name.clone(),
+                                    format!("Exists check failed: {}", e),
+                                )
+                            })?;
                         Ok(DataValue::Bool(exists > 0))
                     }
                 }
 
                 DataOperation::SetTtl { key, ttl } => {
-                    let mut conn = self.pool.acquire_connection().map_err(|e| {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
                             format!("Failed to acquire lock: {}", e),
                         )
                     })?;
-                    let success = redis::cmd("EXPIRE")
+                    let success: i32 = redis::cmd("EXPIRE")
                         .arg(key)
                         .arg(ttl.to_string())
-                        .query(&mut *conn)
+                        .query_async(&mut *conn)
+                        .await
                         .map_err(|e| {
                             DbxError::backend(
                                 self.backend_name.clone(),
@@ -585,18 +650,22 @@ impl RedisBackend {
                 }
 
                 DataOperation::GetTtl { key } => {
-                    let mut conn = self.pool.acquire_connection().map_err(|e| {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
                             format!("Failed to acquire lock: {}", e),
                         )
                     })?;
-                    let ttl = redis::cmd("TTL").arg(key).query(&mut *conn).map_err(|e| {
-                        DbxError::backend(
-                            self.backend_name.clone(),
-                            format!("Get TTL failed: {}", e),
-                        )
-                    })?;
+                    let ttl = redis::cmd("TTL")
+                        .arg(key)
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Get TTL failed: {}", e),
+                            )
+                        })?;
                     Ok(DataValue::Int(ttl))
                 }
 
@@ -621,7 +690,7 @@ impl UniversalBackend for RedisBackend {
     }
 
     fn capabilities(&self) -> BackendCapabilities {
-        self.capabilities
+        self.capabilities.clone()
     }
 
     async fn execute_data(&self, operation: DataOperation) -> Result<DataResult, DbxError> {
@@ -662,7 +731,7 @@ impl UniversalBackend for RedisBackend {
 
         match &operation.filter {
             dbx_core::QueryFilter::KeyPattern { pattern } => {
-                let keys = self.pool.keys(pattern).map_err(|e| {
+                let keys = self.pool.keys(pattern).await.map_err(|e| {
                     DbxError::backend(
                         self.backend_name.clone(),
                         format!("Key pattern scan failed: {}", e),
@@ -678,12 +747,22 @@ impl UniversalBackend for RedisBackend {
                 let mut results = Vec::new();
                 for key in limited_keys {
                     // Get the value for each key
-                    let value = self.pool.get(&key).map_err(|e| {
+                    let mut conn = self.pool.get().await.map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
-                            format!("Get key value failed: {}", e),
+                            format!("Failed to get connection: {}", e),
                         )
                     })?;
+                    let value: Option<String> = redis::cmd("GET")
+                        .arg(&key)
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Get key value failed: {}", e),
+                            )
+                        })?;
 
                     let data_value = self.redis_value_to_data_value(value)?;
                     results.push(QueryResultItem {
@@ -721,7 +800,7 @@ impl UniversalBackend for RedisBackend {
 
         match operation {
             StreamOperation::Publish { channel, message } => {
-                let mut conn = self.pool.acquire_connection().map_err(|e| {
+                let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                     DbxError::backend(
                         self.backend_name.clone(),
                         format!("Connection failed: {}", e),
@@ -732,7 +811,8 @@ impl UniversalBackend for RedisBackend {
                 let _subscribers: i64 = redis::cmd("PUBLISH")
                     .arg(&channel)
                     .arg(serialized_message)
-                    .query(&mut *conn)
+                    .query_async(&mut *conn)
+                    .await
                     .map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
@@ -757,7 +837,7 @@ impl UniversalBackend for RedisBackend {
             }),
 
             StreamOperation::CreateStream { name, config: _ } => {
-                let mut conn = self.pool.acquire_connection().map_err(|e| {
+                let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                     DbxError::backend(
                         self.backend_name.clone(),
                         format!("Connection failed: {}", e),
@@ -769,7 +849,8 @@ impl UniversalBackend for RedisBackend {
                     .arg("*")
                     .arg("__init__")
                     .arg("true")
-                    .query(&mut *conn)
+                    .query_async(&mut *conn)
+                    .await
                     .map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
@@ -784,7 +865,7 @@ impl UniversalBackend for RedisBackend {
             }
 
             StreamOperation::StreamAdd { stream, fields } => {
-                let mut conn = self.pool.acquire_connection().map_err(|e| {
+                let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                     DbxError::backend(
                         self.backend_name.clone(),
                         format!("Connection failed: {}", e),
@@ -799,7 +880,7 @@ impl UniversalBackend for RedisBackend {
                     cmd.arg(field).arg(serialized_value);
                 }
 
-                let entry_id: String = cmd.query(&mut *conn).map_err(|e| {
+                let entry_id: String = cmd.query_async(&mut *conn).await.map_err(|e| {
                     DbxError::backend(
                         self.backend_name.clone(),
                         format!("Stream add failed: {}", e),
@@ -813,7 +894,7 @@ impl UniversalBackend for RedisBackend {
             }
 
             StreamOperation::StreamRead { stream, count, .. } => {
-                let mut conn = self.pool.acquire_connection().map_err(|e| {
+                let mut conn = self.pool.acquire_connection().await.map_err(|e| {
                     DbxError::backend(
                         self.backend_name.clone(),
                         format!("Connection failed: {}", e),
@@ -829,7 +910,8 @@ impl UniversalBackend for RedisBackend {
                     .arg("STREAMS")
                     .arg(&stream)
                     .arg("0")
-                    .query(&mut *conn)
+                    .query_async(&mut *conn)
+                    .await
                     .map_err(|e| {
                         DbxError::backend(
                             self.backend_name.clone(),
@@ -867,7 +949,7 @@ impl UniversalBackend for RedisBackend {
     async fn health_check(&self) -> Result<BackendHealth, DbxError> {
         let start_time = std::time::Instant::now();
 
-        match self.pool.ping() {
+        match self.pool.ping().await {
             Ok(true) => {
                 let response_time = start_time.elapsed();
                 Ok(BackendHealth {
@@ -907,7 +989,7 @@ impl UniversalBackend for RedisBackend {
     }
 
     async fn get_stats(&self) -> Result<BackendStats, DbxError> {
-        let mut conn = self.pool.acquire_connection().map_err(|e| {
+        let mut conn = self.pool.acquire_connection().await.map_err(|e| {
             DbxError::backend(
                 self.backend_name.clone(),
                 format!("Connection failed: {}", e),
@@ -917,7 +999,8 @@ impl UniversalBackend for RedisBackend {
         // Get Redis INFO
         let info: String = redis::cmd("INFO")
             .arg("stats")
-            .query(&mut *conn)
+            .query_async(&mut *conn)
+            .await
             .map_err(|e| {
                 DbxError::backend(
                     self.backend_name.clone(),
@@ -974,7 +1057,7 @@ impl UniversalBackend for RedisBackend {
     }
 
     async fn test_connection(&self) -> Result<(), DbxError> {
-        self.pool.ping().map_err(|e| {
+        self.pool.ping().await.map_err(|e| {
             DbxError::connection(
                 self.backend_name.clone(),
                 format!("Connection test failed: {}", e),

@@ -557,6 +557,7 @@ dependencies = [
  "dbx-router",
  "deadpool-redis",
  "dotenv",
+ "futures",
  "redis 0.24.0",
  "serde",
  "serde_json",

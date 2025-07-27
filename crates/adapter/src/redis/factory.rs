@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures::TryFutureExt;
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -43,12 +44,15 @@ impl BackendFactory for RedisBackendFactory {
         }
 
         // Create the Redis backend
-        let backend = RedisBackend::from_url(&config.url, name.to_string()).map_err(|e| {
-            RouterError::backend_initialization(
-                name.to_string(),
-                format!("Failed to create Redis backend: {}", e),
-            )
-        })?;
+        let pool_size = config.pool_size.unwrap_or(10) as usize;
+        let backend = RedisBackend::from_url(&config.url, name.to_string(), pool_size)
+            .await
+            .map_err(|e| {
+                RouterError::backend_initialization(
+                    name.to_string(),
+                    format!("Failed to create Redis backend: {}", e),
+                )
+            })?;
 
         info!(backend = %name, url = %config.url, "Redis backend created successfully");
 
