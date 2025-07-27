@@ -1,18 +1,17 @@
 //! Redis adapter module
 //!
-//! This module provides adapters for interacting with Redis,
-//! organized by Redis data type (string, list, hash, set, sorted set).
-//! It includes support for individual commands, pipelined operations,
-//! transactions, and Lua scripts.
+//! This module provides Redis database adapter implementation using deadpool-redis
+//! for high-performance async operations and connection pooling.
 
 pub mod backend;
 pub mod client;
 pub mod factory;
 pub mod primitives;
 
-// Re-export key types for convenience
+// Re-export key types
 pub use backend::RedisBackend;
-pub use factory::{create_redis_factory, RedisBackendFactory};
+pub use client::RedisConnectionPool as RedisPool; // Alias for compatibility
+pub use client::RedisConnectionPool;
 
 use redis::{Connection, RedisError, RedisResult, Script};
 use std::sync::MutexGuard;
