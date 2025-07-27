@@ -384,13 +384,19 @@ impl BitVectorRateLimiter {
         let request_count = self.count_requests_in_window(&bit_vector, window_start, now);
 
         let allowed = request_count < context.policy.requests;
-        let remaining = context.policy.requests.saturating_sub(request_count);
 
         // If allowed, record the request
         if allowed {
             self.record_request(&mut bit_vector, current_bucket).await?;
             self.store_bit_vector(&key, &bit_vector).await?;
         }
+
+        // Calculate remaining after considering current request
+        let remaining = if allowed {
+            context.policy.requests.saturating_sub(request_count + 1)
+        } else {
+            0
+        };
 
         // Calculate reset time
         let reset_time = DateTime::from_timestamp(
@@ -664,8 +670,7 @@ impl BitVectorRateLimiter {
                 .as_ref()
                 .map(|counts| counts.len() * 2) // 2 bytes per u16
                 .unwrap_or(0);
-            let metadata_memory =
-                std::mem::size_of::<RateLimitBitVector>() - bits_memory - counts_memory;
+            let metadata_memory = std::mem::size_of::<RateLimitBitVector>();
 
             Ok(BitVectorMemoryStats {
                 total_bytes: bits_memory + counts_memory + metadata_memory,

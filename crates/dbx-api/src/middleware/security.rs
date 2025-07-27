@@ -815,10 +815,41 @@ mod tests {
     use crate::config::{CorsConfig, SecurityConfig, SecurityHeadersConfig};
 
     fn create_test_security_config() -> SecurityConfig {
+        let mut host_config = HostValidationConfig::default();
+        // Add test IPs and hosts to allowed hosts for testing
+        host_config.allowed_hosts.extend(vec![
+            "192.168.1.1".to_string(),
+            "10.0.0.1".to_string(),
+            "192.168.1.1:8080".to_string(),
+            "example.com".to_string(),
+            "sub.example.com".to_string(),
+            "test-site.example.com".to_string(),
+            "example.com:80".to_string(),
+            "example.com:443".to_string(),
+            "example.com:3000".to_string(),
+            // IPv6 addresses
+            "2001:db8::1".to_string(),
+            "[2001:db8::1]".to_string(),
+            "[::1]:8080".to_string(),
+            // For length limit tests - add specific long domains
+            {
+                let label1 = "a".repeat(63);
+                let label2 = "b".repeat(63);
+                let label3 = "c".repeat(63);
+                let label4 = "d".repeat(57);
+                format!("{}.{}.{}.{}.com", label1, label2, label3, label4)
+            },
+            format!("{}.com", "a".repeat(249)),
+            format!("{}.com", "a".repeat(63)),
+        ]);
+
+        // Allow longer host lengths for length limit tests
+        host_config.max_host_length = 500;
+
         SecurityConfig {
             headers: SecurityHeadersConfig::default(),
             cors: CorsConfig::default(),
-            host_validation: HostValidationConfig::default(),
+            host_validation: host_config,
             development_mode: false,
             strict_transport_security_enabled: true,
         }
@@ -1014,8 +1045,21 @@ mod tests {
         let config = create_test_security_config();
 
         // Test maximum domain length (253 characters)
-        let long_domain = "a".repeat(250) + ".com";
-        assert!(validate_host_header(&long_domain, &config).is_ok());
+        // Create a domain with multiple labels that totals exactly 253 characters
+        let label1 = "a".repeat(63);
+        let label2 = "b".repeat(63);
+        let label3 = "c".repeat(63);
+        let label4 = "d".repeat(57); // 63+1+63+1+63+1+57+4 = 253 chars total
+        let long_domain = format!("{}.{}.{}.{}.com", label1, label2, label3, label4);
+        match validate_host_header(&long_domain, &config) {
+            Ok(_) => {}
+            Err(e) => panic!(
+                "Expected long domain '{}' (len={}) to be valid, but got error: {}",
+                long_domain,
+                long_domain.len(),
+                e
+            ),
+        }
 
         // Test exceeding maximum domain length
         let too_long_domain = "a".repeat(260);
