@@ -20,8 +20,11 @@ use chrono::{Duration, Utc};
 use dbx_core::{DataOperation, DataValue};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::time::{Duration as StdDuration, Instant};
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tracing::error;
 use uuid::Uuid;
 
@@ -43,6 +46,267 @@ pub struct AuthResponse {
     pub user: UserInfo,
 }
 
+#[derive(Debug, Clone)]
+struct AuthAttempt {
+    timestamp: Instant,
+    ip_address: String,
+    username: Option<String>,
+    success: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AccountLockout {
+    locked_until: Instant,
+    attempt_count: u32,
+    lockout_duration: StdDuration,
+}
+
+impl AccountLockout {
+    fn new(attempt_count: u32) -> Self {
+        let lockout_duration = Self::calculate_lockout_duration(attempt_count);
+        Self {
+            locked_until: Instant::now() + lockout_duration,
+            attempt_count,
+            lockout_duration,
+        }
+    }
+
+    fn is_locked(&self) -> bool {
+        Instant::now() < self.locked_until
+    }
+
+    fn time_remaining(&self) -> StdDuration {
+        self.locked_until.saturating_duration_since(Instant::now())
+    }
+
+    fn calculate_lockout_duration(attempt_count: u32) -> StdDuration {
+        match attempt_count {
+            1..=3 => StdDuration::from_secs(0),      // No lockout
+            4..=5 => StdDuration::from_secs(60),     // 1 minute
+            6..=7 => StdDuration::from_secs(300),    // 5 minutes
+            8..=10 => StdDuration::from_secs(900),   // 15 minutes
+            11..=15 => StdDuration::from_secs(3600), // 1 hour
+            _ => StdDuration::from_secs(86400),      // 24 hours
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AuthRateLimiter {
+    // Track attempts by username
+    username_attempts: Arc<RwLock<HashMap<String, VecDeque<AuthAttempt>>>>,
+    // Track attempts by IP address
+    ip_attempts: Arc<RwLock<HashMap<String, VecDeque<AuthAttempt>>>>,
+    // Account lockouts
+    account_lockouts: Arc<RwLock<HashMap<String, AccountLockout>>>,
+    // IP lockouts
+    ip_lockouts: Arc<RwLock<HashMap<String, AccountLockout>>>,
+    // Configuration
+    max_attempts_per_username: u32,
+    max_attempts_per_ip: u32,
+    time_window_seconds: u64,
+}
+
+impl AuthRateLimiter {
+    pub fn new() -> Self {
+        Self {
+            username_attempts: Arc::new(RwLock::new(HashMap::new())),
+            ip_attempts: Arc::new(RwLock::new(HashMap::new())),
+            account_lockouts: Arc::new(RwLock::new(HashMap::new())),
+            ip_lockouts: Arc::new(RwLock::new(HashMap::new())),
+            max_attempts_per_username: 5, // 5 attempts per username
+            max_attempts_per_ip: 20,      // 20 attempts per IP
+            time_window_seconds: 900,     // 15 minute window
+        }
+    }
+
+    pub async fn check_rate_limit(
+        &self,
+        username: &str,
+        ip_address: &str,
+    ) -> Result<(), AuthError> {
+        // Check account lockout first
+        {
+            let lockouts = self.account_lockouts.read().await;
+            if let Some(lockout) = lockouts.get(username) {
+                if lockout.is_locked() {
+                    return Err(AuthError::AccountLocked(lockout.time_remaining()));
+                }
+            }
+        }
+
+        // Check IP lockout
+        {
+            let ip_lockouts = self.ip_lockouts.read().await;
+            if let Some(lockout) = ip_lockouts.get(ip_address) {
+                if lockout.is_locked() {
+                    return Err(AuthError::RateLimitExceeded);
+                }
+            }
+        }
+
+        // Check username attempt rate
+        {
+            let mut username_attempts = self.username_attempts.write().await;
+            let attempts = username_attempts
+                .entry(username.to_string())
+                .or_insert_with(VecDeque::new);
+
+            // Clean old attempts
+            let cutoff = Instant::now() - StdDuration::from_secs(self.time_window_seconds);
+            while let Some(front) = attempts.front() {
+                if front.timestamp < cutoff {
+                    attempts.pop_front();
+                } else {
+                    break;
+                }
+            }
+
+            if attempts.len() as u32 >= self.max_attempts_per_username {
+                // Create account lockout
+                let mut lockouts = self.account_lockouts.write().await;
+                let attempt_count = attempts.len() as u32;
+                lockouts.insert(username.to_string(), AccountLockout::new(attempt_count));
+                return Err(AuthError::RateLimitExceeded);
+            }
+        }
+
+        // Check IP attempt rate
+        {
+            let mut ip_attempts = self.ip_attempts.write().await;
+            let attempts = ip_attempts
+                .entry(ip_address.to_string())
+                .or_insert_with(VecDeque::new);
+
+            // Clean old attempts
+            let cutoff = Instant::now() - StdDuration::from_secs(self.time_window_seconds);
+            while let Some(front) = attempts.front() {
+                if front.timestamp < cutoff {
+                    attempts.pop_front();
+                } else {
+                    break;
+                }
+            }
+
+            if attempts.len() as u32 >= self.max_attempts_per_ip {
+                // Create IP lockout
+                let mut ip_lockouts = self.ip_lockouts.write().await;
+                let attempt_count = attempts.len() as u32;
+                ip_lockouts.insert(ip_address.to_string(), AccountLockout::new(attempt_count));
+                return Err(AuthError::RateLimitExceeded);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn record_attempt(&self, username: &str, ip_address: &str, success: bool) {
+        let attempt = AuthAttempt {
+            timestamp: Instant::now(),
+            ip_address: ip_address.to_string(),
+            username: Some(username.to_string()),
+            success,
+        };
+
+        // Record for username
+        {
+            let mut username_attempts = self.username_attempts.write().await;
+            let attempts = username_attempts
+                .entry(username.to_string())
+                .or_insert_with(VecDeque::new);
+            attempts.push_back(attempt.clone());
+        }
+
+        // Record for IP
+        {
+            let mut ip_attempts = self.ip_attempts.write().await;
+            let attempts = ip_attempts
+                .entry(ip_address.to_string())
+                .or_insert_with(VecDeque::new);
+            attempts.push_back(attempt);
+        }
+
+        // If successful, reset lockouts
+        if success {
+            self.account_lockouts.write().await.remove(username);
+            // Don't reset IP lockout on success since one successful auth doesn't mean IP is safe
+        }
+    }
+
+    pub async fn is_account_locked(&self, username: &str) -> Option<StdDuration> {
+        let lockouts = self.account_lockouts.read().await;
+        if let Some(lockout) = lockouts.get(username) {
+            if lockout.is_locked() {
+                Some(lockout.time_remaining())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub async fn unlock_account(&self, username: &str) -> Result<(), AuthError> {
+        self.account_lockouts.write().await.remove(username);
+        Ok(())
+    }
+
+    pub fn start_cleanup_task(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let limiter = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(600)); // Clean every 10 minutes
+            loop {
+                interval.tick().await;
+                limiter.cleanup_expired_data().await;
+            }
+        })
+    }
+
+    async fn cleanup_expired_data(&self) {
+        let cutoff = Instant::now() - StdDuration::from_secs(self.time_window_seconds * 2);
+
+        // Clean expired attempts
+        {
+            let mut username_attempts = self.username_attempts.write().await;
+            for attempts in username_attempts.values_mut() {
+                while let Some(front) = attempts.front() {
+                    if front.timestamp < cutoff {
+                        attempts.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            username_attempts.retain(|_, attempts| !attempts.is_empty());
+        }
+
+        {
+            let mut ip_attempts = self.ip_attempts.write().await;
+            for attempts in ip_attempts.values_mut() {
+                while let Some(front) = attempts.front() {
+                    if front.timestamp < cutoff {
+                        attempts.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            ip_attempts.retain(|_, attempts| !attempts.is_empty());
+        }
+
+        // Clean expired lockouts
+        {
+            let mut lockouts = self.account_lockouts.write().await;
+            lockouts.retain(|_, lockout| lockout.is_locked());
+        }
+
+        {
+            let mut ip_lockouts = self.ip_lockouts.write().await;
+            ip_lockouts.retain(|_, lockout| lockout.is_locked());
+        }
+    }
+}
+
 /// Authentication errors
 #[derive(Debug, Error)]
 pub enum AuthError {
@@ -60,6 +324,12 @@ pub enum AuthError {
     DatabaseError(String),
     #[error("Internal error: {0}")]
     InternalError(String),
+    #[error("Token revoked")]
+    TokenRevoked,
+    #[error("Rate limit exceeded")]
+    RateLimitExceeded,
+    #[error("Account locked for {0:?}")]
+    AccountLocked(StdDuration),
 }
 
 /// User store operations trait
@@ -275,17 +545,89 @@ impl UserStoreOperations for UserStore {
     }
 }
 
+#[derive(Debug, Clone)]
+struct TokenCacheEntry {
+    claims: Claims,
+    user: User,
+    cached_at: Instant,
+}
+
+impl TokenCacheEntry {
+    fn new(claims: Claims, user: User) -> Self {
+        Self {
+            claims,
+            user,
+            cached_at: Instant::now(),
+        }
+    }
+
+    fn is_expired(&self, cache_ttl_seconds: u64) -> bool {
+        self.cached_at.elapsed().as_secs() > cache_ttl_seconds
+    }
+}
+
 // JWT Authentication Middleware and Services
 
 #[derive(Clone)]
 pub struct JwtService {
     config: JwtConfig,
     user_store: Arc<UserStore>,
+    token_cache: Arc<RwLock<HashMap<String, TokenCacheEntry>>>,
+    blacklist: Arc<RwLock<HashSet<String>>>,
+    cache_ttl_seconds: u64,
 }
 
 impl JwtService {
     pub fn new(config: JwtConfig, user_store: Arc<UserStore>) -> Self {
-        Self { config, user_store }
+        Self {
+            config,
+            user_store,
+            token_cache: Arc::new(RwLock::new(HashMap::new())),
+            blacklist: Arc::new(RwLock::new(HashSet::new())),
+            cache_ttl_seconds: 300, // 5 minutes default cache TTL
+        }
+    }
+
+    pub fn with_cache_ttl(mut self, cache_ttl_seconds: u64) -> Self {
+        self.cache_ttl_seconds = cache_ttl_seconds;
+        self
+    }
+
+    pub async fn revoke_token(&self, token: &str) -> Result<(), AuthError> {
+        // Add token to blacklist
+        self.blacklist.write().await.insert(token.to_string());
+
+        // Remove from cache if present
+        self.token_cache.write().await.remove(token);
+
+        Ok(())
+    }
+
+    pub async fn is_token_blacklisted(&self, token: &str) -> bool {
+        self.blacklist.read().await.contains(token)
+    }
+
+    pub async fn clear_expired_cache_entries(&self) {
+        let mut cache = self.token_cache.write().await;
+        cache.retain(|_, entry| !entry.is_expired(self.cache_ttl_seconds));
+    }
+
+    pub fn start_cache_cleanup_task(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // Clean every 5 minutes
+            loop {
+                interval.tick().await;
+                service.clear_expired_cache_entries().await;
+
+                // Also clean blacklist periodically to prevent indefinite growth
+                let mut blacklist = service.blacklist.write().await;
+                if blacklist.len() > 10000 {
+                    // Keep only recent entries or implement proper TTL for blacklist
+                    blacklist.clear();
+                }
+            }
+        })
     }
 
     pub fn generate_token(&self, user: &User, token_type: TokenType) -> Result<String, AuthError> {
@@ -315,7 +657,40 @@ impl JwtService {
         .map_err(|e| AuthError::InternalError(format!("Token generation failed: {}", e)))
     }
 
-    pub fn validate_token(&self, token: &str) -> Result<Claims, AuthError> {
+    pub async fn validate_token(&self, token: &str) -> Result<Claims, AuthError> {
+        // Check blacklist first
+        if self.is_token_blacklisted(token).await {
+            return Err(AuthError::TokenRevoked);
+        }
+
+        // Check cache
+        {
+            let cache = self.token_cache.read().await;
+            if let Some(entry) = cache.get(token) {
+                if !entry.is_expired(self.cache_ttl_seconds) {
+                    return Ok(entry.claims.clone());
+                }
+            }
+        }
+
+        // Validate cryptographically
+        let claims = self.validate_token_crypto(token)?;
+
+        // Cache the result if validation succeeded
+        if let Ok(user) = self.user_store.get_user_by_id(&claims.sub).await {
+            if let Some(user) = user {
+                let entry = TokenCacheEntry::new(claims.clone(), user);
+                self.token_cache
+                    .write()
+                    .await
+                    .insert(token.to_string(), entry);
+            }
+        }
+
+        Ok(claims)
+    }
+
+    fn validate_token_crypto(&self, token: &str) -> Result<Claims, AuthError> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(&[self.config.issuer.clone()]);
 
@@ -369,7 +744,7 @@ impl JwtService {
     }
 
     pub async fn refresh_token(&self, refresh_token: &str) -> Result<AuthResponse, AuthError> {
-        let claims = self.validate_token(refresh_token)?;
+        let claims = self.validate_token(refresh_token).await?;
 
         if claims.token_type != TokenType::Refresh {
             return Err(AuthError::InvalidToken);
@@ -398,11 +773,37 @@ impl JwtService {
     }
 
     pub async fn get_user_by_token(&self, token: &str) -> Result<User, AuthError> {
-        let claims = self.validate_token(token)?;
-        self.user_store
+        // Check blacklist first
+        if self.is_token_blacklisted(token).await {
+            return Err(AuthError::TokenRevoked);
+        }
+
+        // Check cache first
+        {
+            let cache = self.token_cache.read().await;
+            if let Some(entry) = cache.get(token) {
+                if !entry.is_expired(self.cache_ttl_seconds) {
+                    return Ok(entry.user.clone());
+                }
+            }
+        }
+
+        // Validate token and get user
+        let claims = self.validate_token_crypto(token)?;
+        let user = self
+            .user_store
             .get_user_by_id(&claims.sub)
             .await?
-            .ok_or(AuthError::UserNotFound)
+            .ok_or(AuthError::UserNotFound)?;
+
+        // Cache the result
+        let entry = TokenCacheEntry::new(claims, user.clone());
+        self.token_cache
+            .write()
+            .await
+            .insert(token.to_string(), entry);
+
+        Ok(user)
     }
 }
 
@@ -432,6 +833,9 @@ pub async fn jwt_auth_middleware(
             AuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "Token expired"),
             AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
             AuthError::UserNotFound => (StatusCode::UNAUTHORIZED, "User not found"),
+            AuthError::TokenRevoked => (StatusCode::UNAUTHORIZED, "Token revoked"),
+            AuthError::RateLimitExceeded => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded"),
+            AuthError::AccountLocked(_) => (StatusCode::LOCKED, "Account temporarily locked"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "Authentication error"),
         };
 
