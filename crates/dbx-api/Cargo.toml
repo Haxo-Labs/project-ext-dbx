@@ -22,6 +22,7 @@ futures = { workspace = true }
 jsonwebtoken = "9.3.0"
 rand = "0.8"
 redis = { workspace = true }
+ring = "0.17"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_urlencoded = "0.7"
