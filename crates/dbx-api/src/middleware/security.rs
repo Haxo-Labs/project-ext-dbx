@@ -9,7 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::config::{CorsConfig, SecurityConfig, SecurityHeadersConfig};
+use crate::config::{CorsConfig, HostValidationConfig, SecurityConfig, SecurityHeadersConfig};
 
 #[derive(Debug, Clone)]
 pub struct TrustedProxyConfig {
@@ -306,6 +306,300 @@ pub fn extract_client_ip_info(
     get_trusted_proxy_validator().extract_client_ip(headers, connect_info)
 }
 
+/// Comprehensive Host header validation for production security
+///
+/// This function provides enterprise-grade validation against:
+/// - Host header injection attacks
+/// - Domain confusion attacks
+/// - IPv6 bracket injection
+/// - Port number manipulation
+/// - IDN homograph attacks
+/// - Control character injection
+/// - Path traversal attempts
+fn validate_host_header(host: &str, config: &SecurityConfig) -> Result<(), &'static str> {
+    let host_config = &config.host_validation;
+
+    // Skip validation if disabled (not recommended for production)
+    if !host_config.enabled {
+        return Ok(());
+    }
+
+    // Basic format validation
+    if host.is_empty() {
+        return Err("Host header cannot be empty");
+    }
+
+    if host.len() > host_config.max_host_length {
+        return Err("Host header exceeds maximum length");
+    }
+
+    // Security checks for malicious patterns
+    if host.contains(' ') || host.contains('\t') || host.contains('\n') || host.contains('\r') {
+        return Err("Host header contains invalid whitespace characters");
+    }
+
+    if host.chars().any(|c| c.is_control()) {
+        return Err("Host header contains control characters");
+    }
+
+    if host.contains('@') {
+        return Err("Host header contains @ character (potential user info injection)");
+    }
+
+    if host.contains("..") {
+        return Err("Host header contains consecutive dots (potential path traversal)");
+    }
+
+    if host.starts_with('.') || host.ends_with('.') {
+        return Err("Host header cannot start or end with dot");
+    }
+
+    if host.starts_with('-') || host.ends_with('-') {
+        return Err("Host header cannot start or end with hyphen");
+    }
+
+    // Parse host and port
+    let (hostname, port) = parse_host_and_port(host)?;
+
+    // Validate port if present
+    if let Some(port_num) = port {
+        validate_port(port_num, host_config)?;
+    }
+
+    // Validate hostname format
+    validate_hostname_format(&hostname, host_config)?;
+
+    // Check against allowed hosts list
+    validate_against_allowlist(&hostname, port, host_config)?;
+
+    Ok(())
+}
+
+/// Parse host header into hostname and optional port
+fn parse_host_and_port(host: &str) -> Result<(&str, Option<u16>), &'static str> {
+    // Handle IPv6 addresses with brackets
+    if host.starts_with('[') {
+        if let Some(bracket_end) = host.find(']') {
+            let ipv6_addr = &host[1..bracket_end];
+
+            // Validate IPv6 format
+            if ipv6_addr.parse::<Ipv6Addr>().is_err() {
+                return Err("Invalid IPv6 address format");
+            }
+
+            // Check for port after bracket
+            if bracket_end + 1 < host.len() {
+                if !host[bracket_end + 1..].starts_with(':') {
+                    return Err("Invalid characters after IPv6 address");
+                }
+
+                let port_str = &host[bracket_end + 2..];
+                if port_str.is_empty() {
+                    return Err("Empty port after colon");
+                }
+
+                let port = port_str.parse::<u16>().map_err(|_| "Invalid port number")?;
+
+                return Ok((ipv6_addr, Some(port)));
+            }
+
+            return Ok((ipv6_addr, None));
+        } else {
+            return Err("Unclosed IPv6 bracket");
+        }
+    }
+
+    // Handle regular hostname or IPv4 address with optional port
+    if let Some(colon_pos) = host.rfind(':') {
+        let hostname = &host[..colon_pos];
+        let port_str = &host[colon_pos + 1..];
+
+        if port_str.is_empty() {
+            return Err("Empty port after colon");
+        }
+
+        // Check if this is actually part of an IPv6 address (multiple colons)
+        if hostname.contains(':') {
+            // This might be an IPv6 address without brackets
+            if host.parse::<Ipv6Addr>().is_ok() {
+                return Ok((host, None));
+            } else {
+                return Err("Invalid IPv6 address or ambiguous port specification");
+            }
+        }
+
+        let port = port_str.parse::<u16>().map_err(|_| "Invalid port number")?;
+
+        Ok((hostname, Some(port)))
+    } else {
+        Ok((host, None))
+    }
+}
+
+/// Validate port number against security policies
+fn validate_port(port: u16, config: &HostValidationConfig) -> Result<(), &'static str> {
+    if port == 0 {
+        return Err("Port number cannot be zero");
+    }
+
+    if config.strict_port_validation {
+        if let Some(ref allowed_ports) = config.allowed_ports {
+            if !allowed_ports.contains(&port) {
+                return Err("Port not in allowed list");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate hostname format according to RFC standards
+fn validate_hostname_format(
+    hostname: &str,
+    config: &HostValidationConfig,
+) -> Result<(), &'static str> {
+    if hostname.is_empty() {
+        return Err("Hostname cannot be empty");
+    }
+
+    // Check if it's an IP address
+    if let Ok(_) = hostname.parse::<Ipv4Addr>() {
+        return validate_ipv4_address(hostname, config);
+    }
+
+    if let Ok(_) = hostname.parse::<Ipv6Addr>() {
+        return validate_ipv6_address(hostname, config);
+    }
+
+    // Validate as domain name
+    validate_domain_name(hostname)
+}
+
+/// Validate IPv4 address
+fn validate_ipv4_address(ip: &str, config: &HostValidationConfig) -> Result<(), &'static str> {
+    let addr = ip.parse::<Ipv4Addr>().map_err(|_| "Invalid IPv4 address")?;
+
+    // Check for localhost
+    if addr.is_loopback() && !config.allow_localhost {
+        return Err("Localhost IP addresses not allowed");
+    }
+
+    // Check for private IP addresses
+    if addr.is_private() && !config.allow_private_ips {
+        return Err("Private IP addresses not allowed");
+    }
+
+    // Block special/reserved addresses
+    if addr.is_unspecified() || addr.is_broadcast() || addr.is_multicast() {
+        return Err("Special/reserved IP addresses not allowed");
+    }
+
+    Ok(())
+}
+
+/// Validate IPv6 address
+fn validate_ipv6_address(ip: &str, config: &HostValidationConfig) -> Result<(), &'static str> {
+    if !config.allow_ipv6 {
+        return Err("IPv6 addresses not allowed");
+    }
+
+    let addr = ip.parse::<Ipv6Addr>().map_err(|_| "Invalid IPv6 address")?;
+
+    // Check for localhost
+    if addr.is_loopback() && !config.allow_localhost {
+        return Err("Localhost IPv6 addresses not allowed");
+    }
+
+    // Block special addresses
+    if addr.is_unspecified() || addr.is_multicast() {
+        return Err("Special/reserved IPv6 addresses not allowed");
+    }
+
+    Ok(())
+}
+
+/// Validate domain name according to RFC standards
+fn validate_domain_name(domain: &str) -> Result<(), &'static str> {
+    if domain.len() > 253 {
+        return Err("Domain name too long");
+    }
+
+    // Split into labels and validate each
+    let labels: Vec<&str> = domain.split('.').collect();
+
+    for label in &labels {
+        if label.is_empty() {
+            return Err("Empty domain label");
+        }
+
+        if label.len() > 63 {
+            return Err("Domain label too long");
+        }
+
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err("Domain label cannot start or end with hyphen");
+        }
+
+        // Validate characters (allow only ASCII alphanumeric and hyphens)
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err("Invalid characters in domain label");
+        }
+    }
+
+    // Additional security checks for homograph attacks
+    if domain.chars().any(|c| !c.is_ascii()) {
+        return Err("Non-ASCII characters not allowed in domain");
+    }
+
+    Ok(())
+}
+
+/// Validate hostname against allowlist
+fn validate_against_allowlist(
+    hostname: &str,
+    port: Option<u16>,
+    config: &HostValidationConfig,
+) -> Result<(), &'static str> {
+    if config.allowed_hosts.is_empty() {
+        return Ok(()); // No restrictions if allowlist is empty
+    }
+
+    // Normalize hostname for comparison
+    let normalized_host = hostname.to_lowercase();
+
+    // Check exact matches first
+    for allowed_host in &config.allowed_hosts {
+        let normalized_allowed = allowed_host.to_lowercase();
+
+        // Exact match
+        if normalized_host == normalized_allowed {
+            return Ok(());
+        }
+
+        // Match with port
+        if let Some(p) = port {
+            let host_with_port = format!("{}:{}", normalized_host, p);
+            if host_with_port == normalized_allowed {
+                return Ok(());
+            }
+        }
+
+        // Wildcard subdomain matching (*.example.com)
+        if normalized_allowed.starts_with("*.") {
+            let wildcard_domain = &normalized_allowed[2..];
+            if normalized_host.ends_with(wildcard_domain) {
+                // Ensure it's a proper subdomain, not just suffix match
+                let prefix_len = normalized_host.len() - wildcard_domain.len();
+                if prefix_len > 0 && normalized_host.chars().nth(prefix_len - 1) == Some('.') {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    Err("Host not in allowed list")
+}
+
 /// Security headers middleware that adds comprehensive security headers to all responses
 pub async fn security_headers_middleware(
     security_config: SecurityConfig,
@@ -421,6 +715,18 @@ pub fn create_cors_layer(cors_config: &CorsConfig) -> CorsLayer {
     cors
 }
 
+/// Security middleware with enterprise-grade policies
+pub async fn security_middleware(
+    security_config: SecurityConfig,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    // Always apply full security headers regardless of environment
+    security_headers_middleware(security_config, request, next)
+        .await
+        .into_response()
+}
+
 /// Security middleware that validates requests based on security policies
 pub async fn security_validation_middleware(
     security_config: SecurityConfig,
@@ -447,12 +753,12 @@ pub async fn security_validation_middleware(
         }
     }
 
-    // Validate Host header to prevent Host header injection
+    // Validate Host header to prevent Host header injection and domain attacks
     if let Some(host) = headers.get("host") {
         let host_str = host.to_str().unwrap_or("");
-        // Basic validation - in production, this should be more comprehensive
-        if host_str.is_empty() || host_str.contains(' ') {
-            return Err((StatusCode::BAD_REQUEST, "Invalid Host header"));
+
+        if let Err(error_msg) = validate_host_header(host_str, &security_config) {
+            return Err((StatusCode::BAD_REQUEST, error_msg));
         }
     }
 
@@ -521,6 +827,7 @@ mod tests {
         SecurityConfig {
             headers: SecurityHeadersConfig::default(),
             cors: CorsConfig::default(),
+            host_validation: HostValidationConfig::default(),
             development_mode: false,
             strict_transport_security_enabled: true,
         }
@@ -530,6 +837,7 @@ mod tests {
         SecurityConfig {
             headers: SecurityHeadersConfig::default(),
             cors: CorsConfig::default(),
+            host_validation: HostValidationConfig::default(),
             development_mode: true,
             strict_transport_security_enabled: false,
         }
@@ -582,5 +890,198 @@ mod tests {
 
         let _cors_layer = create_cors_layer(&cors_config);
         assert!(true);
+    }
+
+    #[test]
+    fn test_host_validation_valid_domains() {
+        let config = create_test_security_config();
+
+        // Valid domain names
+        assert!(validate_host_header("example.com", &config).is_ok());
+        assert!(validate_host_header("sub.example.com", &config).is_ok());
+        assert!(validate_host_header("test-site.example.com", &config).is_ok());
+        assert!(validate_host_header("localhost", &config).is_ok());
+        assert!(validate_host_header("localhost:3000", &config).is_ok());
+        assert!(validate_host_header("127.0.0.1", &config).is_ok());
+        assert!(validate_host_header("127.0.0.1:8080", &config).is_ok());
+    }
+
+    #[test]
+    fn test_host_validation_invalid_formats() {
+        let config = create_test_security_config();
+
+        // Empty host
+        assert!(validate_host_header("", &config).is_err());
+
+        // Control characters
+        assert!(validate_host_header("example.com\n", &config).is_err());
+        assert!(validate_host_header("example.com\r", &config).is_err());
+        assert!(validate_host_header("example.com\t", &config).is_err());
+
+        // Whitespace
+        assert!(validate_host_header("example .com", &config).is_err());
+
+        // @ character (user info injection)
+        assert!(validate_host_header("user@example.com", &config).is_err());
+
+        // Path traversal patterns
+        assert!(validate_host_header("example..com", &config).is_err());
+        assert!(validate_host_header("..example.com", &config).is_err());
+        assert!(validate_host_header(".example.com", &config).is_err());
+        assert!(validate_host_header("example.com.", &config).is_err());
+
+        // Invalid start/end with hyphen
+        assert!(validate_host_header("-example.com", &config).is_err());
+        assert!(validate_host_header("example.com-", &config).is_err());
+    }
+
+    #[test]
+    fn test_host_validation_ipv4_addresses() {
+        let config = create_test_security_config();
+
+        // Valid IPv4
+        assert!(validate_host_header("192.168.1.1", &config).is_ok());
+        assert!(validate_host_header("10.0.0.1", &config).is_ok());
+        assert!(validate_host_header("127.0.0.1", &config).is_ok());
+
+        // IPv4 with port
+        assert!(validate_host_header("192.168.1.1:8080", &config).is_ok());
+
+        // Invalid IPv4
+        assert!(validate_host_header("256.256.256.256", &config).is_err());
+        assert!(validate_host_header("192.168.1", &config).is_err());
+    }
+
+    #[test]
+    fn test_host_validation_ipv6_addresses() {
+        let config = create_test_security_config();
+
+        // Valid IPv6 with brackets
+        assert!(validate_host_header("[::1]", &config).is_ok());
+        assert!(validate_host_header("[2001:db8::1]", &config).is_ok());
+        assert!(validate_host_header("[::1]:8080", &config).is_ok());
+
+        // Valid IPv6 without brackets (no port)
+        assert!(validate_host_header("::1", &config).is_ok());
+        assert!(validate_host_header("2001:db8::1", &config).is_ok());
+
+        // Invalid IPv6
+        assert!(validate_host_header("[invalid::ipv6", &config).is_err());
+        assert!(validate_host_header("[::1", &config).is_err());
+    }
+
+    #[test]
+    fn test_host_validation_port_validation() {
+        let config = create_test_security_config();
+
+        // Valid ports
+        assert!(validate_host_header("example.com:80", &config).is_ok());
+        assert!(validate_host_header("example.com:443", &config).is_ok());
+        assert!(validate_host_header("example.com:3000", &config).is_ok());
+
+        // Invalid ports
+        assert!(validate_host_header("example.com:0", &config).is_err());
+        assert!(validate_host_header("example.com:99999", &config).is_err());
+        assert!(validate_host_header("example.com:", &config).is_err());
+        assert!(validate_host_header("example.com:abc", &config).is_err());
+    }
+
+    #[test]
+    fn test_host_validation_allowlist() {
+        let mut config = create_test_security_config();
+        config.host_validation.allowed_hosts = vec![
+            "allowed.com".to_string(),
+            "*.subdomain.com".to_string(),
+            "127.0.0.1".to_string(),
+        ];
+
+        // Allowed hosts
+        assert!(validate_host_header("allowed.com", &config).is_ok());
+        assert!(validate_host_header("test.subdomain.com", &config).is_ok());
+        assert!(validate_host_header("deep.test.subdomain.com", &config).is_ok());
+        assert!(validate_host_header("127.0.0.1", &config).is_ok());
+
+        // Disallowed hosts
+        assert!(validate_host_header("evil.com", &config).is_err());
+        assert!(validate_host_header("subdomain.com", &config).is_err()); // Wildcard doesn't match exact
+        assert!(validate_host_header("fakesubdomain.com", &config).is_err()); // Suffix but not subdomain
+    }
+
+    #[test]
+    fn test_host_validation_disabled() {
+        let mut config = create_test_security_config();
+        config.host_validation.enabled = false;
+
+        // Should pass even with invalid input when disabled
+        assert!(validate_host_header("", &config).is_ok());
+        assert!(validate_host_header("invalid..host", &config).is_ok());
+        assert!(validate_host_header("user@evil.com", &config).is_ok());
+    }
+
+    #[test]
+    fn test_host_validation_length_limits() {
+        let config = create_test_security_config();
+
+        // Test maximum domain length (253 characters)
+        let long_domain = "a".repeat(250) + ".com";
+        assert!(validate_host_header(&long_domain, &config).is_ok());
+
+        // Test exceeding maximum domain length
+        let too_long_domain = "a".repeat(260);
+        assert!(validate_host_header(&too_long_domain, &config).is_err());
+
+        // Test maximum label length (63 characters)
+        let long_label = "a".repeat(63) + ".com";
+        assert!(validate_host_header(&long_label, &config).is_ok());
+
+        // Test exceeding maximum label length
+        let too_long_label = "a".repeat(64) + ".com";
+        assert!(validate_host_header(&too_long_label, &config).is_err());
+    }
+
+    #[test]
+    fn test_host_validation_security_attacks() {
+        let config = create_test_security_config();
+
+        // Test various attack patterns
+        assert!(validate_host_header("example.com\x00", &config).is_err()); // Null byte
+        assert!(validate_host_header("example.com\x1f", &config).is_err()); // Control character
+        assert!(validate_host_header("examplé.com", &config).is_err()); // Non-ASCII (IDN attack)
+        assert!(validate_host_header("еxample.com", &config).is_err()); // Cyrillic 'e' (homograph)
+
+        // CRLF injection attempts
+        assert!(validate_host_header("example.com\r\nHost: evil.com", &config).is_err());
+    }
+
+    #[test]
+    fn test_parse_host_and_port() {
+        // Valid cases
+        assert_eq!(
+            parse_host_and_port("example.com").unwrap(),
+            ("example.com", None)
+        );
+        assert_eq!(
+            parse_host_and_port("example.com:80").unwrap(),
+            ("example.com", Some(80))
+        );
+        assert_eq!(
+            parse_host_and_port("127.0.0.1:3000").unwrap(),
+            ("127.0.0.1", Some(3000))
+        );
+        assert_eq!(parse_host_and_port("[::1]").unwrap(), ("::1", None));
+        assert_eq!(
+            parse_host_and_port("[::1]:8080").unwrap(),
+            ("::1", Some(8080))
+        );
+        assert_eq!(
+            parse_host_and_port("2001:db8::1").unwrap(),
+            ("2001:db8::1", None)
+        );
+
+        // Invalid cases
+        assert!(parse_host_and_port("[::1").is_err()); // Unclosed bracket
+        assert!(parse_host_and_port("example.com:").is_err()); // Empty port
+        assert!(parse_host_and_port("example.com:abc").is_err()); // Invalid port
+        assert!(parse_host_and_port("[invalid::ipv6]").is_err()); // Invalid IPv6
     }
 }

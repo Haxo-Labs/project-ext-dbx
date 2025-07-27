@@ -196,9 +196,41 @@ impl Default for CorsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostValidationConfig {
+    pub enabled: bool,
+    pub allowed_hosts: Vec<String>,
+    pub allow_localhost: bool,
+    pub allow_private_ips: bool,
+    pub allow_ipv6: bool,
+    pub max_host_length: usize,
+    pub strict_port_validation: bool,
+    pub allowed_ports: Option<Vec<u16>>,
+}
+
+impl Default for HostValidationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allowed_hosts: vec![
+                "localhost".to_string(),
+                "127.0.0.1".to_string(),
+                "::1".to_string(),
+            ],
+            allow_localhost: true,
+            allow_private_ips: true,
+            allow_ipv6: true,
+            max_host_length: 253, // RFC 1035 limit
+            strict_port_validation: true,
+            allowed_ports: Some(vec![80, 443, 3000, 8080, 8443]),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     pub headers: SecurityHeadersConfig,
     pub cors: CorsConfig,
+    pub host_validation: HostValidationConfig,
     pub development_mode: bool,
     pub strict_transport_security_enabled: bool,
 }
@@ -208,6 +240,7 @@ impl Default for SecurityConfig {
         Self {
             headers: SecurityHeadersConfig::default(),
             cors: CorsConfig::default(),
+            host_validation: HostValidationConfig::default(),
             development_mode: false,
             strict_transport_security_enabled: true,
         }
