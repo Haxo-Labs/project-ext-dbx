@@ -8,8 +8,8 @@ use dbx_core::DbxResult;
 
 use crate::RouterError;
 
-/// High-performance key matcher with radix trie optimization
-pub struct OptimizedKeyMatcher {
+/// Key matcher for routing operations based on key patterns
+pub struct KeyMatcher {
     /// Radix trie for efficient prefix matching
     prefix_trie: Trie<String, RoutingTarget>,
     /// Fast lookup for exact matches
@@ -26,11 +26,6 @@ struct RoutingTarget {
     backend: String,
     priority: u32,
     pattern: String,
-}
-
-/// Key matcher for routing operations based on key patterns
-pub struct KeyMatcher {
-    rules: Vec<CompiledRule>,
 }
 
 /// Compiled routing rule with pattern matcher
@@ -53,8 +48,8 @@ enum RuleMatcher {
     Regex(Regex),
 }
 
-impl OptimizedKeyMatcher {
-    /// Create a new optimized key matcher from routing rules
+impl KeyMatcher {
+    /// Create a new key matcher from routing rules
     pub fn new(rules: Vec<KeyRoutingRule>) -> DbxResult<Self> {
         let mut prefix_trie = Trie::new();
         let mut exact_matches = HashMap::new();
@@ -105,6 +100,9 @@ impl OptimizedKeyMatcher {
 
         let stats = MatcherStats {
             total_rules: pattern_type_counts.values().sum(),
+            exact_rules: exact_matches.len(),
+            prefix_rules: prefix_trie.len(),
+            complex_rules: complex_rules.len(),
             pattern_type_counts,
         };
 
@@ -113,7 +111,7 @@ impl OptimizedKeyMatcher {
             prefix_rules = prefix_trie.len(),
             exact_rules = exact_matches.len(),
             complex_rules = complex_rules.len(),
-            "Optimized key matcher initialized"
+            "Key matcher initialized"
         );
 
         Ok(Self {
@@ -124,7 +122,7 @@ impl OptimizedKeyMatcher {
         })
     }
 
-    /// Match a key against routing rules with optimized lookup
+    /// Match a key against routing rules with efficient lookup
     pub fn match_key(&self, key: &str) -> Option<String> {
         // 1. Try exact match first - O(1)
         if let Some(target) = self.exact_matches.get(key) {
@@ -216,8 +214,8 @@ impl OptimizedKeyMatcher {
     }
 
     /// Get detailed performance statistics
-    pub fn get_performance_stats(&self) -> OptimizedMatcherStats {
-        OptimizedMatcherStats {
+    pub fn get_performance_stats(&self) -> MatcherStats {
+        MatcherStats {
             total_rules: self.stats.total_rules,
             exact_rules: self.exact_matches.len(),
             prefix_rules: self.prefix_trie.len(),
@@ -253,9 +251,9 @@ impl OptimizedKeyMatcher {
     }
 }
 
-/// Performance statistics for optimized matcher
+/// Performance statistics for matcher
 #[derive(Debug, Clone)]
-pub struct OptimizedMatcherStats {
+pub struct MatcherStats {
     pub total_rules: usize,
     pub exact_rules: usize,
     pub prefix_rules: usize,
@@ -270,144 +268,6 @@ pub struct BenchmarkResult {
     pub total_duration: std::time::Duration,
     pub avg_duration_nanos: u64,
     pub operations_per_second: u64,
-}
-
-// Legacy KeyMatcher implementation for backwards compatibility
-impl KeyMatcher {
-    /// Create a new key matcher from routing rules
-    pub fn new(rules: Vec<KeyRoutingRule>) -> DbxResult<Self> {
-        let mut compiled_rules = Vec::new();
-
-        for rule in rules {
-            let matcher = Self::compile_pattern(&rule.pattern, &rule.pattern_type)?;
-
-            compiled_rules.push(CompiledRule {
-                pattern: rule.pattern.clone(),
-                backend: rule.backend.clone(),
-                priority: rule.priority,
-                pattern_type: rule.pattern_type.clone(),
-                matcher,
-            });
-        }
-
-        // Sort rules by priority (higher priority first)
-        compiled_rules.sort_by(|a, b| b.priority.cmp(&a.priority));
-
-        debug!(
-            rules_count = compiled_rules.len(),
-            "Key matcher initialized"
-        );
-
-        Ok(Self {
-            rules: compiled_rules,
-        })
-    }
-
-    /// Match a key against routing rules and return the backend name
-    pub fn match_key(&self, key: &str) -> Option<String> {
-        for rule in &self.rules {
-            if self.matches_pattern(&rule.matcher, key) {
-                debug!(
-                    key = %key,
-                    pattern = %rule.pattern,
-                    backend = %rule.backend,
-                    priority = rule.priority,
-                    "Key matched routing rule"
-                );
-                return Some(rule.backend.clone());
-            }
-        }
-
-        debug!(key = %key, "No routing rule matched key");
-        None
-    }
-
-    /// Check if a key matches a specific pattern
-    fn matches_pattern(&self, matcher: &RuleMatcher, key: &str) -> bool {
-        match matcher {
-            RuleMatcher::Exact(pattern) => key == pattern,
-            RuleMatcher::Prefix(prefix) => key.starts_with(prefix),
-            RuleMatcher::Suffix(suffix) => key.ends_with(suffix),
-            RuleMatcher::Glob(pattern) => pattern.matches(key),
-            RuleMatcher::Regex(regex) => regex.is_match(key),
-        }
-    }
-
-    /// Compile a pattern string into a matcher
-    fn compile_pattern(pattern: &str, pattern_type: &PatternType) -> DbxResult<RuleMatcher> {
-        match pattern_type {
-            PatternType::Exact => Ok(RuleMatcher::Exact(pattern.to_string())),
-            PatternType::Prefix => Ok(RuleMatcher::Prefix(pattern.to_string())),
-            PatternType::Suffix => Ok(RuleMatcher::Suffix(pattern.to_string())),
-            PatternType::Glob => {
-                let glob_pattern =
-                    glob::Pattern::new(pattern).map_err(|e| RouterError::InvalidPattern {
-                        pattern: pattern.to_string(),
-                        pattern_type: "glob".to_string(),
-                        error: e.to_string(),
-                    })?;
-                Ok(RuleMatcher::Glob(glob_pattern))
-            }
-            PatternType::Regex => {
-                let regex = Regex::new(pattern).map_err(|e| RouterError::InvalidPattern {
-                    pattern: pattern.to_string(),
-                    pattern_type: "regex".to_string(),
-                    error: e.to_string(),
-                })?;
-                Ok(RuleMatcher::Regex(regex))
-            }
-        }
-    }
-
-    /// Get statistics about the matcher
-    pub fn get_stats(&self) -> MatcherStats {
-        let mut pattern_type_counts = HashMap::new();
-
-        for rule in &self.rules {
-            let count = pattern_type_counts
-                .entry(rule.pattern_type.clone())
-                .or_insert(0);
-            *count += 1;
-        }
-
-        MatcherStats {
-            total_rules: self.rules.len(),
-            pattern_type_counts,
-        }
-    }
-
-    /// Validate that all patterns are compilable
-    pub fn validate_patterns(rules: &[KeyRoutingRule]) -> DbxResult<()> {
-        for rule in rules {
-            Self::compile_pattern(&rule.pattern, &rule.pattern_type)?;
-        }
-        Ok(())
-    }
-
-    /// Test a key against all rules and return match details
-    pub fn test_key(&self, key: &str) -> Vec<TestResult> {
-        let mut results = Vec::new();
-
-        for rule in &self.rules {
-            let matches = self.matches_pattern(&rule.matcher, key);
-            results.push(TestResult {
-                pattern: rule.pattern.clone(),
-                pattern_type: rule.pattern_type.clone(),
-                backend: rule.backend.clone(),
-                priority: rule.priority,
-                matches,
-            });
-        }
-
-        results
-    }
-}
-
-/// Statistics about the key matcher
-#[derive(Debug, Clone)]
-pub struct MatcherStats {
-    pub total_rules: usize,
-    pub pattern_type_counts: HashMap<PatternType, usize>,
 }
 
 /// Test result for a single rule
