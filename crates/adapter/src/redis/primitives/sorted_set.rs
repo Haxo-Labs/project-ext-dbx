@@ -310,7 +310,7 @@ impl RedisSortedSet {
     /// Sets the TTL of a sorted set in seconds
     pub fn expire(&self, key: &str, seconds: u64) -> RedisResult<bool> {
         let mut conn = self.acquire_connection()?;
-        let result: i32 = conn.expire(key, seconds as usize)?;
+        let result: i32 = conn.expire(key, seconds as i64)?;
         Ok(result == 1)
     }
 

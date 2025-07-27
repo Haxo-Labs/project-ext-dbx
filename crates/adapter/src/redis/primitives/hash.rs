@@ -203,7 +203,7 @@ impl RedisHash {
     /// Sets the TTL of a hash in seconds
     pub fn expire(&self, key: &str, seconds: u64) -> RedisResult<bool> {
         let mut conn = self.acquire_connection()?;
-        let result: i32 = conn.expire(key, seconds as usize)?;
+        let result: i32 = conn.expire(key, seconds as i64)?;
         Ok(result == 1)
     }
 

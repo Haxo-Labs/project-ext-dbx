@@ -68,7 +68,7 @@ impl RedisString {
     /// Sets a key to hold the string value with an expiration
     pub fn setex(&self, key: &str, value: &str, seconds: usize) -> RedisResult<()> {
         let mut conn = self.acquire_connection()?;
-        conn.set_ex(key, value, seconds)
+        conn.set_ex(key, value, seconds as u64)
     }
 
     /// Gets the string value of a key and deletes it
@@ -122,7 +122,7 @@ impl RedisString {
     /// Sets multiple keys to multiple values
     pub fn mset(&self, items: &[(&str, &str)]) -> RedisResult<()> {
         let mut conn = self.acquire_connection()?;
-        conn.set_multiple(items)
+        conn.mset(items)
     }
 
     /// Gets the values of all the given keys
@@ -153,7 +153,7 @@ impl RedisString {
     /// Sets the TTL of a key in seconds
     pub fn expire(&self, key: &str, seconds: u64) -> RedisResult<bool> {
         let mut conn = self.acquire_connection()?;
-        let result: i32 = conn.expire(key, seconds as usize)?;
+        let result: i32 = conn.expire(key, seconds as i64)?;
         Ok(result == 1)
     }
 
