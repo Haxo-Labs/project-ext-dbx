@@ -10,7 +10,7 @@ pub struct ConfigValidator;
 impl ConfigValidator {
     /// Validate the entire configuration
     pub fn validate_config(config: &DbxConfig) -> Result<(), ConfigError> {
-        // First run basic validation
+        // First run validation
         config.validate()?;
 
         // Then run custom validation

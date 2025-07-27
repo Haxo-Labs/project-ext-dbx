@@ -403,7 +403,7 @@ mod tests {
     use super::*;
     use crate::auth::{permissions::Permission, RbacConfig};
     use axum_test::TestServer;
-    use dbx_adapter::redis::client::RedisPool;
+    use dbx_adapter::redis::client::RedisConnectionPool;
     use std::sync::Arc;
 
     fn create_test_rbac_config() -> RbacConfig {

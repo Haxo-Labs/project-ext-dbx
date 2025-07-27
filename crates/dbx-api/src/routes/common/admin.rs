@@ -33,7 +33,7 @@ fn redis_admin(conn: Arc<Mutex<Connection>>) -> AdminOperations {
 }
 
 // =========================
-// Basic Health & Status Operations
+// Health & Status Operations
 // =========================
 
 pub fn ping_server(conn: Arc<Mutex<Connection>>) -> redis::RedisResult<String> {

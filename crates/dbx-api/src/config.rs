@@ -362,7 +362,7 @@ mod tests {
         env::remove_var("DEFAULT_ADMIN_PASSWORD");
     }
 
-    fn setup_basic_env() {
+    fn setup_test_env() {
         env::set_var(
             "JWT_SECRET",
             "test-jwt-secret-that-is-at-least-32-characters-long",
@@ -412,7 +412,7 @@ mod tests {
     #[serial]
     fn test_app_config_from_env_defaults() {
         clear_env_vars();
-        setup_basic_env();
+        setup_test_env();
 
         let config = AppConfig::from_env().unwrap();
         assert_eq!(config.server.host, "0.0.0.0");
@@ -479,7 +479,7 @@ mod tests {
     #[serial]
     fn test_app_config_invalid_port() {
         clear_env_vars();
-        setup_basic_env();
+        setup_test_env();
         env::set_var("PORT", "invalid");
 
         let result = AppConfig::from_env();
@@ -492,7 +492,7 @@ mod tests {
     #[serial]
     fn test_app_config_create_admin_without_password() {
         clear_env_vars();
-        setup_basic_env();
+        setup_test_env();
         env::set_var("CREATE_DEFAULT_ADMIN", "true");
         env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
 

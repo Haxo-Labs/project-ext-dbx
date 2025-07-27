@@ -482,7 +482,7 @@ mod tests {
             DbxError::routing("No backend available"),
             DbxError::rate_limit("Too many requests", None),
             DbxError::timeout("Timeout", 1000),
-            DbxError::backend("postgres", "Temporary error"),
+            DbxError::backend("postgres", "Connection error"),
             DbxError::internal("Internal error"),
         ];
 

@@ -802,7 +802,7 @@ pub async fn development_security_middleware(
 
         response
     } else {
-        // Production mode - apply full security headers
+        // Non-development mode - apply security headers
         security_headers_middleware(security_config, request, next)
             .await
             .into_response()
