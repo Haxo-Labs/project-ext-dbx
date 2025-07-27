@@ -303,7 +303,10 @@ pub async fn get_rate_limit_metrics(
     let policies_count = policies.len() as u32;
 
     // Add global policy if exists
-    let global_policy_exists = rate_limit_service.global_policy.is_some();
+    let global_policy_exists = {
+        let global_policy = rate_limit_service.global_policy.read().await;
+        global_policy.is_some()
+    };
 
     let total_policies = if global_policy_exists {
         policies_count + 1

@@ -474,7 +474,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitPolicy {
     pub requests: u32,
     pub window_seconds: u32,
