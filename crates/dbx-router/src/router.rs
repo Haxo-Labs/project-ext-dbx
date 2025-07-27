@@ -37,43 +37,83 @@ impl BackendRouter {
         &self,
         operation: &DataOperation,
     ) -> DbxResult<Arc<dyn UniversalBackend>> {
+        // Get operation type for capability checking
+        let operation_type = self.get_operation_type_from_data_operation(operation);
+
         // Try key-based routing first
         if let Some(key) = self.extract_key_from_data_operation(operation) {
             if let Some(backend_name) = self.key_matcher.match_key(key) {
                 debug!(key = %key, backend = %backend_name, "Using key-based routing");
 
                 if let Some(backend) = self.registry.get_backend(&backend_name).await {
-                    return Ok(backend);
+                    // Check if backend supports this operation type
+                    if self.backend_supports_operation(&backend, &operation_type) {
+                        return Ok(backend);
+                    } else {
+                        debug!(backend = %backend_name, operation = %operation_type, "Backend doesn't support operation, trying alternatives");
+                    }
                 }
             }
         }
 
-        // Try operation-specific routing
-        if let Some(backend) = self.route_by_operation_type(operation).await? {
+        // Try operation-specific routing with capability checking
+        if let Some(backend) = self
+            .route_by_operation_type_with_capabilities(operation)
+            .await?
+        {
             return Ok(backend);
         }
 
-        // Use load balancer
-        if let Some(backend) = self.load_balancer.select_backend().await? {
-            debug!(backend = %backend, "Using load-balanced backend");
+        // Use load balancer with capability filtering
+        if let Some(backend_name) = self.load_balancer.select_backend().await? {
+            debug!(backend = %backend_name, "Checking load-balanced backend capabilities");
 
-            if let Some(backend_instance) = self.registry.get_backend(&backend).await {
-                return Ok(backend_instance);
+            if let Some(backend) = self.registry.get_backend(&backend_name).await {
+                if self.backend_supports_operation(&backend, &operation_type) {
+                    return Ok(backend);
+                } else {
+                    // Try other backends from load balancer
+                    for _ in 0..5 {
+                        // Max 5 attempts
+                        if let Some(alt_backend_name) = self.load_balancer.select_backend().await? {
+                            if alt_backend_name != backend_name {
+                                if let Some(alt_backend) =
+                                    self.registry.get_backend(&alt_backend_name).await
+                                {
+                                    if self
+                                        .backend_supports_operation(&alt_backend, &operation_type)
+                                    {
+                                        debug!(backend = %alt_backend_name, "Using alternative capable backend");
+                                        return Ok(alt_backend);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // Fall back to default backend
+        // Fall back to default backend with capability check
         if let Some(default_backend) = &self.default_backend {
-            debug!(backend = %default_backend, "Using default backend");
+            debug!(backend = %default_backend, "Checking default backend capabilities");
 
             if let Some(backend) = self.registry.get_backend(default_backend).await {
-                return Ok(backend);
+                if self.backend_supports_operation(&backend, &operation_type) {
+                    return Ok(backend);
+                } else {
+                    return Err(dbx_core::DbxError::routing(format!(
+                        "Default backend '{}' doesn't support operation type '{}'",
+                        default_backend, operation_type
+                    )));
+                }
             }
         }
 
-        Err(dbx_core::DbxError::routing(
-            "No suitable backend available".to_string(),
-        ))
+        Err(dbx_core::DbxError::routing(format!(
+            "No backend available that supports operation type '{}'",
+            operation_type
+        )))
     }
 
     /// Route a query operation to the appropriate backend
@@ -81,8 +121,8 @@ impl BackendRouter {
         &self,
         _operation: &QueryOperation,
     ) -> DbxResult<Arc<dyn UniversalBackend>> {
-        // For now, use the same routing logic as data operations
-        // In the future, this could consider query complexity, read replicas, etc.
+        // Route queries based on operation type and complexity
+        // Read-heavy operations can use read replicas if available
 
         // Use load balancer for queries
         if let Some(backend) = self.load_balancer.select_backend().await? {
@@ -112,55 +152,70 @@ impl BackendRouter {
         &self,
         operation: &StreamOperation,
     ) -> DbxResult<Arc<dyn UniversalBackend>> {
-        // Stream operations might require specific backends that support streaming
-        // For now, use default backend or load balancer
+        // Get operation type for capability checking
+        let operation_type = self.get_stream_operation_type(operation);
 
-        // If operation has a specific channel/topic, use key-based routing
-        match operation {
+        // If operation has a specific channel/topic, use key-based routing with capability check
+        let key = match operation {
             StreamOperation::Subscribe { channel, .. }
             | StreamOperation::Unsubscribe { channel, .. }
-            | StreamOperation::Publish { channel, .. } => {
-                if let Some(backend_name) = self.key_matcher.match_key(channel) {
-                    debug!(channel = %channel, backend = %backend_name, "Using key-based routing for stream");
-
-                    if let Some(backend) = self.registry.get_backend(&backend_name).await {
-                        return Ok(backend);
-                    }
-                }
-            }
-            StreamOperation::CreateStream { name, .. } => {
-                if let Some(backend_name) = self.key_matcher.match_key(name) {
-                    debug!(stream = %name, backend = %backend_name, "Using key-based routing for stream");
-
-                    if let Some(backend) = self.registry.get_backend(&backend_name).await {
-                        return Ok(backend);
-                    }
-                }
-            }
+            | StreamOperation::Publish { channel, .. } => Some(channel.as_str()),
+            StreamOperation::CreateStream { name, .. } => Some(name.as_str()),
             StreamOperation::StreamAdd { stream, .. }
-            | StreamOperation::StreamRead { stream, .. } => {
-                if let Some(backend_name) = self.key_matcher.match_key(stream) {
-                    debug!(stream = %stream, backend = %backend_name, "Using key-based routing for stream");
+            | StreamOperation::StreamRead { stream, .. } => Some(stream.as_str()),
+        };
 
-                    if let Some(backend) = self.registry.get_backend(&backend_name).await {
+        if let Some(key_str) = key {
+            if let Some(backend_name) = self.key_matcher.match_key(key_str) {
+                debug!(key = %key_str, backend = %backend_name, "Using key-based routing for stream");
+
+                if let Some(backend) = self.registry.get_backend(&backend_name).await {
+                    // Check if backend supports stream operations
+                    if self.backend_supports_stream_operation(&backend, &operation_type) {
                         return Ok(backend);
+                    } else {
+                        debug!(backend = %backend_name, operation = %operation_type, "Backend doesn't support stream operation, trying alternatives");
                     }
                 }
             }
         }
 
-        // Fall back to default backend for streams
+        // Find backends that support streaming capabilities
+        let stream_capable_backends = self
+            .registry
+            .get_backends_with_stream_capability(&operation_type)
+            .await;
+
+        if !stream_capable_backends.is_empty() {
+            // Prefer the first capable backend
+            if let Some(backend_name) = stream_capable_backends.first() {
+                if let Some(backend) = self.registry.get_backend(backend_name).await {
+                    debug!(backend = %backend_name, "Using stream-capable backend");
+                    return Ok(backend);
+                }
+            }
+        }
+
+        // Fall back to default backend with capability check
         if let Some(default_backend) = &self.default_backend {
-            debug!(backend = %default_backend, "Using default backend for stream");
+            debug!(backend = %default_backend, "Checking default backend for stream capabilities");
 
             if let Some(backend) = self.registry.get_backend(default_backend).await {
-                return Ok(backend);
+                if self.backend_supports_stream_operation(&backend, &operation_type) {
+                    return Ok(backend);
+                } else {
+                    return Err(dbx_core::DbxError::routing(format!(
+                        "Default backend '{}' doesn't support stream operation '{}'",
+                        default_backend, operation_type
+                    )));
+                }
             }
         }
 
-        Err(dbx_core::DbxError::routing(
-            "No suitable backend available for stream".to_string(),
-        ))
+        Err(dbx_core::DbxError::routing(format!(
+            "No backend available that supports stream operation '{}'",
+            operation_type
+        )))
     }
 
     /// Get all backends for health checking
@@ -208,16 +263,130 @@ impl BackendRouter {
         }
     }
 
-    /// Route based on operation type
-    async fn route_by_operation_type(
+    /// Route based on operation type with capability checking
+    async fn route_by_operation_type_with_capabilities(
         &self,
-        _operation: &DataOperation,
+        operation: &DataOperation,
     ) -> DbxResult<Option<Arc<dyn UniversalBackend>>> {
-        // This could be extended to route based on operation type
-        // For example, reads could go to read replicas, writes to primary
+        use dbx_core::DataOperation::*;
 
-        // For now, return None to fall through to load balancer
+        let operation_type = self.get_operation_type_from_data_operation(operation);
+
+        // Find backends that support this operation type
+        let capable_backends = self
+            .registry
+            .get_backends_with_capability(&operation_type)
+            .await;
+
+        if capable_backends.is_empty() {
+            return Ok(None);
+        }
+
+        // Route based on operation characteristics
+        match operation {
+            Get { .. } | Exists { .. } | GetTtl { .. } => {
+                // Read operations - prefer read replicas if available
+                for backend_name in &capable_backends {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        // Check if this is a read replica (basic heuristic)
+                        if backend_name.contains("read") || backend_name.contains("replica") {
+                            debug!(backend = %backend_name, "Using read replica for read operation");
+                            return Ok(Some(backend));
+                        }
+                    }
+                }
+                // Fall back to any capable backend
+                if let Some(backend_name) = capable_backends.first() {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        return Ok(Some(backend));
+                    }
+                }
+            }
+            Set { .. } | Update { .. } | Delete { .. } | SetTtl { .. } => {
+                // Write operations - prefer primary/master backends
+                for backend_name in &capable_backends {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        // Check if this is a primary/master (basic heuristic)
+                        if backend_name.contains("primary")
+                            || backend_name.contains("master")
+                            || backend_name.contains("write")
+                        {
+                            debug!(backend = %backend_name, "Using primary backend for write operation");
+                            return Ok(Some(backend));
+                        }
+                    }
+                }
+                // Fall back to any capable backend
+                if let Some(backend_name) = capable_backends.first() {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        return Ok(Some(backend));
+                    }
+                }
+            }
+            Batch { .. } => {
+                // Batch operations - prefer backends with batch optimization
+                for backend_name in &capable_backends {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        // Check if this backend supports efficient batching
+                        if backend_name.contains("batch") || backend_name.contains("bulk") {
+                            debug!(backend = %backend_name, "Using batch-optimized backend");
+                            return Ok(Some(backend));
+                        }
+                    }
+                }
+                // Fall back to any capable backend
+                if let Some(backend_name) = capable_backends.first() {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        return Ok(Some(backend));
+                    }
+                }
+            }
+        }
+
         Ok(None)
+    }
+
+    /// Get operation type string from data operation
+    fn get_operation_type_from_data_operation(&self, operation: &DataOperation) -> String {
+        match operation {
+            DataOperation::Get { .. } => "get".to_string(),
+            DataOperation::Set { .. } => "set".to_string(),
+            DataOperation::Update { .. } => "update".to_string(),
+            DataOperation::Delete { .. } => "delete".to_string(),
+            DataOperation::Exists { .. } => "exists".to_string(),
+            DataOperation::SetTtl { .. } => "set_ttl".to_string(),
+            DataOperation::GetTtl { .. } => "get_ttl".to_string(),
+            DataOperation::Batch { .. } => "batch".to_string(),
+        }
+    }
+
+    /// Check if backend supports the given operation type
+    fn backend_supports_operation(
+        &self,
+        backend: &Arc<dyn UniversalBackend>,
+        operation_type: &str,
+    ) -> bool {
+        let capabilities = backend.capabilities();
+
+        // Convert operation type string to enum
+        let operation_enum = match operation_type {
+            "get" => Some(dbx_core::DataOperationType::Get),
+            "set" => Some(dbx_core::DataOperationType::Set),
+            "update" => Some(dbx_core::DataOperationType::Update),
+            "delete" => Some(dbx_core::DataOperationType::Delete),
+            "exists" => Some(dbx_core::DataOperationType::Exists),
+            "get_ttl" => Some(dbx_core::DataOperationType::GetTtl),
+            "set_ttl" => Some(dbx_core::DataOperationType::SetTtl),
+            "batch" => Some(dbx_core::DataOperationType::Batch),
+            _ => None,
+        };
+
+        // Check if the operation is in the supported data operations
+        if let Some(op_type) = operation_enum {
+            capabilities.data_operations.contains(&op_type)
+        } else {
+            false
+        }
     }
 
     /// Add a backend to the load balancer
@@ -282,6 +451,35 @@ impl BackendRouter {
                 "Backend '{}' not available and no default backend configured",
                 backend_name
             )))
+        }
+    }
+
+    /// Get stream operation type
+    fn get_stream_operation_type(&self, operation: &StreamOperation) -> String {
+        match operation {
+            StreamOperation::Subscribe { .. } => "subscribe".to_string(),
+            StreamOperation::Unsubscribe { .. } => "unsubscribe".to_string(),
+            StreamOperation::Publish { .. } => "publish".to_string(),
+            StreamOperation::CreateStream { .. } => "create_stream".to_string(),
+            StreamOperation::StreamAdd { .. } => "stream_add".to_string(),
+            StreamOperation::StreamRead { .. } => "stream_read".to_string(),
+        }
+    }
+
+    /// Check if backend supports stream operations
+    fn backend_supports_stream_operation(
+        &self,
+        backend: &Arc<dyn UniversalBackend>,
+        operation_type: &str,
+    ) -> bool {
+        let capabilities = backend.capabilities();
+
+        match operation_type {
+            "subscribe" | "unsubscribe" | "publish" => capabilities.stream_capabilities.pub_sub,
+            "create_stream" | "stream_add" | "stream_read" => {
+                capabilities.stream_capabilities.streams
+            }
+            _ => false,
         }
     }
 }
