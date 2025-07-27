@@ -160,6 +160,8 @@ pub struct ApiKeyUsageStats {
     pub last_used_at: Option<DateTime<Utc>>,
     pub requests_today: u64,
     pub requests_this_hour: u64,
+    pub last_reset_date: Option<chrono::NaiveDate>,
+    pub last_reset_hour: Option<u32>,
 }
 
 impl Default for ApiKeyUsageStats {
@@ -169,6 +171,8 @@ impl Default for ApiKeyUsageStats {
             last_used_at: None,
             requests_today: 0,
             requests_this_hour: 0,
+            last_reset_date: None,
+            last_reset_hour: None,
         }
     }
 }

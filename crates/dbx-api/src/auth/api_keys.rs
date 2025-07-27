@@ -576,6 +576,8 @@ impl ApiKeyService {
                             last_used_at: None,
                             requests_today: 0,
                             requests_this_hour: 0,
+                            last_reset_date: None,
+                            last_reset_hour: None,
                         })
                     }
                 } else {
@@ -584,6 +586,8 @@ impl ApiKeyService {
                         last_used_at: None,
                         requests_today: 0,
                         requests_this_hour: 0,
+                        last_reset_date: None,
+                        last_reset_hour: None,
                     })
                 }
             }
@@ -605,13 +609,36 @@ impl ApiKeyService {
                     last_used_at: None,
                     requests_today: 0,
                     requests_this_hour: 0,
+                    last_reset_date: None,
+                    last_reset_hour: None,
                 });
 
         // Update stats
         stats.total_requests += 1;
         stats.last_used_at = Some(now);
 
-        // Simple daily increment (in production this would be more sophisticated)
+        // Enterprise request tracking with time-based resets
+        let current_date = now.date_naive();
+        let current_hour = now.hour();
+
+        // Reset daily counter if date changed
+        if stats
+            .last_reset_date
+            .map_or(true, |last_date| last_date != current_date)
+        {
+            stats.requests_today = 0;
+            stats.last_reset_date = Some(current_date);
+        }
+
+        // Reset hourly counter if hour changed
+        if stats
+            .last_reset_hour
+            .map_or(true, |last_hour| last_hour != current_hour)
+        {
+            stats.requests_this_hour = 0;
+            stats.last_reset_hour = Some(current_hour);
+        }
+
         stats.requests_today += 1;
         stats.requests_this_hour += 1;
 
