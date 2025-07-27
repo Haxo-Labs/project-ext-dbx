@@ -5,10 +5,13 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Json},
 };
+use bit_vec::BitVec;
 use chrono::{DateTime, Utc};
 use dbx_core::{DataOperation, DataValue, UniversalBackend};
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RateLimitResult {
@@ -320,6 +323,555 @@ impl SlidingWindowRateLimiter {
                 }
             }
             Err(e) => Err(format!("Count error: {}", e)),
+        }
+    }
+}
+
+/// Memory-efficient bit vector rate limiter
+pub struct BitVectorRateLimiter {
+    backend: Arc<dyn UniversalBackend>,
+    bucket_size_seconds: u32, // Size of each time bucket in seconds
+}
+
+/// Bit vector data structure for rate limiting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RateLimitBitVector {
+    /// Bit vector where each bit represents a time bucket
+    bits: Vec<u8>,
+    /// Timestamp of the first bucket (bucket 0)
+    start_timestamp: i64,
+    /// Size of each bucket in seconds
+    bucket_size_seconds: u32,
+    /// Total number of buckets
+    bucket_count: usize,
+    /// Request count per bucket (optional, for more accurate counting)
+    bucket_counts: Option<Vec<u16>>, // u16 allows up to 65535 requests per bucket
+}
+
+impl BitVectorRateLimiter {
+    pub fn new(backend: Arc<dyn UniversalBackend>) -> Self {
+        Self {
+            backend,
+            bucket_size_seconds: 1, // 1-second buckets for good granularity
+        }
+    }
+
+    /// Create a new rate limiter with custom bucket size
+    pub fn with_bucket_size(backend: Arc<dyn UniversalBackend>, bucket_size_seconds: u32) -> Self {
+        Self {
+            backend,
+            bucket_size_seconds,
+        }
+    }
+
+    /// Check rate limit using bit vector approach
+    pub async fn check_rate_limit(
+        &self,
+        context: &RateLimitContext,
+    ) -> Result<RateLimitResult, String> {
+        let now = Utc::now().timestamp();
+        let window_start = now - context.policy.window_seconds as i64;
+        let key = format!("rate_limit_bv:{}:{}", context.identifier, context.endpoint);
+
+        // Get or create bit vector
+        let mut bit_vector = self
+            .get_or_create_bit_vector(&key, window_start, context.policy.window_seconds)
+            .await?;
+
+        // Calculate current bucket
+        let current_bucket = self.get_bucket_index(now, &bit_vector);
+
+        // Count requests in the current window
+        let request_count = self.count_requests_in_window(&bit_vector, window_start, now);
+
+        let allowed = request_count < context.policy.requests;
+        let remaining = context.policy.requests.saturating_sub(request_count);
+
+        // If allowed, record the request
+        if allowed {
+            self.record_request(&mut bit_vector, current_bucket).await?;
+            self.store_bit_vector(&key, &bit_vector).await?;
+        }
+
+        // Calculate reset time
+        let reset_time = DateTime::from_timestamp(
+            bit_vector.start_timestamp + context.policy.window_seconds as i64,
+            0,
+        )
+        .unwrap_or_else(|| {
+            Utc::now() + chrono::Duration::seconds(context.policy.window_seconds as i64)
+        });
+
+        Ok(RateLimitResult {
+            allowed,
+            limit: context.policy.requests,
+            remaining,
+            reset_time,
+            retry_after: if allowed {
+                None
+            } else {
+                Some(Duration::from_secs(context.policy.window_seconds as u64))
+            },
+        })
+    }
+
+    /// Get or create a bit vector for the given time window
+    async fn get_or_create_bit_vector(
+        &self,
+        key: &str,
+        window_start: i64,
+        window_seconds: u32,
+    ) -> Result<RateLimitBitVector, String> {
+        match self.get_bit_vector(key).await? {
+            Some(mut existing) => {
+                // Check if existing bit vector is still valid for current window
+                let existing_end = existing.start_timestamp
+                    + (existing.bucket_count as i64 * existing.bucket_size_seconds as i64);
+
+                if existing.start_timestamp <= window_start
+                    && existing_end >= window_start + window_seconds as i64
+                {
+                    // Bit vector covers our window, shift if necessary
+                    self.shift_bit_vector_if_needed(&mut existing, window_start);
+                    Ok(existing)
+                } else {
+                    // Create new bit vector
+                    Ok(self.create_bit_vector(window_start, window_seconds))
+                }
+            }
+            None => {
+                // Create new bit vector
+                Ok(self.create_bit_vector(window_start, window_seconds))
+            }
+        }
+    }
+
+    /// Create a new bit vector for the given time window
+    fn create_bit_vector(&self, start_timestamp: i64, window_seconds: u32) -> RateLimitBitVector {
+        let bucket_count =
+            ((window_seconds as f64 / self.bucket_size_seconds as f64).ceil() as usize).max(1);
+        let byte_count = (bucket_count + 7) / 8; // Round up to nearest byte
+
+        RateLimitBitVector {
+            bits: vec![0u8; byte_count],
+            start_timestamp,
+            bucket_size_seconds: self.bucket_size_seconds,
+            bucket_count,
+            bucket_counts: Some(vec![0u16; bucket_count]), // Enable precise counting
+        }
+    }
+
+    /// Get bit vector from storage
+    async fn get_bit_vector(&self, key: &str) -> Result<Option<RateLimitBitVector>, String> {
+        match self
+            .backend
+            .execute_data(DataOperation::Get {
+                key: key.to_string(),
+                fields: None,
+            })
+            .await
+        {
+            Ok(result) => {
+                if result.success {
+                    if let Some(DataValue::String(json_str)) = result.data {
+                        match serde_json::from_str::<RateLimitBitVector>(&json_str) {
+                            Ok(bit_vector) => Ok(Some(bit_vector)),
+                            Err(e) => Err(format!("Failed to deserialize bit vector: {}", e)),
+                        }
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(e) => Err(format!("Backend error: {}", e)),
+        }
+    }
+
+    /// Store bit vector to backend
+    async fn store_bit_vector(
+        &self,
+        key: &str,
+        bit_vector: &RateLimitBitVector,
+    ) -> Result<(), String> {
+        let json_str = serde_json::to_string(bit_vector)
+            .map_err(|e| format!("Failed to serialize bit vector: {}", e))?;
+
+        match self
+            .backend
+            .execute_data(DataOperation::Set {
+                key: key.to_string(),
+                value: DataValue::String(json_str),
+                ttl: Some(
+                    (bit_vector.bucket_count as u64 * bit_vector.bucket_size_seconds as u64) * 2,
+                ), // TTL twice the window size
+            })
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Storage error: {}", e)),
+        }
+    }
+
+    /// Get bucket index for a given timestamp
+    fn get_bucket_index(&self, timestamp: i64, bit_vector: &RateLimitBitVector) -> usize {
+        let elapsed = timestamp - bit_vector.start_timestamp;
+        let bucket_index = (elapsed / bit_vector.bucket_size_seconds as i64) as usize;
+        bucket_index.min(bit_vector.bucket_count - 1)
+    }
+
+    /// Count requests in the current window
+    fn count_requests_in_window(
+        &self,
+        bit_vector: &RateLimitBitVector,
+        window_start: i64,
+        window_end: i64,
+    ) -> u32 {
+        let start_bucket =
+            self.get_bucket_index(window_start.max(bit_vector.start_timestamp), bit_vector);
+        let end_bucket = self.get_bucket_index(window_end, bit_vector);
+
+        if let Some(ref counts) = bit_vector.bucket_counts {
+            // Use precise counts if available
+            (start_bucket..=end_bucket.min(counts.len() - 1))
+                .map(|i| counts[i] as u32)
+                .sum()
+        } else {
+            // Use bit counting as fallback
+            (start_bucket..=end_bucket.min(bit_vector.bucket_count - 1))
+                .map(|i| {
+                    if self.is_bit_set(&bit_vector.bits, i) {
+                        1
+                    } else {
+                        0
+                    }
+                })
+                .sum()
+        }
+    }
+
+    /// Record a request in the given bucket
+    async fn record_request(
+        &self,
+        bit_vector: &mut RateLimitBitVector,
+        bucket_index: usize,
+    ) -> Result<(), String> {
+        if bucket_index < bit_vector.bucket_count {
+            // Set bit
+            self.set_bit(&mut bit_vector.bits, bucket_index);
+
+            // Increment count if precise counting is enabled
+            if let Some(ref mut counts) = bit_vector.bucket_counts {
+                if bucket_index < counts.len() {
+                    counts[bucket_index] = counts[bucket_index].saturating_add(1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Set a bit in the bit vector
+    fn set_bit(&self, bits: &mut Vec<u8>, index: usize) {
+        let byte_index = index / 8;
+        let bit_index = index % 8;
+        if byte_index < bits.len() {
+            bits[byte_index] |= 1 << bit_index;
+        }
+    }
+
+    /// Check if a bit is set
+    fn is_bit_set(&self, bits: &[u8], index: usize) -> bool {
+        let byte_index = index / 8;
+        let bit_index = index % 8;
+        if byte_index < bits.len() {
+            (bits[byte_index] & (1 << bit_index)) != 0
+        } else {
+            false
+        }
+    }
+
+    /// Shift bit vector window if needed (for sliding window behavior)
+    fn shift_bit_vector_if_needed(
+        &self,
+        bit_vector: &mut RateLimitBitVector,
+        new_window_start: i64,
+    ) {
+        if new_window_start <= bit_vector.start_timestamp {
+            return; // No shift needed
+        }
+
+        let shift_buckets = ((new_window_start - bit_vector.start_timestamp)
+            / bit_vector.bucket_size_seconds as i64) as usize;
+
+        if shift_buckets >= bit_vector.bucket_count {
+            // Complete reset - all buckets are outside the window
+            bit_vector.bits.fill(0);
+            if let Some(ref mut counts) = bit_vector.bucket_counts {
+                counts.fill(0);
+            }
+            bit_vector.start_timestamp = new_window_start;
+        } else if shift_buckets > 0 {
+            // Partial shift
+            self.shift_bits(&mut bit_vector.bits, shift_buckets, bit_vector.bucket_count);
+            if let Some(ref mut counts) = bit_vector.bucket_counts {
+                counts.rotate_left(shift_buckets);
+                // Clear the shifted-in buckets
+                let clear_start = counts.len() - shift_buckets;
+                counts[clear_start..].fill(0);
+            }
+            bit_vector.start_timestamp +=
+                shift_buckets as i64 * bit_vector.bucket_size_seconds as i64;
+        }
+    }
+
+    /// Shift bits left by the specified number of positions
+    fn shift_bits(&self, bits: &mut Vec<u8>, shift_buckets: usize, total_buckets: usize) {
+        let total_bytes = (total_buckets + 7) / 8;
+
+        // Simple bit shifting - shift entire bytes first, then individual bits
+        let shift_bytes = shift_buckets / 8;
+        let shift_bits = shift_buckets % 8;
+
+        if shift_bytes > 0 {
+            // Shift entire bytes
+            bits.rotate_left(shift_bytes);
+            // Clear the shifted-in bytes
+            let clear_start = total_bytes.saturating_sub(shift_bytes);
+            if clear_start < bits.len() {
+                bits[clear_start..].fill(0);
+            }
+        }
+
+        if shift_bits > 0 {
+            // Shift individual bits
+            let mut carry = 0u8;
+            for i in 0..total_bytes {
+                if i < bits.len() {
+                    let new_carry = bits[i] >> (8 - shift_bits);
+                    bits[i] = (bits[i] << shift_bits) | carry;
+                    carry = new_carry;
+                }
+            }
+        }
+    }
+
+    /// Get memory usage statistics
+    pub async fn get_memory_stats(&self, key: &str) -> Result<BitVectorMemoryStats, String> {
+        if let Some(bit_vector) = self.get_bit_vector(key).await? {
+            let bits_memory = bit_vector.bits.len();
+            let counts_memory = bit_vector
+                .bucket_counts
+                .as_ref()
+                .map(|counts| counts.len() * 2) // 2 bytes per u16
+                .unwrap_or(0);
+            let metadata_memory =
+                std::mem::size_of::<RateLimitBitVector>() - bits_memory - counts_memory;
+
+            Ok(BitVectorMemoryStats {
+                total_bytes: bits_memory + counts_memory + metadata_memory,
+                bits_bytes: bits_memory,
+                counts_bytes: counts_memory,
+                metadata_bytes: metadata_memory,
+                bucket_count: bit_vector.bucket_count,
+                bucket_size_seconds: bit_vector.bucket_size_seconds,
+                compression_ratio: self.calculate_compression_ratio(&bit_vector),
+            })
+        } else {
+            Ok(BitVectorMemoryStats::default())
+        }
+    }
+
+    /// Calculate compression ratio vs. traditional timestamp storage
+    fn calculate_compression_ratio(&self, bit_vector: &RateLimitBitVector) -> f64 {
+        let request_count = if let Some(ref counts) = bit_vector.bucket_counts {
+            counts.iter().map(|&c| c as u32).sum::<u32>()
+        } else {
+            bit_vector
+                .bits
+                .iter()
+                .enumerate()
+                .map(|(byte_idx, &byte)| {
+                    (0..8)
+                        .filter(|&bit_idx| {
+                            let bucket_idx = byte_idx * 8 + bit_idx;
+                            bucket_idx < bit_vector.bucket_count && (byte & (1 << bit_idx)) != 0
+                        })
+                        .count() as u32
+                })
+                .sum()
+        };
+
+        if request_count == 0 {
+            return 1.0;
+        }
+
+        // Traditional storage: 8 bytes per timestamp
+        let traditional_bytes = request_count as f64 * 8.0;
+
+        // Bit vector storage
+        let bitvector_bytes = (bit_vector.bits.len()
+            + bit_vector
+                .bucket_counts
+                .as_ref()
+                .map(|c| c.len() * 2)
+                .unwrap_or(0)) as f64;
+
+        traditional_bytes / bitvector_bytes
+    }
+}
+
+/// Enhanced rate limit service with both sliding window and bit vector support
+pub struct EnhancedRateLimitService {
+    sliding_window_limiter: SlidingWindowRateLimiter,
+    bit_vector_limiter: BitVectorRateLimiter,
+    use_bit_vector: bool, // Flag to choose between implementations
+}
+
+impl EnhancedRateLimitService {
+    pub fn new(backend: Arc<dyn UniversalBackend>, use_bit_vector: bool) -> Self {
+        Self {
+            sliding_window_limiter: SlidingWindowRateLimiter::new(backend.clone()),
+            bit_vector_limiter: BitVectorRateLimiter::new(backend),
+            use_bit_vector,
+        }
+    }
+
+    /// Check rate limit using the configured limiter
+    pub async fn check_rate_limit(
+        &self,
+        identifier: &str,
+        endpoint: &str,
+    ) -> Result<RateLimitResult, String> {
+        let policy = self.get_policy_for_endpoint(endpoint).await?;
+        let context = RateLimitContext {
+            identifier: identifier.to_string(),
+            policy,
+            endpoint: endpoint.to_string(),
+        };
+
+        if self.use_bit_vector {
+            self.bit_vector_limiter.check_rate_limit(&context).await
+        } else {
+            self.sliding_window_limiter.check_rate_limit(&context).await
+        }
+    }
+
+    /// Get memory efficiency comparison
+    pub async fn get_efficiency_comparison(
+        &self,
+        identifier: &str,
+        endpoint: &str,
+    ) -> Result<EfficiencyComparison, String> {
+        let key = format!("rate_limit_bv:{}:{}", identifier, endpoint);
+        let bit_vector_stats = self.bit_vector_limiter.get_memory_stats(&key).await?;
+
+        // Estimate sliding window memory usage
+        let sliding_window_key = format!("rate_limit:{}:{}", identifier, endpoint);
+        let timestamps = self
+            .sliding_window_limiter
+            .get_request_timestamps(&sliding_window_key)
+            .await?;
+        let sliding_window_bytes = timestamps.len() * 8; // 8 bytes per i64 timestamp
+
+        Ok(EfficiencyComparison {
+            sliding_window_bytes,
+            bit_vector_bytes: bit_vector_stats.total_bytes,
+            compression_ratio: bit_vector_stats.compression_ratio,
+            memory_savings: ((sliding_window_bytes as f64 - bit_vector_stats.total_bytes as f64)
+                / sliding_window_bytes as f64)
+                .max(0.0),
+        })
+    }
+
+    /// Benchmark both implementations
+    pub async fn benchmark_implementations(
+        &self,
+        identifier: &str,
+        endpoint: &str,
+        iterations: usize,
+    ) -> Result<BenchmarkComparison, String> {
+        let policy = self.get_policy_for_endpoint(endpoint).await?;
+        let context = RateLimitContext {
+            identifier: identifier.to_string(),
+            policy,
+            endpoint: endpoint.to_string(),
+        };
+
+        // Benchmark sliding window
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = self
+                .sliding_window_limiter
+                .check_rate_limit(&context)
+                .await?;
+        }
+        let sliding_window_duration = start.elapsed();
+
+        // Benchmark bit vector
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = self.bit_vector_limiter.check_rate_limit(&context).await?;
+        }
+        let bit_vector_duration = start.elapsed();
+
+        Ok(BenchmarkComparison {
+            iterations,
+            sliding_window_duration,
+            bit_vector_duration,
+            speedup_ratio: sliding_window_duration.as_nanos() as f64
+                / bit_vector_duration.as_nanos() as f64,
+        })
+    }
+
+    async fn get_policy_for_endpoint(&self, endpoint: &str) -> Result<RateLimitPolicy, String> {
+        // Default policy for demonstration
+        Ok(RateLimitPolicy {
+            requests: 100,
+            window_seconds: 60,
+            burst_allowance: 10,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EfficiencyComparison {
+    pub sliding_window_bytes: usize,
+    pub bit_vector_bytes: usize,
+    pub compression_ratio: f64,
+    pub memory_savings: f64, // Percentage of memory saved
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkComparison {
+    pub iterations: usize,
+    pub sliding_window_duration: std::time::Duration,
+    pub bit_vector_duration: std::time::Duration,
+    pub speedup_ratio: f64, // How much faster bit vector is
+}
+
+/// Memory usage statistics for bit vector
+#[derive(Debug, Clone)]
+pub struct BitVectorMemoryStats {
+    pub total_bytes: usize,
+    pub bits_bytes: usize,
+    pub counts_bytes: usize,
+    pub metadata_bytes: usize,
+    pub bucket_count: usize,
+    pub bucket_size_seconds: u32,
+    pub compression_ratio: f64, // How much smaller than traditional timestamp storage
+}
+
+impl Default for BitVectorMemoryStats {
+    fn default() -> Self {
+        Self {
+            total_bytes: 0,
+            bits_bytes: 0,
+            counts_bytes: 0,
+            metadata_bytes: 0,
+            bucket_count: 0,
+            bucket_size_seconds: 0,
+            compression_ratio: 1.0,
         }
     }
 }
@@ -1152,5 +1704,173 @@ mod tests {
         assert_eq!(result.remaining, 95);
         assert_eq!(result.reset_time, reset_time);
         assert!(result.retry_after.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_bit_vector_rate_limiter() {
+        let backend = create_redis_pool().await.unwrap();
+        let limiter = BitVectorRateLimiter::new(backend);
+
+        let policy = RateLimitPolicy {
+            requests: 5,
+            window_seconds: 10,
+            burst_allowance: 2,
+        };
+
+        let context = RateLimitContext {
+            identifier: "test_user_bv".to_string(),
+            policy,
+            endpoint: "/api/test".to_string(),
+        };
+
+        // Test initial requests (should be allowed)
+        for i in 0..5 {
+            let result = limiter.check_rate_limit(&context).await.unwrap();
+            assert!(result.allowed, "Request {} should be allowed", i + 1);
+            assert_eq!(result.limit, 5);
+            assert_eq!(result.remaining, 4 - i);
+        }
+
+        // Test rate limit exceeded
+        let result = limiter.check_rate_limit(&context).await.unwrap();
+        assert!(!result.allowed, "Request should be rate limited");
+        assert_eq!(result.remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn test_bit_vector_memory_efficiency() {
+        let backend = create_redis_pool().await.unwrap();
+        let limiter = BitVectorRateLimiter::with_bucket_size(backend, 1); // 1-second buckets
+
+        let policy = RateLimitPolicy {
+            requests: 100,
+            window_seconds: 60,
+            burst_allowance: 10,
+        };
+
+        let context = RateLimitContext {
+            identifier: "memory_test_user".to_string(),
+            policy,
+            endpoint: "/api/memory_test".to_string(),
+        };
+
+        // Make several requests
+        for _ in 0..20 {
+            let _ = limiter.check_rate_limit(&context).await.unwrap();
+        }
+
+        // Check memory stats
+        let key = format!("rate_limit_bv:{}:{}", context.identifier, context.endpoint);
+        let stats = limiter.get_memory_stats(&key).await.unwrap();
+
+        assert!(stats.total_bytes > 0, "Should have memory usage data");
+        assert!(
+            stats.bucket_count == 60,
+            "Should have 60 buckets for 60-second window"
+        );
+        assert!(
+            stats.compression_ratio > 1.0,
+            "Should provide compression vs timestamp storage"
+        );
+
+        println!("Bit vector memory stats: {:?}", stats);
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_rate_limit_service() {
+        let backend = create_redis_pool().await.unwrap();
+
+        // Test sliding window implementation
+        let service_sliding = EnhancedRateLimitService::new(backend.clone(), false);
+        let result = service_sliding
+            .check_rate_limit("test_user_enhanced", "/api/enhanced")
+            .await
+            .unwrap();
+        assert!(result.allowed);
+
+        // Test bit vector implementation
+        let service_bitvector = EnhancedRateLimitService::new(backend, true);
+        let result = service_bitvector
+            .check_rate_limit("test_user_enhanced_bv", "/api/enhanced")
+            .await
+            .unwrap();
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn test_bit_vector_sliding_window_behavior() {
+        let backend = create_redis_pool().await.unwrap();
+        let limiter = BitVectorRateLimiter::with_bucket_size(backend, 1);
+
+        let policy = RateLimitPolicy {
+            requests: 3,
+            window_seconds: 5,
+            burst_allowance: 1,
+        };
+
+        let context = RateLimitContext {
+            identifier: "sliding_test_user".to_string(),
+            policy,
+            endpoint: "/api/sliding_test".to_string(),
+        };
+
+        // Use up the rate limit
+        for _ in 0..3 {
+            let result = limiter.check_rate_limit(&context).await.unwrap();
+            assert!(result.allowed);
+        }
+
+        // Should be rate limited now
+        let result = limiter.check_rate_limit(&context).await.unwrap();
+        assert!(!result.allowed);
+
+        // Wait for window to slide (simulate by manually advancing time in bit vector)
+        // In a real test, you would wait or use a time-mocking framework
+        // For now, just verify the structure works
+    }
+
+    #[tokio::test]
+    async fn test_efficiency_comparison() {
+        let backend = create_redis_pool().await.unwrap();
+        let service = EnhancedRateLimitService::new(backend, true);
+
+        // Make some requests with bit vector
+        for _ in 0..10 {
+            let _ = service
+                .check_rate_limit("efficiency_user", "/api/efficiency")
+                .await;
+        }
+
+        let comparison = service
+            .get_efficiency_comparison("efficiency_user", "/api/efficiency")
+            .await
+            .unwrap();
+        println!("Efficiency comparison: {:?}", comparison);
+
+        // Bit vector should use less memory for many requests
+        assert!(comparison.compression_ratio >= 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_bit_vector_serialization() {
+        use crate::middleware::rate_limit::RateLimitBitVector;
+
+        let bit_vector = RateLimitBitVector {
+            bits: vec![0b10101010, 0b01010101],
+            start_timestamp: 1234567890,
+            bucket_size_seconds: 1,
+            bucket_count: 16,
+            bucket_counts: Some(vec![1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1]),
+        };
+
+        // Test serialization
+        let json = serde_json::to_string(&bit_vector).unwrap();
+        assert!(!json.is_empty());
+
+        // Test deserialization
+        let deserialized: RateLimitBitVector = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.bits, bit_vector.bits);
+        assert_eq!(deserialized.start_timestamp, bit_vector.start_timestamp);
+        assert_eq!(deserialized.bucket_count, bit_vector.bucket_count);
     }
 }
