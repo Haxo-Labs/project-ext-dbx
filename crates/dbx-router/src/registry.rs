@@ -115,6 +115,63 @@ impl BackendRegistry {
             .collect()
     }
 
+    /// Get backends that support a specific capability/operation
+    pub async fn get_backends_with_capability(&self, operation_type: &str) -> Vec<String> {
+        let mut capable_backends = Vec::new();
+
+        // Convert operation type string to enum
+        let operation_enum = match operation_type {
+            "get" => Some(dbx_core::DataOperationType::Get),
+            "set" => Some(dbx_core::DataOperationType::Set),
+            "update" => Some(dbx_core::DataOperationType::Update),
+            "delete" => Some(dbx_core::DataOperationType::Delete),
+            "exists" => Some(dbx_core::DataOperationType::Exists),
+            "get_ttl" => Some(dbx_core::DataOperationType::GetTtl),
+            "set_ttl" => Some(dbx_core::DataOperationType::SetTtl),
+            "batch" => Some(dbx_core::DataOperationType::Batch),
+            _ => None,
+        };
+
+        if let Some(op_type) = operation_enum {
+            for entry in self.backends.iter() {
+                let backend_name = entry.key();
+                let backend = entry.value();
+
+                let capabilities = backend.capabilities();
+                if capabilities.data_operations.contains(&op_type) {
+                    capable_backends.push(backend_name.clone());
+                }
+            }
+        }
+
+        capable_backends
+    }
+
+    /// Get backends that support specific stream capabilities
+    pub async fn get_backends_with_stream_capability(&self, operation_type: &str) -> Vec<String> {
+        let mut capable_backends = Vec::new();
+
+        for entry in self.backends.iter() {
+            let backend_name = entry.key();
+            let backend = entry.value();
+
+            let capabilities = backend.capabilities();
+            let supports_operation = match operation_type {
+                "subscribe" | "unsubscribe" | "publish" => capabilities.stream_capabilities.pub_sub,
+                "create_stream" | "stream_add" | "stream_read" => {
+                    capabilities.stream_capabilities.streams
+                }
+                _ => false,
+            };
+
+            if supports_operation {
+                capable_backends.push(backend_name.clone());
+            }
+        }
+
+        capable_backends
+    }
+
     /// Remove a backend
     pub async fn remove_backend(&self, name: &str) -> Option<Arc<dyn UniversalBackend>> {
         if let Some((_, backend)) = self.backends.remove(name) {
