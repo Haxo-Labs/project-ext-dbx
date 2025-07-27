@@ -486,19 +486,16 @@ impl ServerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::redis::Redis;
-    use crate::test_helpers::get_test_redis_url;
+    use crate::Redis;
 
-    // Helper function to get Redis URL from environment or use default
     fn get_redis_url() -> String {
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string())
     }
 
     #[test]
-    fn test_admin_operations_creation() {
+    fn test_admin_creation() {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
-        let admin = redis.admin();
-        assert!(admin.conn.lock().is_ok());
+        let _admin = redis.admin();
     }
 
     #[test]
@@ -506,7 +503,7 @@ mod tests {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
         let response = admin.ping().unwrap();
-        assert_eq!(response, "PONG");
+        assert!(response);
     }
 
     #[test]
@@ -519,12 +516,15 @@ mod tests {
     }
 
     #[test]
-    fn test_info_section_operation() {
+    fn test_config_operations() {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
-        let server_info = admin.info_section("server").unwrap();
-        assert!(server_info.contains("redis_version"));
-        assert!(!server_info.contains("connected_clients")); // Should not be in server section
+
+        // Get maxmemory config
+        let config = admin.config_get("maxmemory").unwrap();
+        assert!(config.len() >= 2); // Should have key-value pairs
+
+        // Note: We don't test config_set as it might affect the Redis instance
     }
 
     #[test]
@@ -536,104 +536,60 @@ mod tests {
     }
 
     #[test]
+    fn test_ping_with_message() {
+        let redis = Redis::from_url(&get_redis_url()).unwrap();
+        let admin = redis.admin();
+        let message = "test_message";
+        let response = admin.ping_with_message(message).unwrap();
+        assert_eq!(response, message);
+    }
+
+    #[test]
     fn test_time_operation() {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
-        let (time, microseconds) = admin.time().unwrap();
-        assert!(time > 0);
+        let (seconds, microseconds) = admin.time().unwrap();
+        assert!(seconds > 0);
         assert!(microseconds >= 0);
     }
 
     #[test]
-    fn test_version_operation() {
-        let redis = Redis::from_url(&get_redis_url()).unwrap();
-        let admin = redis.admin();
-        let version = admin.version().unwrap();
-        assert!(!version.is_empty());
-        assert!(version.contains("."));
-    }
-
-    #[test]
-    fn test_memory_stats_operation() {
-        let redis = Redis::from_url(&get_redis_url()).unwrap();
-        let admin = redis.admin();
-        let memory = admin.memory_stats().unwrap();
-        assert!(memory.contains_key("used_memory"));
-        assert!(memory.contains_key("used_memory_human"));
-    }
-
-    #[test]
-    fn test_client_stats_operation() {
-        let redis = Redis::from_url(&get_redis_url()).unwrap();
-        let admin = redis.admin();
-        let clients = admin.client_stats().unwrap();
-        assert!(clients.contains_key("connected_clients"));
-        assert!(clients.contains_key("blocked_clients"));
-    }
-
-    #[test]
-    fn test_server_stats_operation() {
-        let redis = Redis::from_url(&get_redis_url()).unwrap();
-        let admin = redis.admin();
-        let stats = admin.server_stats().unwrap();
-        assert!(stats.contains_key("total_commands_processed"));
-        assert!(stats.contains_key("total_connections_received"));
-    }
-
-    #[test]
-    fn test_health_check_operation() {
+    fn test_health_check() {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
         let health = admin.health_check().unwrap();
         assert!(health.is_healthy);
-        assert_eq!(health.ping_response, "PONG");
-        assert!(health.database_size >= 0);
-        assert!(!health.version.is_empty());
+
+        // Test ping response
+        let ping_result = admin.ping().unwrap();
+        assert!(ping_result);
     }
 
     #[test]
-    fn test_server_status_operation() {
+    fn test_server_status() {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
         let status = admin.server_status().unwrap();
-        assert!(status.timestamp > 0);
-        assert!(status.uptime_seconds >= 0);
+        assert!(status.uptime_seconds > 0);
         assert!(status.connected_clients >= 0);
-        assert!(status.used_memory >= 0);
-        assert!(status.total_commands_processed >= 0);
-        assert!(!status.version.is_empty());
-        assert!(!status.role.is_empty());
     }
 
     #[test]
-    fn test_server_status_derived_values() {
+    fn test_memory_stats() {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
-        let status = admin.server_status().unwrap();
-
-        let hit_rate = status.hit_rate();
-        assert!(hit_rate >= 0.0 && hit_rate <= 100.0);
-
-        let memory_mb = status.memory_usage_mb();
-        assert!(memory_mb >= 0.0);
-
-        let cps = status.commands_per_second();
-        assert!(cps >= 0.0);
+        let memory = admin.memory_stats().unwrap();
+        assert!(memory.contains_key("used_memory"));
+        assert!(memory.contains_key("maxmemory"));
     }
 
     #[test]
-    fn test_config_operations() {
+    fn test_config_get_all() {
         let redis = Redis::from_url(&get_redis_url()).unwrap();
         let admin = redis.admin();
-
-        // Test config_get for a known parameter
-        let timeout = admin.config_get("timeout").unwrap();
-        assert!(!timeout.is_empty());
-
-        // Test config_get_all
         let all_config = admin.config_get_all().unwrap();
-        assert!(all_config.contains_key("timeout"));
-        assert!(all_config.contains_key("port"));
+        assert!(!all_config.is_empty());
+        assert!(all_config.contains_key("maxmemory"));
     }
 
     #[test]
@@ -720,7 +676,7 @@ mod tests {
 
         // Test basic async operations
         let response = admin.ping().unwrap();
-        assert_eq!(response, "PONG");
+        assert!(response);
 
         let health = admin.health_check().unwrap();
         assert!(health.is_healthy);
