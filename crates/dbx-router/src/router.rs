@@ -64,8 +64,13 @@ impl BackendRouter {
             return Ok(backend);
         }
 
-        // Use load balancer with capability filtering
-        if let Some(backend_name) = self.load_balancer.select_backend().await? {
+        // Use load balancer with capability filtering and key if available
+        let key = self.extract_key_from_data_operation(operation);
+        if let Some(backend_name) = self
+            .load_balancer
+            .select_backend_with_key(key.as_deref())
+            .await?
+        {
             debug!(backend = %backend_name, "Checking load-balanced backend capabilities");
 
             if let Some(backend) = self.registry.get_backend(&backend_name).await {
@@ -75,7 +80,11 @@ impl BackendRouter {
                     // Try other backends from load balancer
                     for _ in 0..5 {
                         // Max 5 attempts
-                        if let Some(alt_backend_name) = self.load_balancer.select_backend().await? {
+                        if let Some(alt_backend_name) = self
+                            .load_balancer
+                            .select_backend_with_key(key.as_deref())
+                            .await?
+                        {
                             if alt_backend_name != backend_name {
                                 if let Some(alt_backend) =
                                     self.registry.get_backend(&alt_backend_name).await
