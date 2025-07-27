@@ -972,7 +972,7 @@ mod tests {
 
     #[test]
     fn test_all_structs_serialization_roundtrip() {
-        // Test comprehensive serialization for all major structs
+        // Test serialization for all major structs
         let user_info = UserInfo {
             id: "user1".to_string(),
             username: "testuser".to_string(),

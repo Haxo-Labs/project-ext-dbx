@@ -306,9 +306,9 @@ pub fn extract_client_ip_info(
     get_trusted_proxy_validator().extract_client_ip(headers, connect_info)
 }
 
-/// Comprehensive Host header validation for production security
+/// Host header validation for security
 ///
-/// This function provides enterprise-grade validation against:
+/// This function provides validation against:
 /// - Host header injection attacks
 /// - Domain confusion attacks
 /// - IPv6 bracket injection
@@ -600,7 +600,7 @@ fn validate_against_allowlist(
     Err("Host not in allowed list")
 }
 
-/// Security headers middleware that adds comprehensive security headers to all responses
+/// Security headers middleware that adds security headers to all responses
 pub async fn security_headers_middleware(
     security_config: SecurityConfig,
     request: Request<Body>,

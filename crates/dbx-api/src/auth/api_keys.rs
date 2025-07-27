@@ -617,7 +617,7 @@ impl ApiKeyService {
         stats.total_requests += 1;
         stats.last_used_at = Some(now);
 
-        // Enterprise request tracking with time-based resets
+        // Request tracking with time-based resets
         let current_date = now.date_naive();
         let current_hour = now.hour();
 

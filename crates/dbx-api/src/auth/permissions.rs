@@ -883,7 +883,7 @@ mod tests {
     fn test_complex_role_inheritance() {
         let mut registry = RoleRegistry::new();
 
-        // Create a hierarchy: base -> intermediate -> advanced
+        // Create a hierarchy: base -> intermediate -> manager
         let base_role = Role::new(
             "base".to_string(),
             "Base role".to_string(),
@@ -894,25 +894,25 @@ mod tests {
             "intermediate".to_string(),
             "Intermediate role".to_string(),
             Permission::single(PermissionType::StringSet),
-        )
-        .inherit_from("base".to_string());
+        );
+        intermediate_role.set_inheritance(vec!["base".to_string()]);
 
-        let advanced_role = Role::new(
-            "advanced".to_string(),
-            "Advanced role".to_string(),
+        let manager_role = Role::new(
+            "manager".to_string(),
+            "Manager role".to_string(),
             Permission::single(PermissionType::HashGet),
-        )
-        .inherit_from("intermediate".to_string());
+        );
+        manager_role.set_inheritance(vec!["intermediate".to_string()]);
 
         registry.register_role(base_role);
         registry.register_role(intermediate_role);
-        registry.register_role(advanced_role);
+        registry.register_role(manager_role);
 
-        // Test that advanced role has all permissions through inheritance chain
-        let advanced_perms = registry.get_effective_permissions("advanced").unwrap();
-        assert!(advanced_perms.contains_type(&PermissionType::StringGet)); // From base
-        assert!(advanced_perms.contains_type(&PermissionType::StringSet)); // From intermediate
-        assert!(advanced_perms.contains_type(&PermissionType::HashGet)); // Own permission
+        // Test that manager role has all permissions through inheritance chain
+        let manager_perms = registry.get_effective_permissions("manager").unwrap();
+        assert!(manager_perms.contains_type(&PermissionType::StringGet)); // From base
+        assert!(manager_perms.contains_type(&PermissionType::StringSet)); // From intermediate
+        assert!(manager_perms.contains_type(&PermissionType::HashGet)); // Own permission
 
         // Test that intermediate has base permissions
         let intermediate_perms = registry.get_effective_permissions("intermediate").unwrap();
@@ -1048,7 +1048,7 @@ mod tests {
     fn test_role_inheritance_chain() {
         let mut registry = RoleRegistry::new();
 
-        // Create inheritance chain: base -> intermediate -> advanced
+        // Create inheritance chain: base -> intermediate -> manager
         let base_role = Role::new(
             "base".to_string(),
             "Base role".to_string(),
@@ -1062,22 +1062,22 @@ mod tests {
         )
         .inherit_from("base".to_string());
 
-        let advanced_role = Role::new(
-            "advanced".to_string(),
-            "Advanced role".to_string(),
+        let manager_role = Role::new(
+            "manager".to_string(),
+            "Manager role".to_string(),
             Permission::single(PermissionType::HashGet),
         )
         .inherit_from("intermediate".to_string());
 
         registry.register_role(base_role);
         registry.register_role(intermediate_role);
-        registry.register_role(advanced_role);
+        registry.register_role(manager_role);
 
         // Test inheritance chain
-        let advanced = registry.get_role("advanced").unwrap();
-        let effective_perms = advanced.effective_permissions(&registry);
+        let manager = registry.get_role("manager").unwrap();
+        let effective_perms = manager.effective_permissions(&registry);
 
-        // Advanced should have all permissions through inheritance chain
+        // Manager should have all permissions through inheritance chain
         assert!(effective_perms.contains_type(&PermissionType::HashGet)); // Own
         assert!(effective_perms.contains_type(&PermissionType::StringSet)); // From intermediate
         assert!(effective_perms.contains_type(&PermissionType::StringGet)); // From base
@@ -1087,7 +1087,7 @@ mod tests {
         let intermediate_perms = intermediate.effective_permissions(&registry);
         assert!(intermediate_perms.contains_type(&PermissionType::StringSet)); // Own
         assert!(intermediate_perms.contains_type(&PermissionType::StringGet)); // From base
-        assert!(!intermediate_perms.contains_type(&PermissionType::HashGet)); // Not from advanced
+        assert!(!intermediate_perms.contains_type(&PermissionType::HashGet)); // Not from manager
     }
 
     #[test]

@@ -616,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn test_backend_capabilities_comprehensive() {
+    fn test_backend_capabilities() {
         let capabilities = BackendCapabilities {
             data_operations: vec![
                 DataOperationType::Get,

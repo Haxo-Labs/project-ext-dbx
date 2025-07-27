@@ -314,8 +314,7 @@ impl ConfigHealthChecker {
 
         // Check cache configuration
         if !config.performance.cache_enabled {
-            warnings
-                .push("Caching is disabled - consider enabling for better performance".to_string());
+            warnings.push("Caching is disabled - consider enabling for performance".to_string());
         }
 
         // Check if metrics are disabled
