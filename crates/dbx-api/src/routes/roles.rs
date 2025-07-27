@@ -36,7 +36,17 @@ pub async fn list_roles(
     State(rbac_service): State<Arc<RbacService>>,
 ) -> Result<Json<ApiResponse<Vec<RoleResponse>>>, (StatusCode, Json<ApiResponse<()>>)> {
     let role_registry_arc = rbac_service.get_role_registry();
-    let role_registry = role_registry_arc.read().unwrap();
+    let role_registry = match role_registry_arc.read() {
+        Ok(registry) => registry,
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "Failed to access role registry".to_string(),
+                )),
+            ));
+        }
+    };
     let roles = role_registry.list_roles();
 
     let role_responses: Vec<RoleResponse> = roles
@@ -73,7 +83,17 @@ pub async fn get_role(
     Path(role_name): Path<String>,
 ) -> Result<Json<ApiResponse<RoleResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let role_registry_arc = rbac_service.get_role_registry();
-    let role_registry = role_registry_arc.read().unwrap();
+    let role_registry = match role_registry_arc.read() {
+        Ok(registry) => registry,
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "Failed to access role registry".to_string(),
+                )),
+            ));
+        }
+    };
 
     match role_registry.get_role(&role_name) {
         Some(role) => {
@@ -202,7 +222,17 @@ pub async fn get_role_permissions(
     Path(role_name): Path<String>,
 ) -> Result<Json<ApiResponse<Vec<String>>>, (StatusCode, Json<ApiResponse<()>>)> {
     let role_registry_arc = rbac_service.get_role_registry();
-    let role_registry = role_registry_arc.read().unwrap();
+    let role_registry = match role_registry_arc.read() {
+        Ok(registry) => registry,
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "Failed to access role registry".to_string(),
+                )),
+            ));
+        }
+    };
 
     match role_registry.get_effective_permissions(&role_name) {
         Some(permissions) => {
