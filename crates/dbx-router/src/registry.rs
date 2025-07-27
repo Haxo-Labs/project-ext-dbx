@@ -7,7 +7,7 @@ use tracing::{debug, error, info};
 use dbx_config::{BackendConfig, DbxConfig};
 use dbx_core::{DbxError, DbxResult, UniversalBackend};
 
-use crate::{RouterError, RouterResult};
+use crate::RouterResult;
 
 /// Registry for managing backend instances
 pub struct BackendRegistry {
@@ -261,7 +261,7 @@ impl BackendRegistry {
             .collect();
 
         for name in backend_names {
-            if let Some(backend) = self.remove_backend(&name).await {
+            if let Some(_backend) = self.remove_backend(&name).await {
                 debug!(backend = %name, "Backend removed during shutdown");
                 // Note: If backends had explicit shutdown methods, we'd call them here
             }

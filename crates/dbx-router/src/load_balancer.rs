@@ -4,8 +4,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, RwLock,
+    Arc,
 };
+use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use crate::error::RouterError;
@@ -36,7 +37,7 @@ impl PartialOrd for BackendConnection {
 
 #[derive(Debug, Clone)]
 struct BackendWeight {
-    weight: i32,
+    _weight: i32,
     current_weight: i32,
     effective_weight: i32,
 }
@@ -45,7 +46,7 @@ impl BackendWeight {
     fn new(weight: f64) -> Self {
         let weight_int = (weight * 100.0) as i32;
         Self {
-            weight: weight_int,
+            _weight: weight_int,
             current_weight: 0,
             effective_weight: weight_int,
         }
@@ -138,7 +139,7 @@ pub struct LoadBalancer {
     swrr_weights: Arc<RwLock<HashMap<String, BackendWeight>>>,
     consistent_hash_ring: Arc<RwLock<ConsistentHashRing>>,
     least_connections_heap: Arc<RwLock<BinaryHeap<BackendConnection>>>,
-    heap_rebuild_counter: Arc<AtomicUsize>,
+    _heap_rebuild_counter: Arc<AtomicUsize>,
     healthy_backends: Arc<RwLock<std::collections::HashSet<String>>>,
     health_tracker: HealthTracker,
 }
@@ -187,7 +188,7 @@ impl LoadBalancer {
             swrr_weights: Arc::new(RwLock::new(swrr_weights)),
             consistent_hash_ring,
             least_connections_heap: Arc::new(RwLock::new(least_connections_heap)),
-            heap_rebuild_counter: Arc::new(AtomicUsize::new(0)),
+            _heap_rebuild_counter: Arc::new(AtomicUsize::new(0)),
             healthy_backends,
             health_tracker,
         })
@@ -200,7 +201,7 @@ impl LoadBalancer {
 
     /// Select a backend based on the configured strategy with optional key for consistent hashing
     pub async fn select_backend_with_key(&self, key: Option<&str>) -> DbxResult<Option<String>> {
-        let healthy_backends = self.healthy_backends.read().unwrap();
+        let healthy_backends = self.healthy_backends.read().await;
         if healthy_backends.is_empty() {
             warn!("No healthy backends available");
             return Ok(None);
@@ -418,7 +419,7 @@ impl LoadBalancer {
             .remove_backend(backend_name);
 
         let healthy_backends = self.healthy_backends.read().await;
-        let healthy_list: Vec<String> = healthy_backends.iter().cloned().collect();
+        let _healthy_list: Vec<String> = healthy_backends.iter().cloned().collect();
         drop(healthy_backends);
 
         self.healthy_backends.write().await.remove(backend_name);
@@ -471,9 +472,9 @@ impl HealthTracker {
         self.backend_health.insert(
             backend_name,
             BackendHealthStatus {
-                is_healthy: true,
-                last_check: std::time::Instant::now(),
-                consecutive_failures: 0,
+                _is_healthy: true,
+                _last_check: std::time::Instant::now(),
+                _consecutive_failures: 0,
             },
         );
     }
@@ -482,24 +483,24 @@ impl HealthTracker {
         self.backend_health.remove(backend_name);
     }
 
-    async fn update_health(&self, backend_name: &str, is_healthy: bool) {
+    async fn _update_health(&self, backend_name: &str, is_healthy: bool) {
         if let Some(mut entry) = self.backend_health.get_mut(backend_name) {
-            entry.is_healthy = is_healthy;
-            entry.last_check = std::time::Instant::now();
+            entry._is_healthy = is_healthy;
+            entry._last_check = std::time::Instant::now();
             if is_healthy {
-                entry.consecutive_failures = 0;
+                entry._consecutive_failures = 0;
             } else {
-                entry.consecutive_failures += 1;
+                entry._consecutive_failures += 1;
             }
         }
     }
 
-    async fn get_stats(&self) -> HealthTrackerStats {
+    async fn _get_stats(&self) -> HealthTrackerStats {
         let total_backends = self.backend_health.len();
         let healthy_backends = self
             .backend_health
             .iter()
-            .filter(|entry| entry.value().is_healthy)
+            .filter(|entry| entry.value()._is_healthy)
             .count();
 
         HealthTrackerStats {
@@ -512,9 +513,9 @@ impl HealthTracker {
 /// Backend health status
 #[derive(Debug, Clone)]
 struct BackendHealthStatus {
-    is_healthy: bool,
-    last_check: std::time::Instant,
-    consecutive_failures: usize,
+    _is_healthy: bool,
+    _last_check: std::time::Instant,
+    _consecutive_failures: usize,
 }
 
 /// Health tracker statistics

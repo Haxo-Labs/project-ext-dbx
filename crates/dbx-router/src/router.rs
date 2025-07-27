@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error};
 
-use dbx_config::{DbxConfig, KeyRoutingRule};
+use dbx_config::DbxConfig;
 use dbx_core::{DataOperation, DbxResult, QueryOperation, StreamOperation, UniversalBackend};
 
 use crate::load_balancer::LoadBalancerStats;
@@ -443,7 +443,7 @@ impl BackendRouter {
     }
 
     /// Try to get a backend by name with fallback logic
-    async fn try_get_backend(&self, backend_name: &str) -> DbxResult<Arc<dyn UniversalBackend>> {
+    async fn _try_get_backend(&self, backend_name: &str) -> DbxResult<Arc<dyn UniversalBackend>> {
         // Try the specified backend first
         if let Some(backend) = self.registry.get_backend(backend_name).await {
             return Ok(backend);
