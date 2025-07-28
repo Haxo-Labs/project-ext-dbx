@@ -2,11 +2,12 @@ use crate::{
     auth::{ApiKeyService, RbacService},
     config::{AppConfig, ConfigError},
     middleware::{
-        rbac_auth_middleware,
+        rate_limit_middleware, rbac_auth_middleware,
         security::{
             create_cors_layer, development_security_middleware, security_validation_middleware,
         },
-        security_headers_middleware, JwtService, RateLimitService, UserStore,
+        security_headers_middleware, JwtService, PolicyRateLimitService, RateLimitService,
+        UserStore,
     },
     models::ApiResponse,
     routes::{
@@ -16,7 +17,9 @@ use crate::{
         stream::create_stream_routes,
     },
 };
-use axum::{body::Body, http::Request, middleware::Next, response::IntoResponse, Router};
+use axum::{
+    body::Body, http::Request, middleware::Next, response::IntoResponse, routing::get, Router,
+};
 use dbx_adapter::redis::factory::RedisBackendFactory;
 use dbx_config::{AdminConfig, BackendConfig, DbxConfig, RoutingConfig};
 use dbx_router::{registry::BackendRegistryBuilder, BackendRouter};
@@ -34,7 +37,7 @@ pub struct AppState {
     pub user_store: Arc<UserStore>,
     pub api_key_service: Arc<ApiKeyService>,
     pub rbac_service: Arc<RbacService>,
-    pub rate_limit_service: Arc<RateLimitService>,
+    pub rate_limit_service: Arc<PolicyRateLimitService>,
 }
 
 impl AppState {
@@ -312,7 +315,7 @@ impl AppState {
             Arc<JwtService>,
             Arc<ApiKeyService>,
             Arc<RbacService>,
-            Arc<RateLimitService>,
+            Arc<PolicyRateLimitService>,
         ),
         ServerError,
     > {
@@ -322,7 +325,7 @@ impl AppState {
         let api_key_service = Arc::new(ApiKeyService::new(backend.clone()));
         let rbac_service = Arc::new(RbacService::new(backend.clone(), app_config.rbac.clone()));
 
-        let rate_limit_service = RateLimitService::new(backend.clone(), true);
+        let rate_limit_service = PolicyRateLimitService::new(backend.clone());
         if app_config.rate_limit.enabled {
             let global_policy = crate::models::RateLimitPolicy {
                 requests: app_config.rate_limit.global_requests_per_window,
@@ -487,9 +490,13 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
     let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone())
         .layer(cors_layer.clone());
 
-    // Create API key management routes (RBAC authentication required)
+    // Create API key management routes (rate limited + RBAC authentication required)
     let api_key_routes = create_api_key_routes(state.api_key_service.clone())
         .layer(axum::middleware::from_fn_with_state(
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
             (
                 state.jwt_service.clone(),
                 state.api_key_service.clone(),
@@ -499,9 +506,13 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
         ))
         .layer(cors_layer.clone());
 
-    // Create data operation routes (RBAC authentication required)
+    // Create data operation routes (rate limited + RBAC authentication required)
     let data_routes = create_data_routes()
         .layer(axum::middleware::from_fn_with_state(
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
             (
                 state.jwt_service.clone(),
                 state.api_key_service.clone(),
@@ -511,20 +522,12 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
         ))
         .layer(cors_layer.clone());
 
-    // Create query routes (RBAC authentication required)
+    // Create query routes (rate limited + RBAC authentication required)
     let query_routes = create_query_routes()
         .layer(axum::middleware::from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
         ))
-        .layer(cors_layer.clone());
-
-    // Create role management routes (admin authentication required)
-    let role_routes = create_role_routes(state.rbac_service.clone())
         .layer(axum::middleware::from_fn_with_state(
             (
                 state.jwt_service.clone(),
@@ -535,9 +538,13 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
         ))
         .layer(cors_layer.clone());
 
-    // Create streaming routes (RBAC authentication required)
+    // Create streaming routes (rate limited + RBAC authentication required)
     let stream_routes = create_stream_routes()
         .layer(axum::middleware::from_fn_with_state(
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
             (
                 state.jwt_service.clone(),
                 state.api_key_service.clone(),
@@ -547,8 +554,28 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
         ))
         .layer(cors_layer.clone());
 
-    // Create rate limiting management routes (admin authentication required)
+    // Create role management routes (rate limited + RBAC admin authentication required)
+    let role_routes = create_role_routes(state.rbac_service.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
+            rbac_auth_middleware,
+        ))
+        .layer(cors_layer.clone());
+
+    // Create rate limit management routes (rate limited + RBAC admin authentication required)
     let rate_limit_routes = create_rate_limit_routes()
+        .layer(axum::middleware::from_fn_with_state(
+            state.rate_limit_service.clone(),
+            rate_limit_middleware,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             (
                 state.jwt_service.clone(),
@@ -571,10 +598,11 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
         ))
         .layer(cors_layer.clone());
 
-    Router::new()
-        .route("/health", axum::routing::get(health_check))
-        .nest("/auth", auth_routes)
-        .nest("/api/v1/keys", api_key_routes)
+    // Configure global middleware stack
+    let app = Router::new()
+        .route("/health", get(health_check))
+        .nest("/api/v1/auth", auth_routes)
+        .nest("/api/v1/api-keys", api_key_routes)
         .nest(
             "/api/v1/data",
             data_routes.with_state(state.backend_router.clone()),
@@ -583,19 +611,25 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
             "/api/v1/query",
             query_routes.with_state(state.backend_router.clone()),
         )
+        .nest(
+            "/api/v1/stream",
+            stream_routes.with_state(state.backend_router.clone()),
+        )
         .nest("/api/v1/roles", role_routes)
         .nest(
             "/api/v1/admin",
             health_routes.with_state(state.backend_router.clone()),
         )
         .nest(
-            "/api/v1/stream",
-            stream_routes.with_state(state.backend_router.clone()),
-        )
-        .nest(
             "/api/v1/rate-limit",
             rate_limit_routes.with_state(state.rate_limit_service.clone()),
         )
+        // Global security validation middleware (applied first)
+        .layer(axum::middleware::from_fn(move |req, next| {
+            let config = security_config_validation.clone();
+            async move { security_validation_middleware(config, req, next).await }
+        }))
+        // Global security headers middleware
         .layer(axum::middleware::from_fn(move |req, next| {
             let config = security_config_headers.clone();
             async move {
@@ -607,7 +641,9 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
                         .into_response()
                 }
             }
-        }))
+        }));
+
+    app
 }
 
 /// Start the server with BackendRouter (now the main/default server)
