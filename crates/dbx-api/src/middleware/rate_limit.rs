@@ -2261,10 +2261,12 @@ mod tests {
 
         // Verify metrics contain expected fields
         // Verify metrics structure is valid
-        // With mock backend, values might be 0, so we check for >= 0 instead of > 0
+        // With mock backend, values might be 0, so we check for valid structure
         assert!(metrics.compression_ratio >= 0.0);
-        assert!(metrics.sliding_window_bytes >= 0);
-        assert!(metrics.bit_vector_bytes >= 0);
+        // Note: sliding_window_bytes and bit_vector_bytes are usize, always >= 0
+        // Just verify they have reasonable bounds instead
+        assert!(metrics.sliding_window_bytes < 1_000_000); // Reasonable upper bound
+        assert!(metrics.bit_vector_bytes < 1_000_000); // Reasonable upper bound
         assert!(metrics.memory_savings >= 0.0);
     }
 

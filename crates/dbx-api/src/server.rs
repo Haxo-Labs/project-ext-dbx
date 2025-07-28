@@ -640,7 +640,6 @@ pub enum ServerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AppConfig;
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
     use std::sync::Arc;

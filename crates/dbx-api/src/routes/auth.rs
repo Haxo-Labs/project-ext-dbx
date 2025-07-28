@@ -152,27 +152,3 @@ pub async fn get_current_user(Extension(claims): Extension<Claims>) -> Json<ApiR
 
     Json(ApiResponse::success(user_info))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::JwtConfig;
-    use crate::middleware::{JwtService, UserStore, UserStoreOperations};
-    use crate::models::{LoginRequest, RefreshRequest, TokenType, User, UserRole};
-    use async_trait::async_trait;
-    use axum::{extract::State, http::StatusCode, Json};
-    use bcrypt::{hash, DEFAULT_COST};
-    use chrono::Utc;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-
-    fn create_test_jwt_config() -> JwtConfig {
-        JwtConfig {
-            secret: "test_secret_key_with_32_chars_min".to_string(),
-            issuer: "test_issuer".to_string(),
-            access_token_expiration: 3600,
-            refresh_token_expiration: 86400,
-        }
-    }
-}

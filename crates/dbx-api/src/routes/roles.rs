@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     extract::{Extension, Path, Query, State},
     http::StatusCode,
@@ -5,8 +7,8 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use std::sync::Arc;
 
+#[allow(unused_imports)] // UpdateRoleRequest used in test code
 use crate::{
     auth::RbacService,
     models::{
@@ -478,10 +480,7 @@ pub async fn get_audit_logs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::{permissions::Permission, RbacConfig};
-    use axum_test::TestServer;
-    use dbx_adapter::redis::client::RedisConnectionPool;
-    use std::sync::Arc;
+    use crate::auth::RbacConfig;
 
     fn create_test_rbac_config() -> RbacConfig {
         RbacConfig {
