@@ -1537,7 +1537,6 @@ pub fn add_rate_limit_headers(response: &mut axum::response::Response, result: &
 
 pub async fn rate_limit_middleware(
     State(rate_limit_service): State<Arc<PolicyRateLimitService>>,
-    connect_info: Option<std::net::SocketAddr>,
     headers: HeaderMap,
     mut request: Request,
     next: Next,
@@ -1546,6 +1545,9 @@ pub async fn rate_limit_middleware(
 
     // Track total requests
     let _ = rate_limit_service.increment_total_requests().await;
+
+    // Extract connection info from request extensions if available
+    let connect_info = request.extensions().get::<std::net::SocketAddr>().copied();
 
     // Extract user/API key ID from auth headers
     let auth_identifier = headers
