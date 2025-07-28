@@ -11,7 +11,6 @@ async fn main() {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-
     // Get configuration file path if provided
     let args: Vec<String> = env::args().collect();
     let config_path = args
