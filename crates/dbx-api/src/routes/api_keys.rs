@@ -28,8 +28,8 @@ pub fn create_api_key_routes(api_key_service: Arc<crate::auth::ApiKeyService>) -
 
 /// Create a new API key
 pub async fn create_api_key(
-    State(api_key_service): State<Arc<crate::auth::ApiKeyService>>,
-    Extension(claims): Extension<crate::models::Claims>,
+    State(api_key_service): State<Arc<ApiKeyService>>,
+    Extension(claims): Extension<Claims>,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<Json<ApiResponse<ApiKeyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let (api_key, plaintext_key) = api_key_service

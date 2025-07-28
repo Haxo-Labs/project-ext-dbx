@@ -70,7 +70,7 @@ impl AppState {
                     key_routing: Vec::new(),
                     load_balancing: None,
                 },
-                consistency: dbx_config::ConsistencyConfig {
+                consistency: dbx_core::ConsistencyConfig {
                     level: dbx_core::ConsistencyLevel::Eventual,
                     cross_backend: dbx_core::CrossBackendConsistency::BestEffort,
                     transaction_timeout_ms: 30000,
@@ -337,56 +337,6 @@ impl AppState {
             rbac_service,
             rate_limit_service,
         ))
-    }
-
-    /// Create configuration - use environment if available, otherwise create test defaults
-    fn create_default_config(_app_config: &AppConfig) -> Result<DbxConfig, ServerError> {
-        // Try to load from environment first (need to handle async)
-        // For tests, we'll just use defaults since env vars may not be set
-
-        // Fallback to creating test defaults if environment variables aren't set
-        let mut backends = HashMap::new();
-
-        // Create a single Redis backend for testing
-        let redis_url =
-            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
-        backends.insert(
-            "test_redis".to_string(),
-            dbx_config::BackendConfig {
-                provider: "redis".to_string(),
-                url: redis_url,
-                pool_size: Some(5),
-                timeout_ms: Some(5000),
-                retry_attempts: Some(3),
-                retry_delay_ms: Some(1000),
-                capabilities: None,
-                additional_config: HashMap::new(),
-            },
-        );
-
-        let routing = dbx_config::RoutingConfig {
-            default_backend: "test_redis".to_string(),
-            operation_routing: HashMap::new(),
-            key_routing: vec![],
-            load_balancing: None,
-        };
-
-        // Use proper default configurations
-        let consistency = dbx_config::ConsistencyConfig::default();
-        let performance = dbx_config::PerformanceConfig::default();
-        let security = dbx_config::SecurityConfig::default();
-        let server = dbx_config::ServerConfig::default();
-        let admin = dbx_config::AdminConfig::default();
-
-        Ok(dbx_config::DbxConfig {
-            backends,
-            routing,
-            consistency,
-            performance,
-            security,
-            server,
-            admin,
-        })
     }
 }
 

@@ -35,6 +35,7 @@ pub struct AuthResponse {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used for authentication tracking and logging
 struct AuthAttempt {
     timestamp: Instant,
     ip_address: String,
@@ -43,6 +44,7 @@ struct AuthAttempt {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used for lockout tracking and reporting
 struct AccountLockout {
     locked_until: Instant,
     attempt_count: u32,
@@ -65,6 +67,16 @@ impl AccountLockout {
 
     fn time_remaining(&self) -> StdDuration {
         self.locked_until.saturating_duration_since(Instant::now())
+    }
+
+    /// Get the number of failed attempts that led to this lockout
+    pub fn get_attempt_count(&self) -> u32 {
+        self.attempt_count
+    }
+
+    /// Get the original lockout duration
+    pub fn get_lockout_duration(&self) -> StdDuration {
+        self.lockout_duration
     }
 
     fn calculate_lockout_duration(attempt_count: u32) -> StdDuration {
