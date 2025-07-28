@@ -1,12 +1,12 @@
 use crate::{
     auth::{
         permissions::{Permission, PermissionType, Role, RoleRegistry},
-        ApiKeyError,
+        RbacService,
     },
     models::{AuditEventType, AuditLogEntry, AuditQueryParams, RbacContext, UserRoleAssignment},
 };
 use chrono::{Duration, Utc};
-use dbx_core::{DataOperation, DataValue, UniversalBackend};
+use dbx_core::UniversalBackend;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
@@ -439,7 +439,7 @@ impl RbacService {
         }
 
         // Store updated role in Redis
-        let conn = self
+        let _conn = self
             .backend
             .execute_data(dbx_core::DataOperation::Set {
                 key: format!("rbac:role:{}", role_name),
@@ -911,7 +911,7 @@ impl RbacService {
         }
     }
 
-    async fn set_redis_ttl(&self, key: &str, ttl_seconds: i64) -> Result<(), RbacError> {
+    async fn set_redis_ttl(&self, _key: &str, _ttl_seconds: i64) -> Result<(), RbacError> {
         // TTL is now handled directly in the Set operation with the ttl parameter
         // This method is kept for compatibility but doesn't need to do anything
         // as TTL is set during the initial Set operation

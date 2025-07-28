@@ -13,14 +13,8 @@ pub use backend::RedisBackend;
 pub use client::RedisConnectionPool as RedisPool; // Alias for compatibility
 pub use client::RedisConnectionPool;
 
-use redis::{Connection, RedisError, RedisResult, Script};
+use redis::{Connection, RedisError};
 use std::sync::MutexGuard;
-
-use primitives::admin::AdminOperations;
-use primitives::bitmap::RedisBitmap;
-use primitives::hash::RedisHash;
-use primitives::set::RedisSet;
-use primitives::string::RedisString;
 
 /// Connection handling for Redis primitives
 pub trait RedisConnectionHandler {
@@ -90,7 +84,6 @@ pub mod scripts {
         super::primitives::hash::RedisHash::multi_delete_script()
     }
 }
-
 
 /// Error types for Redis operations
 #[derive(Debug, thiserror::Error)]

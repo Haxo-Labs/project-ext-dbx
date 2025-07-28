@@ -18,7 +18,7 @@ pub struct RedisConnectionPool {
 
 impl RedisConnectionPool {
     /// Create a new Redis connection pool
-    pub fn new(redis_url: &str, max_connections: usize) -> Result<Self, AdapterError> {
+    pub fn new(redis_url: &str, _max_connections: usize) -> Result<Self, AdapterError> {
         let config = Config::from_url(redis_url);
         let pool = config.create_pool(Some(Runtime::Tokio1)).map_err(|e| {
             AdapterError::Connection(ConnectionError::ConnectionFailed(format!(

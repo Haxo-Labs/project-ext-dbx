@@ -2,7 +2,6 @@ use crate::models::{ApiKey, ApiKeyContext, ApiKeyUsageStats, CreateApiKeyRequest
 use chrono::{Duration, Timelike, Utc};
 use dbx_core::{DataOperation, DataValue, UniversalBackend};
 use ring::rand::{SecureRandom, SystemRandom};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -285,7 +284,7 @@ impl ApiKeyService {
 
     /// Add member to a set (using JSON array)
     async fn add_to_set(&self, key: &str, member: &str) -> Result<(), ApiKeyError> {
-        use dbx_core::{DataOperation, DataResult, DataValue};
+        use dbx_core::{DataOperation, DataValue};
 
         // Get current set members
         let mut members: Vec<String> = match self
@@ -769,7 +768,7 @@ impl ApiKeyService {
         };
 
         let now = Utc::now().timestamp();
-        let window_start = now - window_seconds as i64;
+        let _window_start = now - window_seconds as i64;
 
         let rate_limit_key = format!("rate_limit:{}:{}", api_key.id, now / window_seconds as i64);
 

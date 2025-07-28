@@ -749,7 +749,6 @@ mod tests {
         // Create some example scripts
         let _script = RedisBitmap::create_script("return redis.call('BITCOUNT', KEYS[1])");
         let setbit_script = RedisBitmap::setbit_and_get_previous_script();
-
     }
 
     #[test]
