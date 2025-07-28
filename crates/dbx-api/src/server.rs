@@ -18,7 +18,7 @@ use crate::{
 };
 use axum::{response::IntoResponse, routing::get, Router};
 use dbx_config::DbxConfig;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tracing::error;
 
 /// Application state for the DBX API
@@ -70,7 +70,7 @@ impl AppState {
                     key_routing: Vec::new(),
                     load_balancing: None,
                 },
-                consistency: dbx_core::ConsistencyConfig {
+                consistency: dbx_config::ConsistencyConfig {
                     level: dbx_core::ConsistencyLevel::Eventual,
                     cross_backend: dbx_core::CrossBackendConsistency::BestEffort,
                     transaction_timeout_ms: 30000,

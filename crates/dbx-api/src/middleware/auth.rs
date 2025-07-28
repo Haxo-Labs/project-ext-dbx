@@ -70,11 +70,13 @@ impl AccountLockout {
     }
 
     /// Get the number of failed attempts that led to this lockout
+    #[allow(dead_code)] // Public API for future administrative features
     pub fn get_attempt_count(&self) -> u32 {
         self.attempt_count
     }
 
     /// Get the original lockout duration
+    #[allow(dead_code)] // Public API for future administrative features
     pub fn get_lockout_duration(&self) -> StdDuration {
         self.lockout_duration
     }

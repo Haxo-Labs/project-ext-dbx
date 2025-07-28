@@ -518,6 +518,7 @@ impl HealthTracker {
 
 /// Backend health status
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields intended for future health tracking features
 struct BackendHealthStatus {
     is_healthy: bool,
     last_check: std::time::Instant,
