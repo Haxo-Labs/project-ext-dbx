@@ -235,6 +235,79 @@ pub struct SecurityConfig {
     pub strict_transport_security_enabled: bool,
 }
 
+impl SecurityConfig {
+    /// Load security configuration from environment variables or use defaults
+    pub fn from_env_or_default() -> Self {
+        let mut config = Self::default();
+
+        // Load development mode
+        if let Ok(dev_mode) = std::env::var("DEVELOPMENT_MODE") {
+            config.development_mode = dev_mode.parse().unwrap_or(false);
+        }
+
+        // Load HSTS setting
+        if let Ok(hsts_str) = std::env::var("STRICT_TRANSPORT_SECURITY_ENABLED") {
+            config.strict_transport_security_enabled = hsts_str.parse().unwrap_or(true);
+        }
+
+        // Load host validation settings
+        if let Ok(enabled_str) = std::env::var("HOST_VALIDATION_ENABLED") {
+            config.host_validation.enabled = enabled_str.parse().unwrap_or(true);
+        }
+
+        if let Ok(strict_port_str) = std::env::var("STRICT_PORT_VALIDATION") {
+            config.host_validation.strict_port_validation = strict_port_str.parse().unwrap_or(true);
+        }
+
+        // Load allowed ports
+        if let Ok(ports_str) = std::env::var("ALLOWED_PORTS") {
+            let ports: Vec<u16> = ports_str
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            if !ports.is_empty() {
+                config.host_validation.allowed_ports = Some(ports);
+            }
+        }
+
+        // Load CORS configuration
+        if let Ok(enabled_str) = std::env::var("CORS_ENABLED") {
+            config.cors.enabled = enabled_str.parse().unwrap_or(true);
+        }
+
+        if let Ok(origins_str) = std::env::var("CORS_ALLOWED_ORIGINS") {
+            config.cors.allowed_origins = origins_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+        }
+
+        if let Ok(methods_str) = std::env::var("CORS_ALLOWED_METHODS") {
+            config.cors.allowed_methods = methods_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+        }
+
+        if let Ok(headers_str) = std::env::var("CORS_ALLOWED_HEADERS") {
+            config.cors.allowed_headers = headers_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+        }
+
+        if let Ok(creds_str) = std::env::var("CORS_ALLOW_CREDENTIALS") {
+            config.cors.allow_credentials = creds_str.parse().unwrap_or(true);
+        }
+
+        if let Ok(max_age_str) = std::env::var("CORS_MAX_AGE") {
+            config.cors.max_age = max_age_str.parse().ok();
+        }
+
+        config
+    }
+}
+
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
@@ -316,8 +389,8 @@ impl AppConfig {
             })
             .unwrap_or_default();
 
-        // Use default security configuration
-        let security_config = SecurityConfig::default();
+        // Load security configuration from environment variables or use defaults
+        let security_config = SecurityConfig::from_env_or_default();
 
         // Map RBAC config from admin configuration
         let rbac_config = RbacConfig {
@@ -353,8 +426,8 @@ mod tests {
 
         env::remove_var("JWT_SECRET");
         env::remove_var("JWT_EXPIRATION_SECONDS");
-        env::remove_var("ACCESS_TOKEN_EXPIRATION");
-        env::remove_var("REFRESH_TOKEN_EXPIRATION");
+        env::remove_var("JWT_ACCESS_TOKEN_EXPIRATION");
+        env::remove_var("JWT_REFRESH_TOKEN_EXPIRATION");
         env::remove_var("JWT_ISSUER");
         env::remove_var("CREATE_DEFAULT_ADMIN");
         env::remove_var("DEFAULT_ADMIN_USERNAME");
@@ -366,19 +439,29 @@ mod tests {
         env::remove_var("DBX_BACKEND_1_NAME");
         env::remove_var("DBX_BACKEND_1_POOL_SIZE");
         env::remove_var("DBX_DEFAULT_BACKEND");
+
+        // Clear environment variables that might interfere with test defaults
+        env::remove_var("DEVELOPMENT_MODE");
+        env::remove_var("LOG_LEVEL");
     }
 
     fn setup_test_env() {
+        clear_env_vars(); // Clear any existing environment variables
+
+        // Set up test environment with required variables
         env::set_var(
             "JWT_SECRET",
             "test-jwt-secret-that-is-at-least-32-characters-long",
         );
-        // Set up a test backend configuration
         env::set_var("DBX_BACKEND_1_URL", "mock://localhost:6379");
         env::set_var("DBX_BACKEND_1_PROVIDER", "mock");
         env::set_var("DBX_BACKEND_1_NAME", "test_backend");
         env::set_var("DBX_BACKEND_1_POOL_SIZE", "10");
         env::set_var("DBX_DEFAULT_BACKEND", "test_backend");
+    }
+
+    fn cleanup_test_env() {
+        clear_env_vars();
     }
 
     #[test]
@@ -420,13 +503,12 @@ mod tests {
         assert_eq!(DatabaseType::Redis.to_string(), "redis");
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_app_config_from_env_defaults() {
-        clear_env_vars();
+    async fn test_app_config_from_env_defaults() {
         setup_test_env();
 
-        let config = AppConfig::from_env().unwrap();
+        let config = AppConfig::from_env().await.unwrap();
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 3000);
 
@@ -435,111 +517,98 @@ mod tests {
         assert_eq!(config.jwt.issuer, "dbx");
         assert!(!config.create_default_admin);
 
-        clear_env_vars();
+        cleanup_test_env();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_app_config_from_env_custom_values() {
-        clear_env_vars();
+    async fn test_app_config_custom_values() {
         setup_test_env(); // Set up backend configuration first
 
+        // Additional environment variables for this test
         env::set_var("HOST", "127.0.0.1");
         env::set_var("PORT", "8080");
-
-        env::set_var(
-            "JWT_SECRET",
-            "custom-jwt-secret-that-is-at-least-32-characters-long",
-        );
         env::set_var("JWT_EXPIRATION_SECONDS", "1800");
-        env::set_var("JWT_ISSUER", "custom-api");
+        env::set_var("JWT_ISSUER", "test-issuer");
         env::set_var("CREATE_DEFAULT_ADMIN", "true");
-        env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
-        env::set_var("DEFAULT_ADMIN_PASSWORD", "password123");
+        env::set_var("DEFAULT_ADMIN_USERNAME", "testadmin");
+        env::set_var("DEFAULT_ADMIN_PASSWORD", "testpassword123");
 
-        let config = AppConfig::from_env().unwrap();
+        let config = AppConfig::from_env().await.unwrap();
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8080);
 
         assert_eq!(config.jwt.access_token_expiration, 1800);
         assert_eq!(config.jwt.refresh_token_expiration, 12600); // 1800 * 7
-        assert_eq!(config.jwt.issuer, "custom-api");
+        assert_eq!(config.jwt.issuer, "test-issuer");
         assert!(config.create_default_admin);
-        assert_eq!(config.default_admin_username, Some("admin".to_string()));
+        assert_eq!(config.default_admin_username, Some("testadmin".to_string()));
         assert_eq!(
             config.default_admin_password,
-            Some("password123".to_string())
+            Some("testpassword123".to_string())
         );
 
-        clear_env_vars();
+        cleanup_test_env();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_app_config_missing_jwt_secret() {
-        clear_env_vars();
-        // Set up backend configuration but not JWT secret
+    async fn test_app_config_missing_jwt_secret() {
+        env::remove_var("JWT_SECRET");
+        // Ensure backend config is still set
         env::set_var("DBX_BACKEND_1_URL", "mock://localhost:6379");
         env::set_var("DBX_BACKEND_1_PROVIDER", "mock");
         env::set_var("DBX_BACKEND_1_NAME", "test_backend");
         env::set_var("DBX_BACKEND_1_POOL_SIZE", "10");
         env::set_var("DBX_DEFAULT_BACKEND", "test_backend");
 
-        let result = AppConfig::from_env();
+        let result = AppConfig::from_env().await;
         assert!(matches!(
             result,
             Err(ConfigError::MissingEnvironmentVariable(_))
         ));
 
-        clear_env_vars();
+        cleanup_test_env();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_app_config_invalid_port() {
-        clear_env_vars();
+    async fn test_app_config_invalid_port() {
         setup_test_env();
-        env::set_var("PORT", "invalid");
+        env::set_var("PORT", "invalid_port");
 
-        let result = AppConfig::from_env();
+        let result = AppConfig::from_env().await;
         assert!(matches!(result, Err(ConfigError::DbxConfig(_))));
 
-        clear_env_vars();
+        cleanup_test_env();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_app_config_create_admin_without_password() {
-        clear_env_vars();
+    async fn test_app_config_create_admin_without_password() {
         setup_test_env();
         env::set_var("CREATE_DEFAULT_ADMIN", "true");
         env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
+        // Don't set DEFAULT_ADMIN_PASSWORD
 
-        let result = AppConfig::from_env();
+        let result = AppConfig::from_env().await;
         assert!(matches!(
             result,
             Err(ConfigError::MissingDefaultAdminPassword)
         ));
 
-        clear_env_vars();
+        cleanup_test_env();
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_app_config_short_jwt_secret() {
-        clear_env_vars();
-        // Set up backend configuration
-        env::set_var("DBX_BACKEND_1_URL", "mock://localhost:6379");
-        env::set_var("DBX_BACKEND_1_PROVIDER", "mock");
-        env::set_var("DBX_BACKEND_1_NAME", "test_backend");
-        env::set_var("DBX_BACKEND_1_POOL_SIZE", "10");
-        env::set_var("DBX_DEFAULT_BACKEND", "test_backend");
-
+    async fn test_app_config_short_jwt_secret() {
+        setup_test_env();
         env::set_var("JWT_SECRET", "short");
 
-        let result = AppConfig::from_env();
+        let result = AppConfig::from_env().await;
         assert!(matches!(result, Err(ConfigError::InvalidJwtSecret)));
 
-        clear_env_vars();
+        cleanup_test_env();
     }
 }

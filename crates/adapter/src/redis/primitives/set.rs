@@ -670,7 +670,7 @@ mod tests {
 
         // Create some example scripts
         let _script = RedisSet::create_script("return redis.call('SCARD', KEYS[1])");
-        let add_script = RedisSet::add_and_get_cardinality_script();
+        let _add_script = RedisSet::add_and_get_cardinality_script();
 
         // Test pipeline integration with scripts
         let mut pipe = redis::pipe();
@@ -701,7 +701,7 @@ mod tests {
 #[cfg(test)]
 mod examples {
     use super::*;
-    use crate::test_helpers::get_test_redis_url;
+    
 
     #[test]
     #[ignore = "Demonstration only"]
@@ -722,7 +722,7 @@ mod examples {
         let redis_set = RedisSet::new(conn);
 
         // Create a script for demonstration
-        let add_script = RedisSet::create_script("return redis.call('SADD', KEYS[1], ARGV[1])");
+        let _add_script = RedisSet::create_script("return redis.call('SADD', KEYS[1], ARGV[1])");
 
         // Example 1: Pipeline with multiple set operations
         let _: Result<(usize, Vec<String>), redis::RedisError> = redis_set.with_pipeline(|pipe| {

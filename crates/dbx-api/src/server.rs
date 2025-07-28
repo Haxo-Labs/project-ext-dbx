@@ -763,7 +763,7 @@ mod tests {
 
         // Test OPTIONS on health endpoint (should return 405 as it doesn't support OPTIONS)
         let app_state = create_test_app_state().await;
-        let app = create_app(app_state);
+        let app = create_app(app_state).await.unwrap();
 
         let health_request = Request::builder()
             .method(Method::OPTIONS)

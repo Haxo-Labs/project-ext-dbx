@@ -645,7 +645,7 @@ impl RedisBitmap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::get_test_redis_url;
+    
     use redis::pipe;
     use std::sync::{Arc, Mutex};
 
@@ -739,7 +739,7 @@ mod tests {
 
         // Create some example scripts
         let _script = RedisBitmap::create_script("return redis.call('BITCOUNT', KEYS[1])");
-        let setbit_script = RedisBitmap::setbit_and_get_previous_script();
+        let _setbit_script = RedisBitmap::setbit_and_get_previous_script();
     }
 
     #[test]
@@ -761,7 +761,7 @@ mod tests {
 #[cfg(test)]
 mod examples {
     use super::*;
-    use crate::test_helpers::get_test_redis_url;
+    
 
     #[test]
     #[ignore = "Demonstration only"]
@@ -782,7 +782,7 @@ mod examples {
         let redis_bitmap = RedisBitmap::new(conn);
 
         // Create a script for demonstration
-        let setbit_script =
+        let _setbit_script =
             RedisBitmap::create_script("return redis.call('SETBIT', KEYS[1], ARGV[1], ARGV[2])");
 
         // Example 1: Pipeline with multiple bitmap operations

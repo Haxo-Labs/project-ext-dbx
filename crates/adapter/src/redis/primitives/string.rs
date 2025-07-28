@@ -592,7 +592,7 @@ mod tests {
 
         // Create some example scripts
         let _script = RedisString::create_script("return redis.call('GET', KEYS[1])");
-        let get_set_script = RedisString::get_set_script();
+        let _get_set_script = RedisString::get_set_script();
 
         // Test pipeline integration with scripts
         let mut pipe = redis::pipe();
@@ -622,7 +622,7 @@ mod tests {
 #[cfg(test)]
 mod examples {
     use super::*;
-    use crate::test_helpers::get_test_redis_url;
+    
 
     #[test]
     #[ignore = "Demonstration only"]
@@ -643,7 +643,7 @@ mod examples {
         let redis_string = RedisString::new(conn);
 
         // Create a script for demonstration
-        let increment_script =
+        let _increment_script =
             RedisString::create_script("return redis.call('INCRBY', KEYS[1], ARGV[1])");
 
         // Example 1: Pipeline with multiple commands
