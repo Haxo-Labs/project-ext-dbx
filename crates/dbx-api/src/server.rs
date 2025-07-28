@@ -764,6 +764,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_create_app_state_with_default_admin() {
         setup_test_env();
         std::env::set_var("CREATE_DEFAULT_ADMIN", "true");
@@ -792,6 +793,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_create_app_state_missing_admin_credentials() {
         setup_test_env();
         std::env::set_var("CREATE_DEFAULT_ADMIN", "true");

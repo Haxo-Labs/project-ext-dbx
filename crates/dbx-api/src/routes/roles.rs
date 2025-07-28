@@ -11,7 +11,7 @@ use crate::{
     auth::RbacService,
     models::{
         ApiResponse, AssignRoleRequest, AuditQueryParams, CreateRoleRequest, RbacContext,
-        RevokeRoleRequest, RoleResponse, UserPermissionsResponse,
+        RevokeRoleRequest, RoleResponse, UpdateRoleRequest, UserPermissionsResponse,
     },
 };
 
