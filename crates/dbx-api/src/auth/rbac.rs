@@ -335,9 +335,12 @@ impl RbacService {
 
         let mut role = Role::new(name.to_string(), description.to_string(), role_permissions);
 
-        if let Some(parents) = inherits_from {
+        if let Some(ref parents) = inherits_from {
+            // Validate inheritance chain for cycles and depth
+            self.validate_inheritance_chain(name, parents)?;
+
             for parent in parents {
-                role = role.inherit_from(parent);
+                role = role.inherit_from(parent.clone());
             }
         }
 
@@ -410,12 +413,8 @@ impl RbacService {
         }
 
         if let Some(inherit_roles) = inherits_from {
-            // Validate no circular dependencies
-            for parent in &inherit_roles {
-                if parent == role_name {
-                    return Err(RbacError::InheritanceCycle);
-                }
-            }
+            // Validate inheritance chain for cycles and depth
+            self.validate_inheritance_chain(role_name, &inherit_roles)?;
             updated_role.inherits_from = inherit_roles;
         }
 
