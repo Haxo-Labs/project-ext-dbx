@@ -921,8 +921,8 @@ pub async fn api_key_auth_middleware(
     Ok(next.run(request).await)
 }
 
-/// Flexible authentication middleware that accepts JWT tokens or API keys
-pub async fn flexible_auth_middleware(
+/// Authentication middleware that accepts JWT tokens or API keys
+pub async fn auth_middleware(
     State((jwt_service, api_key_service)): State<(Arc<JwtService>, Arc<ApiKeyService>)>,
     mut request: Request,
     next: Next,
