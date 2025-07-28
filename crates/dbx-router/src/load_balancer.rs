@@ -444,6 +444,11 @@ impl LoadBalancer {
             backend_connections: connections,
         }
     }
+
+    /// Get health tracker statistics
+    pub async fn get_health_stats(&self) -> HealthTrackerStats {
+        self.health_tracker.get_stats().await
+    }
 }
 
 /// Statistics for load balancer performance monitoring
@@ -472,9 +477,9 @@ impl HealthTracker {
         self.backend_health.insert(
             backend_name,
             BackendHealthStatus {
-                _is_healthy: true,
-                _last_check: std::time::Instant::now(),
-                _consecutive_failures: 0,
+                is_healthy: true,
+                last_check: std::time::Instant::now(),
+                consecutive_failures: 0,
             },
         );
     }
@@ -485,22 +490,23 @@ impl HealthTracker {
 
     async fn _update_health(&self, backend_name: &str, is_healthy: bool) {
         if let Some(mut entry) = self.backend_health.get_mut(backend_name) {
-            entry._is_healthy = is_healthy;
-            entry._last_check = std::time::Instant::now();
+            entry.is_healthy = is_healthy;
+            entry.last_check = std::time::Instant::now();
             if is_healthy {
-                entry._consecutive_failures = 0;
+                entry.consecutive_failures = 0;
             } else {
-                entry._consecutive_failures += 1;
+                entry.consecutive_failures += 1;
             }
         }
     }
 
-    async fn _get_stats(&self) -> HealthTrackerStats {
+    /// Get health tracker statistics
+    pub async fn get_stats(&self) -> HealthTrackerStats {
         let total_backends = self.backend_health.len();
         let healthy_backends = self
             .backend_health
             .iter()
-            .filter(|entry| entry.value()._is_healthy)
+            .filter(|entry| entry.value().is_healthy)
             .count();
 
         HealthTrackerStats {
@@ -513,14 +519,14 @@ impl HealthTracker {
 /// Backend health status
 #[derive(Debug, Clone)]
 struct BackendHealthStatus {
-    _is_healthy: bool,
-    _last_check: std::time::Instant,
-    _consecutive_failures: usize,
+    is_healthy: bool,
+    last_check: std::time::Instant,
+    consecutive_failures: usize,
 }
 
 /// Health tracker statistics
 #[derive(Debug, Clone)]
-struct HealthTrackerStats {
-    total_backends: usize,
-    healthy_backends: usize,
+pub struct HealthTrackerStats {
+    pub total_backends: usize,
+    pub healthy_backends: usize,
 }
