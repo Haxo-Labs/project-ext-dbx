@@ -8,7 +8,6 @@ use axum::{
 use serde::Serialize;
 use std::sync::Arc;
 
-use crate::auth::permissions::PermissionType;
 use crate::models::{ApiResponse, RbacContext};
 use dbx_core::HealthStatus;
 use dbx_router::BackendRouter;
@@ -98,25 +97,6 @@ async fn get_system_health(
     State(router): State<Arc<BackendRouter>>,
     rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<SystemHealthResponse>>, StatusCode> {
-    // Check admin permission
-    let permission_check = rbac_context
-        .rbac_service
-        .check_user_permission(
-            &rbac_context.user_id,
-            PermissionType::AdminInfo,
-            rbac_context.clone(),
-        )
-        .await;
-
-    // Handle permission check result safely
-    let has_permission = match permission_check {
-        Ok(has_perm) => has_perm,
-        Err(_) => false, // Graceful degradation on permission check failure
-    };
-
-    if !has_permission {
-        return Err(StatusCode::FORBIDDEN);
-    }
     // Get all configured backends
     let backend_names = router.get_all_backends().await;
     let mut backends = Vec::new();
@@ -211,25 +191,6 @@ async fn get_backend_health(
     Path(backend_name): Path<String>,
     rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<BackendHealthResponse>>, StatusCode> {
-    // Check admin permission
-    let permission_check = rbac_context
-        .rbac_service
-        .check_user_permission(
-            &rbac_context.user_id,
-            PermissionType::AdminInfo,
-            rbac_context.clone(),
-        )
-        .await;
-
-    // Handle permission check result safely
-    let has_permission = match permission_check {
-        Ok(has_perm) => has_perm,
-        Err(_) => false, // Graceful degradation on permission check failure
-    };
-
-    if !has_permission {
-        return Err(StatusCode::FORBIDDEN);
-    }
     match router.get_backend(&backend_name).await {
         Some(backend) => {
             // Get backend health status

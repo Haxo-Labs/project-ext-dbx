@@ -2,12 +2,11 @@ use crate::{
     auth::{ApiKeyService, RbacService},
     config::{AppConfig, ConfigError},
     middleware::{
-        rate_limit_middleware, rbac_auth_middleware,
+        admin_info_permission_middleware, rate_limit_middleware, rbac_auth_middleware,
         security::{
             create_cors_layer, development_security_middleware, security_validation_middleware,
         },
-        security_headers_middleware, JwtService, PolicyRateLimitService, RateLimitService,
-        UserStore,
+        security_headers_middleware, JwtService, PolicyRateLimitService, UserStore,
     },
     models::ApiResponse,
     routes::{
@@ -17,22 +16,15 @@ use crate::{
         stream::create_stream_routes,
     },
 };
-use axum::{
-    body::Body, http::Request, middleware::Next, response::IntoResponse, routing::get, Router,
-};
-use dbx_adapter::redis::factory::RedisBackendFactory;
-use dbx_config::{AdminConfig, BackendConfig, DbxConfig, RoutingConfig};
-use dbx_router::{registry::BackendRegistryBuilder, BackendRouter};
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
-use tokio::net::TcpListener;
-use tower::ServiceBuilder;
-use tower_http::cors::CorsLayer;
-use tracing::{error, info};
+use axum::{response::IntoResponse, routing::get, Router};
+use dbx_config::DbxConfig;
+use std::{collections::HashMap, sync::Arc};
+use tracing::error;
 
 /// Application state for the DBX API
 #[derive(Clone)]
 pub struct AppState {
-    pub backend_router: Arc<BackendRouter>,
+    pub backend_router: Arc<dbx_router::BackendRouter>,
     pub jwt_service: Arc<JwtService>,
     pub user_store: Arc<UserStore>,
     pub api_key_service: Arc<ApiKeyService>,
@@ -168,10 +160,10 @@ impl AppState {
         dbx_config: DbxConfig,
     ) -> Result<Self, ServerError> {
         // Build backend registry
-        let mut registry_builder = BackendRegistryBuilder::new();
+        let mut registry_builder = dbx_router::registry::BackendRegistryBuilder::new();
 
         // Register Redis backend factory
-        let redis_factory = RedisBackendFactory::new();
+        let redis_factory = dbx_adapter::redis::factory::RedisBackendFactory::new();
         registry_builder = registry_builder.with_factory("redis", redis_factory);
 
         // Register mock backend factory for testing
@@ -193,9 +185,10 @@ impl AppState {
             })?;
 
         // Create backend router
-        let backend_router = BackendRouter::new(registry, &dbx_config).map_err(|e| {
-            ServerError::DatabaseConnection(format!("Failed to create router: {}", e))
-        })?;
+        let backend_router =
+            dbx_router::BackendRouter::new(registry, &dbx_config).map_err(|e| {
+                ServerError::DatabaseConnection(format!("Failed to create router: {}", e))
+            })?;
 
         // Get default backend configuration for auth services
         let default_backend_name = &dbx_config.routing.default_backend;
@@ -240,10 +233,10 @@ impl AppState {
         dbx_config: DbxConfig,
     ) -> Result<Self, ServerError> {
         // Build backend registry
-        let mut registry_builder = BackendRegistryBuilder::new();
+        let mut registry_builder = dbx_router::registry::BackendRegistryBuilder::new();
 
         // Register Redis backend factory
-        let redis_factory = RedisBackendFactory::new();
+        let redis_factory = dbx_adapter::redis::factory::RedisBackendFactory::new();
         registry_builder = registry_builder.with_factory("redis", redis_factory);
 
         // Register mock backend factory for testing
@@ -265,9 +258,10 @@ impl AppState {
             })?;
 
         // Create backend router
-        let backend_router = BackendRouter::new(registry, &dbx_config).map_err(|e| {
-            ServerError::DatabaseConnection(format!("Failed to create router: {}", e))
-        })?;
+        let backend_router =
+            dbx_router::BackendRouter::new(registry, &dbx_config).map_err(|e| {
+                ServerError::DatabaseConnection(format!("Failed to create router: {}", e))
+            })?;
 
         // Get default backend configuration for auth services
         let default_backend_name = &dbx_config.routing.default_backend;
@@ -596,6 +590,10 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
             ),
             rbac_auth_middleware,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.rbac_service.clone(),
+            admin_info_permission_middleware,
+        ))
         .layer(cors_layer.clone());
 
     // Configure global middleware stack
@@ -654,7 +652,7 @@ pub async fn run_server(config_path: Option<&str>) -> Result<(), ServerError> {
     let app = create_app(state);
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
-    let listener = TcpListener::bind(&addr)
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| ServerError::ServerBinding(format!("Failed to bind to {}: {}", addr, e)))?;
 
@@ -698,7 +696,7 @@ pub enum ServerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::JwtConfig;
+    use crate::config::AppConfig;
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
     use std::sync::Arc;

@@ -2,33 +2,38 @@ use axum::{
     extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Router,
 };
 use std::sync::Arc;
 
 use crate::{
-    auth::{
-        permissions::{PermissionType, Role, RoleRegistry},
-        RbacService,
-    },
+    auth::RbacService,
     models::{
         ApiResponse, AssignRoleRequest, AuditQueryParams, CreateRoleRequest, RbacContext,
         RevokeRoleRequest, RoleResponse, UpdateRoleRequest, UserPermissionsResponse,
     },
 };
 
-/// Create role management routes
+/// Create role management routes with granular permissions
 pub fn create_role_routes(rbac_service: Arc<RbacService>) -> Router {
-    Router::new()
-        .route("/", get(list_roles).post(create_role))
-        .route("/:role_name", get(get_role).delete(delete_role))
+    // Read operations (no special permission needed beyond RBAC auth)
+    let read_routes = Router::new()
+        .route("/", get(list_roles))
+        .route("/:role_name", get(get_role))
         .route("/:role_name/permissions", get(get_role_permissions))
-        .route("/assign", post(assign_role_to_user))
-        .route("/revoke", post(revoke_role_from_user))
         .route("/users/:user_id/permissions", get(get_user_permissions))
-        .route("/audit", get(get_audit_logs))
-        .with_state(rbac_service)
+        .route("/audit", get(get_audit_logs));
+
+    // Write operations (require RoleManage permission)
+    let write_routes = Router::new()
+        .route("/", post(create_role))
+        .route("/:role_name", delete(delete_role))
+        .route("/assign", post(assign_role_to_user))
+        .route("/revoke", post(revoke_role_from_user));
+
+    // Merge read and write routes
+    read_routes.merge(write_routes).with_state(rbac_service)
 }
 
 /// List all available roles

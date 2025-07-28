@@ -1,11 +1,7 @@
 use crate::{
-    auth::{permissions::PermissionType, ApiKeyError, ApiKeyService, RbacService},
-    config::JwtConfig,
+    auth::{ApiKeyError, RbacService},
     constants::errors::ErrorMessages,
-    models::{
-        ApiKeyContext, ApiResponse, Claims, CreateUserRequest, PermissionCheckContext, RbacContext,
-        TokenType, User, UserRole,
-    },
+    models::{ApiResponse, Claims, CreateUserRequest, RbacContext, User, UserInfo, UserRole},
 };
 use async_trait::async_trait;
 use axum::{
@@ -27,14 +23,6 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::error;
 use uuid::Uuid;
-
-/// User information for responses
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserInfo {
-    pub id: String,
-    pub username: String,
-    pub role: UserRole,
-}
 
 /// Authentication response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -570,7 +558,7 @@ impl TokenCacheEntry {
 
 #[derive(Clone)]
 pub struct JwtService {
-    config: JwtConfig,
+    config: crate::config::JwtConfig,
     user_store: Arc<UserStore>,
     token_cache: Arc<RwLock<HashMap<String, TokenCacheEntry>>>,
     blacklist: Arc<RwLock<HashSet<String>>>,
@@ -578,7 +566,7 @@ pub struct JwtService {
 }
 
 impl JwtService {
-    pub fn new(config: JwtConfig, user_store: Arc<UserStore>) -> Self {
+    pub fn new(config: crate::config::JwtConfig, user_store: Arc<UserStore>) -> Self {
         Self {
             config,
             user_store,
@@ -630,10 +618,14 @@ impl JwtService {
         })
     }
 
-    pub fn generate_token(&self, user: &User, token_type: TokenType) -> Result<String, AuthError> {
+    pub fn generate_token(
+        &self,
+        user: &User,
+        token_type: crate::models::TokenType,
+    ) -> Result<String, AuthError> {
         let expiration = match token_type {
-            TokenType::Access => self.config.access_token_expiration,
-            TokenType::Refresh => self.config.refresh_token_expiration,
+            crate::models::TokenType::Access => self.config.access_token_expiration,
+            crate::models::TokenType::Refresh => self.config.refresh_token_expiration,
         };
 
         let exp = (Utc::now() + Duration::seconds(expiration as i64)).timestamp();
@@ -727,8 +719,8 @@ impl JwtService {
 
         self.user_store.update_last_login(&user.id).await?;
 
-        let access_token = self.generate_token(&user, TokenType::Access)?;
-        let refresh_token = self.generate_token(&user, TokenType::Refresh)?;
+        let access_token = self.generate_token(&user, crate::models::TokenType::Access)?;
+        let refresh_token = self.generate_token(&user, crate::models::TokenType::Refresh)?;
 
         Ok(AuthResponse {
             access_token,
@@ -746,7 +738,7 @@ impl JwtService {
     pub async fn refresh_token(&self, refresh_token: &str) -> Result<AuthResponse, AuthError> {
         let claims = self.validate_token(refresh_token).await?;
 
-        if claims.token_type != TokenType::Refresh {
+        if claims.token_type != crate::models::TokenType::Refresh {
             return Err(AuthError::InvalidToken);
         }
 
@@ -756,8 +748,8 @@ impl JwtService {
             .await?
             .ok_or(AuthError::UserNotFound)?;
 
-        let access_token = self.generate_token(&user, TokenType::Access)?;
-        let new_refresh_token = self.generate_token(&user, TokenType::Refresh)?;
+        let access_token = self.generate_token(&user, crate::models::TokenType::Access)?;
+        let new_refresh_token = self.generate_token(&user, crate::models::TokenType::Refresh)?;
 
         Ok(AuthResponse {
             access_token,
@@ -807,49 +799,6 @@ impl JwtService {
     }
 }
 
-pub async fn jwt_auth_middleware(
-    State((jwt_service, _)): State<(Arc<JwtService>, Arc<UserStore>)>,
-    mut request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    let auth_header = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok());
-
-    let token = auth_header
-        .and_then(|auth| auth.strip_prefix("Bearer "))
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error(
-                    "Missing or invalid token".to_string(),
-                )),
-            )
-        })?;
-
-    let user = jwt_service.get_user_by_token(token).await.map_err(|e| {
-        let (status, message) = match e {
-            AuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "Token expired"),
-            AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
-            AuthError::UserNotFound => (StatusCode::UNAUTHORIZED, "User not found"),
-            AuthError::TokenRevoked => (StatusCode::UNAUTHORIZED, "Token revoked"),
-            AuthError::RateLimitExceeded => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded"),
-            AuthError::AccountLocked(_) => (StatusCode::LOCKED, "Account temporarily locked"),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "Authentication error"),
-        };
-
-        (status, Json(ApiResponse::<()>::error(message.to_string())))
-    })?;
-
-    // Store user in request extensions
-    request.extensions_mut().insert(user);
-
-    Ok(next.run(request).await)
-}
-
-// API Key Authentication Middleware
-
 fn extract_api_key_from_request(headers: &HeaderMap, uri: &Uri) -> Option<String> {
     // Check X-API-Key header
     if let Some(api_key) = headers.get("X-API-Key") {
@@ -881,436 +830,11 @@ fn extract_api_key_from_request(headers: &HeaderMap, uri: &Uri) -> Option<String
     None
 }
 
-/// API key authentication middleware
-pub async fn api_key_auth_middleware(
-    State(api_key_service): State<Arc<ApiKeyService>>,
-    mut request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    let api_key =
-        extract_api_key_from_request(request.headers(), request.uri()).ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error("Missing API key".to_string())),
-            )
-        })?;
-
-    let api_key_context = api_key_service
-        .validate_api_key(&api_key)
-        .await
-        .map_err(|e| {
-            let (status, message) = match e {
-                ApiKeyError::KeyNotFound => (StatusCode::UNAUTHORIZED, "Invalid API key"),
-                ApiKeyError::InvalidKeyFormat => {
-                    (StatusCode::BAD_REQUEST, "Invalid API key format")
-                }
-                ApiKeyError::KeyExpired => (StatusCode::UNAUTHORIZED, "API key has expired"),
-                ApiKeyError::KeyInactive => (StatusCode::UNAUTHORIZED, "API key is inactive"),
-                ApiKeyError::RateLimitExceeded => {
-                    (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded")
-                }
-                _ => (StatusCode::INTERNAL_SERVER_ERROR, "Authentication error"),
-            };
-
-            (status, Json(ApiResponse::<()>::error(message.to_string())))
-        })?;
-
-    // Store API key context in request extensions
-    request.extensions_mut().insert(api_key_context);
-
-    Ok(next.run(request).await)
-}
-
-/// Authentication middleware that accepts JWT tokens or API keys
-pub async fn auth_middleware(
-    State((jwt_service, api_key_service)): State<(Arc<JwtService>, Arc<ApiKeyService>)>,
-    mut request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    // Try API key authentication first
-    if let Some(api_key) = extract_api_key_from_request(request.headers(), request.uri()) {
-        match api_key_service.validate_api_key(&api_key).await {
-            Ok(api_key_context) => {
-                request.extensions_mut().insert(api_key_context);
-                return Ok(next.run(request).await);
-            }
-            Err(ApiKeyError::RateLimitExceeded) => {
-                return Err((
-                    StatusCode::TOO_MANY_REQUESTS,
-                    Json(ApiResponse::<()>::error("Rate limit exceeded".to_string())),
-                ));
-            }
-            Err(_) => {
-                // Continue to JWT authentication
-            }
-        }
-    }
-
-    // Try JWT authentication
-    let auth_header = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok());
-
-    if let Some(token) = auth_header.and_then(|auth| auth.strip_prefix("Bearer ")) {
-        match jwt_service.get_user_by_token(token).await {
-            Ok(user) => {
-                request.extensions_mut().insert(user);
-                return Ok(next.run(request).await);
-            }
-            Err(_) => {
-                // Continue to unauthorized response
-            }
-        }
-    }
-
-    // No valid authentication found
-    Err((
-        StatusCode::UNAUTHORIZED,
-        Json(ApiResponse::<()>::error(
-            "Authentication required".to_string(),
-        )),
-    ))
-}
-
-/// Role checking middleware for flexible authentication contexts
-pub async fn require_admin_role(
-    mut request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    // Check for JWT user
-    if let Some(user) = request.extensions().get::<User>() {
-        if user.role == UserRole::Admin {
-            return Ok(next.run(request).await);
-        }
-    }
-
-    // Check for API key context
-    if let Some(api_key_context) = request.extensions().get::<ApiKeyContext>() {
-        if api_key_context.user_role == UserRole::Admin {
-            return Ok(next.run(request).await);
-        }
-    }
-
-    Err((
-        StatusCode::FORBIDDEN,
-        Json(ApiResponse::<()>::error("Admin role required".to_string())),
-    ))
-}
-
-/// User role checking middleware for flexible authentication contexts
-pub async fn require_user_role(
-    mut request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    // Check for JWT user
-    if let Some(user) = request.extensions().get::<User>() {
-        if matches!(user.role, UserRole::User | UserRole::Admin) {
-            return Ok(next.run(request).await);
-        }
-    }
-
-    // Check for API key context
-    if let Some(api_key_context) = request.extensions().get::<ApiKeyContext>() {
-        if matches!(api_key_context.user_role, UserRole::User | UserRole::Admin) {
-            return Ok(next.run(request).await);
-        }
-    }
-
-    Err((
-        StatusCode::FORBIDDEN,
-        Json(ApiResponse::<()>::error(
-            "User role or higher required".to_string(),
-        )),
-    ))
-}
-
-/// ReadOnly role checking middleware for flexible authentication contexts
-pub async fn require_readonly_role(
-    mut request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    // Check for JWT user
-    if let Some(user) = request.extensions().get::<User>() {
-        if matches!(
-            user.role,
-            UserRole::ReadOnly | UserRole::User | UserRole::Admin
-        ) {
-            return Ok(next.run(request).await);
-        }
-    }
-
-    // Check for API key context
-    if let Some(api_key_context) = request.extensions().get::<ApiKeyContext>() {
-        if matches!(
-            api_key_context.user_role,
-            UserRole::ReadOnly | UserRole::User | UserRole::Admin
-        ) {
-            return Ok(next.run(request).await);
-        }
-    }
-
-    Err((
-        StatusCode::FORBIDDEN,
-        Json(ApiResponse::<()>::error(
-            "Authentication required".to_string(),
-        )),
-    ))
-}
-
-/// Extract query parameters for pagination
-#[derive(Debug, Clone, Deserialize)]
-pub struct PaginationQuery {
-    pub page: Option<u32>,
-    pub limit: Option<u32>,
-}
-
-impl Default for PaginationQuery {
-    fn default() -> Self {
-        Self {
-            page: Some(1),
-            limit: Some(20),
-        }
-    }
-}
-
-impl PaginationQuery {
-    pub fn validate(&self) -> Result<(), String> {
-        if let Some(page) = self.page {
-            if page == 0 {
-                return Err("Page must be greater than 0".to_string());
-            }
-        }
-
-        if let Some(limit) = self.limit {
-            if limit == 0 || limit > 100 {
-                return Err("Limit must be between 1 and 100".to_string());
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn get_offset(&self) -> u32 {
-        let page = self.page.unwrap_or(1);
-        let limit = self.limit.unwrap_or(20);
-        (page - 1) * limit
-    }
-
-    pub fn get_limit(&self) -> u32 {
-        self.limit.unwrap_or(20)
-    }
-}
-
-/// Pagination middleware that validates query parameters
-pub async fn pagination_middleware(
-    Query(query): Query<PaginationQuery>,
-    mut request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    query
-        .validate()
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::error(e))))?;
-
-    request.extensions_mut().insert(query);
-    Ok(next.run(request).await)
-}
-
-use crate::auth::permissions::Permission;
-
-/// Permission checking middleware using RBAC service
-pub async fn permission_check_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-    required_permission: PermissionType,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    // Get RBAC context from request extensions (set by RBAC auth middleware)
-    let rbac_context = request
-        .extensions()
-        .get::<RbacContext>()
-        .cloned()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiResponse::<()>::error(
-                    "Authentication required".to_string(),
-                )),
-            )
-        })?;
-
-    // Check permission using RBAC service
-    match rbac_service
-        .check_user_permission(
-            &rbac_context.user_id,
-            required_permission.clone(),
-            rbac_context.clone(),
-        )
-        .await
-    {
-        Ok(has_permission) => {
-            if has_permission {
-                Ok(next.run(request).await)
-            } else {
-                Err((
-                    StatusCode::FORBIDDEN,
-                    Json(ApiResponse::<()>::error(format!(
-                        "Insufficient permissions. Required: {:?}",
-                        required_permission
-                    ))),
-                ))
-            }
-        }
-        Err(e) => {
-            error!(
-                user_id = %rbac_context.user_id,
-                permission = ?required_permission,
-                error = %e,
-                "Permission check failed"
-            );
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<()>::error(
-                    "Permission check failed".to_string(),
-                )),
-            ))
-        }
-    }
-}
-
-/// Middleware for string operations
-pub async fn string_get_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
-        request,
-        next,
-        PermissionType::StringGet,
-    )
-    .await
-}
-
-pub async fn string_set_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
-        request,
-        next,
-        PermissionType::StringSet,
-    )
-    .await
-}
-
-/// Middleware for hash operations
-pub async fn hash_get_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(State(rbac_service), request, next, PermissionType::HashGet).await
-}
-
-pub async fn hash_set_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(State(rbac_service), request, next, PermissionType::HashSet).await
-}
-
-/// Middleware for set operations
-pub async fn set_members_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
-        request,
-        next,
-        PermissionType::SetMembers,
-    )
-    .await
-}
-
-pub async fn set_add_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(State(rbac_service), request, next, PermissionType::SetAdd).await
-}
-
-/// Middleware for admin operations
-pub async fn admin_ping_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
-        request,
-        next,
-        PermissionType::AdminPing,
-    )
-    .await
-}
-
-pub async fn admin_flush_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
-        request,
-        next,
-        PermissionType::AdminFlush,
-    )
-    .await
-}
-
-/// Middleware for role management operations
-pub async fn role_manage_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
-        request,
-        next,
-        PermissionType::RoleManage,
-    )
-    .await
-}
-
-/// Middleware for audit log viewing
-pub async fn audit_view_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
-    request: Request,
-    next: Next,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
-        request,
-        next,
-        PermissionType::AuditView,
-    )
-    .await
-}
-
 /// RBAC authentication middleware that creates RBAC context from JWT/API key
 pub async fn rbac_auth_middleware(
     State((jwt_service, api_key_service, rbac_service)): State<(
         Arc<JwtService>,
-        Arc<ApiKeyService>,
+        Arc<crate::auth::ApiKeyService>,
         Arc<RbacService>,
     )>,
     mut request: Request,
@@ -1422,7 +946,7 @@ pub async fn rbac_auth_middleware(
 pub async fn rbac_permission_check_middleware(
     request: Request,
     next: Next,
-    permission_type: PermissionType,
+    permission_type: crate::auth::permissions::PermissionType,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
     // Get RBAC context from request extensions
     let rbac_context = request.extensions().get::<RbacContext>().ok_or_else(|| {
@@ -1473,17 +997,16 @@ pub struct RbacContextMiddleware {
     pub rbac_service: Arc<RbacService>,
 }
 
-// Additional middleware for data operation permission patterns
+/// Flexible data operation permission middleware that can handle different permission types
 pub async fn data_read_permission_middleware(
     State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
+    rbac_permission_check_middleware(
         request,
         next,
-        PermissionType::StringGet,
+        crate::auth::permissions::PermissionType::StringGet,
     )
     .await
 }
@@ -1493,17 +1016,134 @@ pub async fn data_write_permission_middleware(
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
-    permission_check_middleware(
-        State(rbac_service),
+    rbac_permission_check_middleware(
         request,
         next,
-        PermissionType::StringSet,
+        crate::auth::permissions::PermissionType::StringSet,
     )
     .await
 }
 
-/// Flexible string permission check
-async fn check_string_permission(
+/// Extract query parameters for pagination
+#[derive(Debug, Clone, Deserialize)]
+pub struct PaginationQuery {
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+impl Default for PaginationQuery {
+    fn default() -> Self {
+        Self {
+            page: Some(1),
+            limit: Some(20),
+        }
+    }
+}
+
+impl PaginationQuery {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(page) = self.page {
+            if page == 0 {
+                return Err("Page must be greater than 0".to_string());
+            }
+        }
+
+        if let Some(limit) = self.limit {
+            if limit == 0 || limit > 100 {
+                return Err("Limit must be between 1 and 100".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn get_offset(&self) -> u32 {
+        let page = self.page.unwrap_or(1);
+        let limit = self.limit.unwrap_or(20);
+        (page - 1) * limit
+    }
+
+    pub fn get_limit(&self) -> u32 {
+        self.limit.unwrap_or(20)
+    }
+}
+
+/// Pagination middleware that validates query parameters
+pub async fn pagination_middleware(
+    Query(query): Query<PaginationQuery>,
+    mut request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    query
+        .validate()
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::error(e))))?;
+
+    request.extensions_mut().insert(query);
+    Ok(next.run(request).await)
+}
+
+/// Permission checking middleware using RBAC service
+pub async fn permission_check_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+    required_permission: crate::auth::permissions::PermissionType,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // Get RBAC context from request extensions (set by RBAC auth middleware)
+    let rbac_context = request
+        .extensions()
+        .get::<RbacContext>()
+        .cloned()
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiResponse::<()>::error(
+                    "Authentication required".to_string(),
+                )),
+            )
+        })?;
+
+    // Check permission using RBAC service
+    match rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            required_permission.clone(),
+            rbac_context.clone(),
+        )
+        .await
+    {
+        Ok(has_permission) => {
+            if has_permission {
+                Ok(next.run(request).await)
+            } else {
+                Err((
+                    StatusCode::FORBIDDEN,
+                    Json(ApiResponse::<()>::error(format!(
+                        "Insufficient permissions. Required: {:?}",
+                        required_permission
+                    ))),
+                ))
+            }
+        }
+        Err(e) => {
+            error!(
+                user_id = %rbac_context.user_id,
+                permission = ?required_permission,
+                error = %e,
+                "Permission check failed"
+            );
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "Permission check failed".to_string(),
+                )),
+            ))
+        }
+    }
+}
+
+/// Middleware for string operations
+pub async fn string_get_permission_middleware(
     State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
@@ -1512,13 +1152,12 @@ async fn check_string_permission(
         State(rbac_service),
         request,
         next,
-        PermissionType::StringGet,
+        crate::auth::permissions::PermissionType::StringGet,
     )
     .await
 }
 
-/// Flexible string write permission check
-async fn check_string_write_permission(
+pub async fn string_set_permission_middleware(
     State(rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
@@ -1527,7 +1166,138 @@ async fn check_string_write_permission(
         State(rbac_service),
         request,
         next,
-        PermissionType::StringSet,
+        crate::auth::permissions::PermissionType::StringSet,
+    )
+    .await
+}
+
+/// Middleware for hash operations
+pub async fn hash_get_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::HashGet,
+    )
+    .await
+}
+
+pub async fn hash_set_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::HashSet,
+    )
+    .await
+}
+
+/// Middleware for set operations
+pub async fn set_members_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::SetMembers,
+    )
+    .await
+}
+
+pub async fn set_add_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::SetAdd,
+    )
+    .await
+}
+
+/// Middleware for admin operations
+pub async fn admin_info_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::AdminInfo,
+    )
+    .await
+}
+
+pub async fn admin_ping_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::AdminPing,
+    )
+    .await
+}
+
+pub async fn admin_flush_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::AdminFlush,
+    )
+    .await
+}
+
+/// Middleware for role management operations
+pub async fn role_manage_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::RoleManage,
+    )
+    .await
+}
+
+/// Middleware for audit log viewing
+pub async fn audit_view_permission_middleware(
+    State(rbac_service): State<Arc<RbacService>>,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    permission_check_middleware(
+        State(rbac_service),
+        request,
+        next,
+        crate::auth::permissions::PermissionType::AuditView,
     )
     .await
 }

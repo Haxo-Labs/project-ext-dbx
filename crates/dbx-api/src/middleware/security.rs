@@ -9,7 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::config::{CorsConfig, HostValidationConfig, SecurityConfig, SecurityHeadersConfig};
+use crate::config::{CorsConfig, HostValidationConfig, SecurityConfig};
 
 #[derive(Debug, Clone)]
 pub struct TrustedProxyConfig {
