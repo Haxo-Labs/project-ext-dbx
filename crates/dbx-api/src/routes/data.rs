@@ -2,14 +2,15 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    Router,
+    Extension, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::models::ApiResponse;
+use crate::auth::permissions::PermissionType;
+use crate::models::{ApiResponse, RbacContext};
 use dbx_core::{DataOperation, DataValue};
 use dbx_router::BackendRouter;
 
@@ -57,7 +58,21 @@ pub struct DataResponse {
 pub async fn get_data(
     Path(key): Path<String>,
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
 ) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringGet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            PermissionType::StringGet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let operation = DataOperation::Get {
         key: key.clone(),
         fields: None,
@@ -104,8 +119,22 @@ pub async fn get_data(
 pub async fn set_data(
     Path(key): Path<String>,
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<SetDataRequest>,
 ) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringSet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let data_value = json_to_data_value(request.value);
 
     let operation = DataOperation::Set {
@@ -145,8 +174,22 @@ pub async fn set_data(
 pub async fn update_data(
     Path(key): Path<String>,
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<UpdateDataRequest>,
 ) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringSet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let fields: HashMap<String, DataValue> = request
         .fields
         .into_iter()
@@ -190,7 +233,21 @@ pub async fn update_data(
 pub async fn delete_data(
     Path(key): Path<String>,
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
 ) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringSet permission (delete is a write operation)
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let operation = DataOperation::Delete {
         key: key.clone(),
         fields: None,
@@ -223,11 +280,25 @@ pub async fn delete_data(
     }
 }
 
-/// Check if data exists
+/// Check if data exists by key
 pub async fn check_exists(
     Path(key): Path<String>,
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
 ) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringGet permission (exists is a read operation)
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            PermissionType::StringGet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let operation = DataOperation::Exists {
         key: key.clone(),
         fields: None,
@@ -260,12 +331,26 @@ pub async fn check_exists(
     }
 }
 
-/// Batch operations
+/// Perform batch operations
 pub async fn batch_operations(
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<BatchDataRequest>,
 ) -> Result<Json<ApiResponse<Vec<DataResponse>>>, StatusCode> {
-    let mut operations = Vec::new();
+    // Check StringSet permission (batch operations are write operations)
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let mut responses = Vec::new();
 
     for batch_op in request.operations {
         let operation = match batch_op.operation_type.as_str() {
@@ -273,48 +358,39 @@ pub async fn batch_operations(
                 key: batch_op.key,
                 fields: None,
             },
-            "set" => {
-                if let Some(value) = batch_op.value {
-                    DataOperation::Set {
-                        key: batch_op.key,
-                        value: json_to_data_value(value),
-                        ttl: batch_op.ttl,
-                    }
-                } else {
-                    continue;
-                }
-            }
-            "update" => {
-                if let Some(fields_json) = batch_op.fields {
-                    let fields: HashMap<String, DataValue> = fields_json
-                        .into_iter()
-                        .map(|(k, v)| (k, json_to_data_value(v)))
-                        .collect();
-
-                    DataOperation::Update {
-                        key: batch_op.key,
-                        fields,
-                        ttl: batch_op.ttl,
-                    }
-                } else {
-                    continue;
-                }
-            }
+            "set" => DataOperation::Set {
+                key: batch_op.key,
+                value: batch_op
+                    .value
+                    .map(json_to_data_value)
+                    .unwrap_or(DataValue::Null),
+                ttl: batch_op.ttl,
+            },
             "delete" => DataOperation::Delete {
                 key: batch_op.key,
                 fields: None,
             },
-            "exists" => DataOperation::Exists {
+            "update" => DataOperation::Update {
                 key: batch_op.key,
-                fields: None,
+                fields: batch_op
+                    .fields
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(k, v)| (k, json_to_data_value(v)))
+                    .collect(),
+                ttl: batch_op.ttl,
             },
-            _ => continue,
+            _ => {
+                return Err(StatusCode::BAD_REQUEST);
+            }
         };
 
-        operations.push(operation);
+        responses.push(operation);
     }
 
-    let batch_operation = DataOperation::Batch { operations };
+    let batch_operation = DataOperation::Batch {
+        operations: responses,
+    };
 
     match router.route_data_operation(&batch_operation).await {
         Ok(backend) => match backend.execute_data(batch_operation).await {

@@ -481,8 +481,7 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
     let security_config_headers = security_config.clone();
 
     // Create route groups with security middleware
-    let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone())
-        .layer(cors_layer.clone());
+    let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
 
     // Create API key management routes (rate limited + RBAC authentication required)
     let api_key_routes = create_api_key_routes(state.api_key_service.clone())
@@ -497,8 +496,7 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
                 state.rbac_service.clone(),
             ),
             rbac_auth_middleware,
-        ))
-        .layer(cors_layer.clone());
+        ));
 
     // Create data operation routes (rate limited + RBAC authentication required)
     let data_routes = create_data_routes()
@@ -513,8 +511,7 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
                 state.rbac_service.clone(),
             ),
             rbac_auth_middleware,
-        ))
-        .layer(cors_layer.clone());
+        ));
 
     // Create query routes (rate limited + RBAC authentication required)
     let query_routes = create_query_routes()
@@ -529,8 +526,7 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
                 state.rbac_service.clone(),
             ),
             rbac_auth_middleware,
-        ))
-        .layer(cors_layer.clone());
+        ));
 
     // Create streaming routes (rate limited + RBAC authentication required)
     let stream_routes = create_stream_routes()
@@ -545,10 +541,9 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
                 state.rbac_service.clone(),
             ),
             rbac_auth_middleware,
-        ))
-        .layer(cors_layer.clone());
+        ));
 
-    // Create role management routes (rate limited + RBAC admin authentication required)
+    // Create role management routes (rate limited + RBAC authentication required)
     let role_routes = create_role_routes(state.rbac_service.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.rate_limit_service.clone(),
@@ -561,10 +556,9 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
                 state.rbac_service.clone(),
             ),
             rbac_auth_middleware,
-        ))
-        .layer(cors_layer.clone());
+        ));
 
-    // Create rate limit management routes (rate limited + RBAC admin authentication required)
+    // Create rate limit management routes (rate limited + RBAC authentication required)
     let rate_limit_routes = create_rate_limit_routes()
         .layer(axum::middleware::from_fn_with_state(
             state.rate_limit_service.clone(),
@@ -577,10 +571,9 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
                 state.rbac_service.clone(),
             ),
             rbac_auth_middleware,
-        ))
-        .layer(cors_layer.clone());
+        ));
 
-    // Create health routes (admin only)
+    // Create health routes (admin permission required)
     let health_routes = create_health_routes()
         .layer(axum::middleware::from_fn_with_state(
             (
@@ -593,8 +586,7 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
         .layer(axum::middleware::from_fn_with_state(
             state.rbac_service.clone(),
             admin_info_permission_middleware,
-        ))
-        .layer(cors_layer.clone());
+        ));
 
     // Configure global middleware stack
     let app = Router::new()
@@ -622,7 +614,9 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
             "/api/v1/rate-limit",
             rate_limit_routes.with_state(state.rate_limit_service.clone()),
         )
-        // Global security validation middleware (applied first)
+        // Global CORS layer (applied first to handle preflight requests)
+        .layer(cors_layer.clone())
+        // Global security validation middleware (applied after CORS)
         .layer(axum::middleware::from_fn(move |req, next| {
             let config = security_config_validation.clone();
             async move { security_validation_middleware(config, req, next).await }
@@ -845,7 +839,7 @@ mod tests {
             .unwrap();
 
         let health_response = app.oneshot(health_request).await.unwrap();
-        assert_eq!(health_response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(health_response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
