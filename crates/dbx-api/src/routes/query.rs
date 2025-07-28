@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::models::ApiResponse;
-use dbx_core::{
-    DataValue, FilterOperator, QueryFilter, QueryOperation, QueryResult, SortDirection, SortField,
-};
+use dbx_core::{DataValue, QueryFilter, QueryOperation, SortField};
 use dbx_router::BackendRouter;
 
 #[derive(Debug, Deserialize)]

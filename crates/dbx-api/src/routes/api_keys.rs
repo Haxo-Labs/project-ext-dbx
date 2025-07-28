@@ -1,9 +1,8 @@
 use crate::{
-    auth::{ApiKeyError, ApiKeyService},
-    middleware::AuthError,
+    auth::ApiKeyService,
     models::{
-        ApiKeyResponse, ApiKeyRotationResponse, ApiResponse, Claims, CreateApiKeyRequest,
-        ListApiKeysRequest, ListApiKeysResponse, UpdateApiKeyRequest,
+        ApiKeyResponse, ApiResponse, Claims, CreateApiKeyRequest, ListApiKeysRequest,
+        ListApiKeysResponse,
     },
 };
 use axum::{
@@ -16,7 +15,7 @@ use axum::{
 use std::sync::Arc;
 
 /// Create API key management routes
-pub fn create_api_key_routes(api_key_service: Arc<ApiKeyService>) -> Router {
+pub fn create_api_key_routes(api_key_service: Arc<crate::auth::ApiKeyService>) -> Router {
     Router::new()
         .route("/", post(create_api_key))
         .route("/", get(list_api_keys))
@@ -29,31 +28,20 @@ pub fn create_api_key_routes(api_key_service: Arc<ApiKeyService>) -> Router {
 
 /// Create a new API key
 pub async fn create_api_key(
-    State(api_key_service): State<Arc<ApiKeyService>>,
-    Extension(claims): Extension<Claims>,
+    State(api_key_service): State<Arc<crate::auth::ApiKeyService>>,
+    Extension(claims): Extension<crate::models::Claims>,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<Json<ApiResponse<ApiKeyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let (api_key, plaintext_key) = api_key_service
         .create_api_key(request, &claims.sub, &claims.username)
         .await
-        .map_err(|e| {
-            let (status, message) = match e {
-                ApiKeyError::ValidationError(msg) => (StatusCode::BAD_REQUEST, msg),
-                ApiKeyError::KeyNameExists => (
-                    StatusCode::CONFLICT,
-                    "API key name already exists".to_string(),
-                ),
-                ApiKeyError::DatabaseError(_) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Database error".to_string(),
-                ),
-                _ => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+        .map_err(|_e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
                     "Failed to create API key".to_string(),
-                ),
-            };
-
-            (status, Json(ApiResponse::<()>::error(message)))
+                )),
+            )
         })?;
 
     // Return response with the plaintext key (only shown once)
@@ -65,8 +53,8 @@ pub async fn create_api_key(
 
 /// List user's API keys
 pub async fn list_api_keys(
-    State(api_key_service): State<Arc<ApiKeyService>>,
-    Extension(claims): Extension<Claims>,
+    State(api_key_service): State<Arc<crate::auth::ApiKeyService>>,
+    Extension(claims): Extension<crate::models::Claims>,
     Query(query): Query<ListApiKeysRequest>,
 ) -> Result<Json<ApiResponse<ListApiKeysResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let limit = query.limit.unwrap_or(50).min(100); // Cap at 100
@@ -85,7 +73,10 @@ pub async fn list_api_keys(
             )
         })?;
 
-    let keys: Vec<ApiKeyResponse> = api_keys.iter().map(ApiKeyResponse::from).collect();
+    let keys: Vec<crate::models::ApiKeyResponse> = api_keys
+        .iter()
+        .map(crate::models::ApiKeyResponse::from)
+        .collect();
 
     let response = ListApiKeysResponse {
         keys,
@@ -99,13 +90,15 @@ pub async fn list_api_keys(
 
 /// Get a specific API key
 pub async fn get_api_key(
-    State(api_key_service): State<Arc<ApiKeyService>>,
-    Extension(claims): Extension<Claims>,
+    State(api_key_service): State<Arc<crate::auth::ApiKeyService>>,
+    Extension(claims): Extension<crate::models::Claims>,
     Path(id): Path<String>,
-) -> Result<Json<ApiResponse<ApiKeyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+) -> Result<Json<ApiResponse<crate::models::ApiKeyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let api_key = api_key_service.get_api_key_by_id(&id).await.map_err(|e| {
         let (status, message) = match e {
-            ApiKeyError::KeyNotFound => (StatusCode::NOT_FOUND, "API key not found".to_string()),
+            crate::auth::ApiKeyError::KeyNotFound => {
+                (StatusCode::NOT_FOUND, "API key not found".to_string())
+            }
             _ => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Failed to get API key".to_string(),
@@ -123,17 +116,17 @@ pub async fn get_api_key(
         ));
     }
 
-    let response = ApiKeyResponse::from(&api_key);
+    let response = crate::models::ApiKeyResponse::from(&api_key);
     Ok(Json(ApiResponse::success(response)))
 }
 
 /// Update an API key
 pub async fn update_api_key(
     Path(id): Path<String>,
-    State(api_key_service): State<Arc<ApiKeyService>>,
-    Extension(claims): Extension<Claims>,
+    State(api_key_service): State<Arc<crate::auth::ApiKeyService>>,
+    Extension(claims): Extension<crate::models::Claims>,
     Json(request): Json<serde_json::Value>,
-) -> Result<Json<ApiResponse<ApiKeyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+) -> Result<Json<ApiResponse<crate::models::ApiKeyResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let name = request
         .get("name")
         .and_then(|v| v.as_str())
@@ -144,10 +137,10 @@ pub async fn update_api_key(
         .await
         .map_err(|e| {
             let (status, message) = match e {
-                ApiKeyError::KeyNotFound => {
+                crate::auth::ApiKeyError::KeyNotFound => {
                     (StatusCode::NOT_FOUND, "API key not found".to_string())
                 }
-                ApiKeyError::ValidationError(msg) => (StatusCode::BAD_REQUEST, msg),
+                crate::auth::ApiKeyError::ValidationError(msg) => (StatusCode::BAD_REQUEST, msg),
                 _ => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error".to_string(),
@@ -156,22 +149,25 @@ pub async fn update_api_key(
             (status, Json(ApiResponse::error(message)))
         })?;
 
-    let response = ApiKeyResponse::from(&api_key);
+    let response = crate::models::ApiKeyResponse::from(&api_key);
     Ok(Json(ApiResponse::success(response)))
 }
 
 /// Rotate an API key (generate new key)
 pub async fn rotate_api_key(
-    State(api_key_service): State<Arc<ApiKeyService>>,
-    Extension(claims): Extension<Claims>,
+    State(api_key_service): State<Arc<crate::auth::ApiKeyService>>,
+    Extension(claims): Extension<crate::models::Claims>,
     Path(id): Path<String>,
-) -> Result<Json<ApiResponse<ApiKeyRotationResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+) -> Result<
+    Json<ApiResponse<crate::models::ApiKeyRotationResponse>>,
+    (StatusCode, Json<ApiResponse<()>>),
+> {
     let (api_key, new_key) = api_key_service
         .rotate_api_key(&id, &claims.sub)
         .await
         .map_err(|e| {
             let (status, message) = match e {
-                ApiKeyError::KeyNotFound => {
+                crate::auth::ApiKeyError::KeyNotFound => {
                     (StatusCode::NOT_FOUND, "API key not found".to_string())
                 }
                 _ => (
@@ -183,7 +179,7 @@ pub async fn rotate_api_key(
             (status, Json(ApiResponse::<()>::error(message)))
         })?;
 
-    let response = ApiKeyRotationResponse {
+    let response = crate::models::ApiKeyRotationResponse {
         id: api_key.id,
         new_key,
         key_prefix: api_key.key_prefix,
@@ -196,23 +192,19 @@ pub async fn rotate_api_key(
 /// Delete an API key
 pub async fn delete_api_key(
     Path(id): Path<String>,
-    State(api_key_service): State<Arc<ApiKeyService>>,
-    Extension(claims): Extension<Claims>,
+    State(api_key_service): State<Arc<crate::auth::ApiKeyService>>,
+    Extension(claims): Extension<crate::models::Claims>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiResponse<()>>)> {
     api_key_service
         .delete_api_key(&id, &claims.sub)
         .await
-        .map_err(|e| {
-            let (status, message) = match e {
-                ApiKeyError::KeyNotFound => {
-                    (StatusCode::NOT_FOUND, "API key not found".to_string())
-                }
-                _ => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
-                ),
-            };
-            (status, Json(ApiResponse::error(message)))
+        .map_err(|_e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "Failed to delete API key".to_string(),
+                )),
+            )
         })?;
 
     Ok(Json(ApiResponse::success(())))
@@ -226,8 +218,8 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    fn create_test_claims() -> Claims {
-        Claims {
+    fn create_test_claims() -> crate::models::Claims {
+        crate::models::Claims {
             sub: "user_123".to_string(),
             username: "testuser".to_string(),
             role: UserRole::User,
