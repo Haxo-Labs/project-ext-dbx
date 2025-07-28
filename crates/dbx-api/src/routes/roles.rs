@@ -11,7 +11,7 @@ use crate::{
     auth::RbacService,
     models::{
         ApiResponse, AssignRoleRequest, AuditQueryParams, CreateRoleRequest, RbacContext,
-        RevokeRoleRequest, RoleResponse, UpdateRoleRequest, UserPermissionsResponse,
+        RevokeRoleRequest, RoleResponse, UserPermissionsResponse,
     },
 };
 
@@ -139,6 +139,24 @@ pub async fn create_role(
     Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<CreateRoleRequest>,
 ) -> Result<Json<ApiResponse<RoleResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check RoleManage permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            crate::auth::permissions::PermissionType::RoleManage,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::error(
+                "Insufficient permissions".to_string(),
+            )),
+        ));
+    }
+
     match rbac_service
         .create_role(
             &request.name,
@@ -190,12 +208,30 @@ pub async fn create_role(
     }
 }
 
-/// Delete a custom role
+/// Delete a role
 pub async fn delete_role(
     State(rbac_service): State<Arc<RbacService>>,
-    Path(role_name): Path<String>,
     Extension(rbac_context): Extension<RbacContext>,
+    Path(role_name): Path<String>,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check RoleManage permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            crate::auth::permissions::PermissionType::RoleManage,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::error(
+                "Insufficient permissions".to_string(),
+            )),
+        ));
+    }
+
     match rbac_service
         .delete_role(&role_name, &rbac_context.username)
         .await
@@ -264,6 +300,24 @@ pub async fn assign_role_to_user(
     Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<AssignRoleRequest>,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check RoleManage permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            crate::auth::permissions::PermissionType::RoleManage,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::error(
+                "Insufficient permissions".to_string(),
+            )),
+        ));
+    }
+
     // Handle expiration - prefer expires_at, fall back to expires_in_days
     let expiration_days = if let Some(expires_at) = request.expires_at {
         let now = chrono::Utc::now();
@@ -307,6 +361,24 @@ pub async fn revoke_role_from_user(
     Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<RevokeRoleRequest>,
 ) -> Result<Json<ApiResponse<String>>, (StatusCode, Json<ApiResponse<()>>)> {
+    // Check RoleManage permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.username,
+            crate::auth::permissions::PermissionType::RoleManage,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()>::error(
+                "Insufficient permissions".to_string(),
+            )),
+        ));
+    }
+
     match rbac_service
         .revoke_role(
             &request.user_id,

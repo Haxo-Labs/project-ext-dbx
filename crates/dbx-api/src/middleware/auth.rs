@@ -1,7 +1,7 @@
 use crate::{
     auth::{ApiKeyError, RbacService},
     constants::errors::ErrorMessages,
-    models::{ApiResponse, Claims, CreateUserRequest, RbacContext, User, UserInfo, UserRole},
+    models::{ApiResponse, Claims, CreateUserRequest, RbacContext, User, UserInfo},
 };
 use async_trait::async_trait;
 use axum::{

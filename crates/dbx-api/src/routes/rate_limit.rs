@@ -3,7 +3,7 @@ use crate::{
     models::{ApiResponse, RateLimitPolicy, RbacContext},
 };
 use axum::{
-    extract::{Extension, Path, Query, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get, post, put},

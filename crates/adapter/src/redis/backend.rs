@@ -532,7 +532,7 @@ impl RedisBackend {
                             // Delete entire key
                             redis::cmd("DEL")
                                 .arg(key)
-                                .query_async(&mut *conn)
+                                .query_async::<_, ()>(&mut *conn)
                                 .await
                                 .map_err(|e| {
                                     DbxError::backend(
