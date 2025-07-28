@@ -18,6 +18,7 @@ dbx-core = { path = "../dbx-core" }
 dbx-config = { path = "../dbx-config" }
 dbx-adapter = { path = "../adapter", features = ["async", "connection-pool"] }
 dbx-router = { path = "../dbx-router" }
+dotenvy = "0.15"
 futures = { workspace = true }
 jsonwebtoken = "9.0"
 rand = "0.8"

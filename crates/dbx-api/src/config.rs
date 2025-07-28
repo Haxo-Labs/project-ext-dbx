@@ -260,10 +260,8 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn from_env() -> Result<Self, ConfigError> {
-        // Use the runtime to run async function
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(Self::from_env_async())
+    pub async fn from_env() -> Result<Self, ConfigError> {
+        Self::from_env_async().await
     }
 
     pub async fn from_env_async() -> Result<Self, ConfigError> {

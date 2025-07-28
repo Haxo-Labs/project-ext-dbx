@@ -1,11 +1,21 @@
 use std::env;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use dbx_api::config::ConfigError;
 use dbx_api::server::{run_server, ServerError};
 
 #[tokio::main]
 async fn main() {
+    // Load .env file if it exists (ignore errors if file doesn't exist)
+    if let Err(e) = dotenvy::dotenv() {
+        // Only warn if the file exists but has issues, not if it's missing
+        if e.to_string().contains("No such file") {
+            // .env file doesn't exist, that's fine
+        } else {
+            eprintln!("Warning: Error loading .env file: {}", e);
+        }
+    }
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)

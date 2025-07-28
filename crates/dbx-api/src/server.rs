@@ -346,16 +346,20 @@ async fn health_check() -> axum::Json<ApiResponse<String>> {
 }
 
 /// Create the application router with BackendRouter
-pub fn create_app(state: AppState) -> Router {
+pub async fn create_app(state: AppState) -> Result<Router, ServerError> {
     #[cfg(test)]
     {
         // In test mode, use a test config to avoid blocking calls
         let test_config = create_test_app_config();
-        create_app_with_config(state, Some(test_config))
+        Ok(create_app_with_config(state, test_config))
     }
     #[cfg(not(test))]
     {
-        create_app_with_config(state, None)
+        // In non-test mode, load config from environment
+        let app_config = AppConfig::from_env()
+            .await
+            .map_err(ServerError::Configuration)?;
+        Ok(create_app_with_config(state, app_config))
     }
 }
 
@@ -399,32 +403,8 @@ fn create_test_app_config() -> AppConfig {
 }
 
 /// Create the application router with BackendRouter and optional config
-pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) -> Router {
-    // Load configuration for security settings
-    let app_config = app_config.unwrap_or_else(|| {
-        AppConfig::from_env().unwrap_or_else(|_| {
-            // Fallback to defaults if config loading fails
-            AppConfig {
-                server: crate::config::ServerConfig {
-                    host: "0.0.0.0".to_string(),
-                    port: 3000,
-                },
-                jwt: crate::config::JwtConfig {
-                    secret: "fallback-secret-key-at-least-32-chars".to_string(),
-                    access_token_expiration: 900,
-                    refresh_token_expiration: 604800,
-                    issuer: "dbx-api".to_string(),
-                },
-                rbac: crate::auth::RbacConfig::default(),
-                rate_limit: crate::config::RateLimitConfig::default(),
-                security: crate::config::SecurityConfig::default(),
-                create_default_admin: false,
-                default_admin_username: None,
-                default_admin_password: None,
-            }
-        })
-    });
-
+pub fn create_app_with_config(state: AppState, app_config: AppConfig) -> Router {
+    // Use the provided configuration for security settings
     let cors_layer = create_cors_layer(&app_config.security.cors);
     let security_config = app_config.security.clone();
     let security_config_validation = security_config.clone();
@@ -591,9 +571,11 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
 /// Start the server with BackendRouter (now the main/default server)
 pub async fn run_server(config_path: Option<&str>) -> Result<(), ServerError> {
     let state = AppState::new(config_path).await?;
-    let config = AppConfig::from_env().map_err(ServerError::Configuration)?;
+    let config = AppConfig::from_env()
+        .await
+        .map_err(ServerError::Configuration)?;
 
-    let app = create_app(state);
+    let app = create_app(state).await?;
 
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr)
@@ -765,7 +747,7 @@ mod tests {
     async fn test_create_app_with_cors() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         // Test CORS preflight on auth endpoint (should work because CORS is applied there)
         let auth_request = Request::builder()
@@ -797,7 +779,7 @@ mod tests {
     async fn test_health_check_endpoint() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -813,7 +795,7 @@ mod tests {
     async fn test_middleware_chain() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -829,7 +811,7 @@ mod tests {
     async fn test_cors_configuration() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         // Test CORS preflight on auth endpoint (should work - CORS enabled for browser access)
         let auth_preflight_request = Request::builder()
@@ -848,7 +830,7 @@ mod tests {
     async fn test_not_found_endpoint() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -864,7 +846,7 @@ mod tests {
     async fn test_protected_route_without_auth() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -880,7 +862,7 @@ mod tests {
     async fn test_admin_route_without_auth() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -896,7 +878,7 @@ mod tests {
     async fn test_websocket_route_without_auth() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         let response = app
             .oneshot(
@@ -916,7 +898,7 @@ mod tests {
     async fn test_route_structure() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         let health_request = Request::builder()
             .method(Method::GET)
@@ -964,7 +946,7 @@ mod tests {
     async fn test_json_rejection_handling() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         // Test invalid JSON handling on existing auth route
         let request = Request::builder()
@@ -982,7 +964,7 @@ mod tests {
     async fn test_api_docs_endpoint() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         let request = Request::builder()
             .method(Method::GET)
@@ -999,7 +981,7 @@ mod tests {
     async fn test_app_state_error_handling() {
         let app_state = create_test_app_state().await;
         let app_config = create_test_app_config();
-        let app = create_app_with_config(app_state, Some(app_config));
+        let app = create_app_with_config(app_state, app_config);
 
         // Test error handling with malformed request
         let request = Request::builder()
