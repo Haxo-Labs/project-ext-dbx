@@ -1,12 +1,14 @@
 use crate::{
     auth::{ApiKeyService, RbacService},
-    config::{AppConfig, ConfigError, SecurityConfig},
+    config::{AppConfig, ConfigError},
     middleware::{
-        auth_middleware, jwt_auth_middleware, rate_limit_middleware, rbac_auth_middleware,
-        security::{create_cors_layer, development_security_middleware},
+        rbac_auth_middleware,
+        security::{
+            create_cors_layer, development_security_middleware, security_validation_middleware,
+        },
         security_headers_middleware, JwtService, RateLimitService, UserStore,
     },
-    models::{ApiResponse, User},
+    models::ApiResponse,
     routes::{
         api_keys::create_api_key_routes, auth::create_auth_routes, data::create_data_routes,
         health::create_health_routes, query::create_query_routes,
@@ -14,7 +16,7 @@ use crate::{
         stream::create_stream_routes,
     },
 };
-use axum::{middleware::from_fn_with_state, routing::get, Router};
+use axum::{body::Body, http::Request, middleware::Next, response::IntoResponse, Router};
 use dbx_adapter::redis::factory::RedisBackendFactory;
 use dbx_config::{AdminConfig, BackendConfig, DbxConfig, RoutingConfig};
 use dbx_router::{registry::BackendRegistryBuilder, BackendRouter};
@@ -327,7 +329,7 @@ impl AppState {
                 window_seconds: app_config.rate_limit.global_window_seconds,
                 burst_allowance: app_config.rate_limit.global_burst_allowance,
             };
-            rate_limit_service.set_global_policy(global_policy).await;
+            let _ = rate_limit_service.set_global_policy(global_policy).await;
         }
         let rate_limit_service = Arc::new(rate_limit_service);
 
@@ -478,32 +480,46 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
 
     let cors_layer = create_cors_layer(&app_config.security.cors);
     let security_config = app_config.security.clone();
+    let security_config_validation = security_config.clone();
+    let security_config_headers = security_config.clone();
 
     // Create route groups with security middleware
     let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone())
         .layer(cors_layer.clone());
 
-    // Create API key management routes (JWT authentication required)
+    // Create API key management routes (RBAC authentication required)
     let api_key_routes = create_api_key_routes(state.api_key_service.clone())
         .layer(axum::middleware::from_fn_with_state(
-            (state.jwt_service.clone(), state.user_store.clone()),
-            jwt_auth_middleware,
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
+            rbac_auth_middleware,
         ))
         .layer(cors_layer.clone());
 
-    // Create data operation routes (authentication required)
+    // Create data operation routes (RBAC authentication required)
     let data_routes = create_data_routes()
         .layer(axum::middleware::from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            auth_middleware,
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
+            rbac_auth_middleware,
         ))
         .layer(cors_layer.clone());
 
-    // Create query routes (authentication required)
+    // Create query routes (RBAC authentication required)
     let query_routes = create_query_routes()
         .layer(axum::middleware::from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            auth_middleware,
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
+            rbac_auth_middleware,
         ))
         .layer(cors_layer.clone());
 
@@ -519,11 +535,15 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
         ))
         .layer(cors_layer.clone());
 
-    // Create streaming routes (authentication required)
+    // Create streaming routes (RBAC authentication required)
     let stream_routes = create_stream_routes()
         .layer(axum::middleware::from_fn_with_state(
-            (state.jwt_service.clone(), state.api_key_service.clone()),
-            auth_middleware,
+            (
+                state.jwt_service.clone(),
+                state.api_key_service.clone(),
+                state.rbac_service.clone(),
+            ),
+            rbac_auth_middleware,
         ))
         .layer(cors_layer.clone());
 
@@ -577,8 +597,16 @@ pub fn create_app_with_config(state: AppState, app_config: Option<AppConfig>) ->
             rate_limit_routes.with_state(state.rate_limit_service.clone()),
         )
         .layer(axum::middleware::from_fn(move |req, next| {
-            let config = security_config.clone();
-            async move { development_security_middleware(config, req, next).await }
+            let config = security_config_headers.clone();
+            async move {
+                if config.development_mode {
+                    development_security_middleware(config, req, next).await
+                } else {
+                    security_headers_middleware(config, req, next)
+                        .await
+                        .into_response()
+                }
+            }
         }))
 }
 

@@ -183,7 +183,7 @@ pub async fn set_rate_limit_policy(
         burst_allowance: request.burst_allowance,
     };
 
-    rate_limit_service
+    let _ = rate_limit_service
         .set_endpoint_policy(&request.endpoint, policy.clone())
         .await;
 
@@ -221,7 +221,7 @@ pub async fn update_rate_limit_policy(
         burst_allowance: request.burst_allowance,
     };
 
-    rate_limit_service
+    let _ = rate_limit_service
         .set_endpoint_policy(&endpoint, policy.clone())
         .await;
 
