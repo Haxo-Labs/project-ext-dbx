@@ -354,6 +354,7 @@ mod tests {
         env::remove_var("PORT");
 
         env::remove_var("JWT_SECRET");
+        env::remove_var("JWT_EXPIRATION_SECONDS");
         env::remove_var("ACCESS_TOKEN_EXPIRATION");
         env::remove_var("REFRESH_TOKEN_EXPIRATION");
         env::remove_var("JWT_ISSUER");
@@ -443,6 +444,8 @@ mod tests {
     #[serial]
     fn test_app_config_from_env_custom_values() {
         clear_env_vars();
+        setup_test_env(); // Set up backend configuration first
+
         env::set_var("HOST", "127.0.0.1");
         env::set_var("PORT", "8080");
 
@@ -450,8 +453,7 @@ mod tests {
             "JWT_SECRET",
             "custom-jwt-secret-that-is-at-least-32-characters-long",
         );
-        env::set_var("ACCESS_TOKEN_EXPIRATION", "1800");
-        env::set_var("REFRESH_TOKEN_EXPIRATION", "86400");
+        env::set_var("JWT_EXPIRATION_SECONDS", "1800");
         env::set_var("JWT_ISSUER", "custom-api");
         env::set_var("CREATE_DEFAULT_ADMIN", "true");
         env::set_var("DEFAULT_ADMIN_USERNAME", "admin");
@@ -462,7 +464,7 @@ mod tests {
         assert_eq!(config.server.port, 8080);
 
         assert_eq!(config.jwt.access_token_expiration, 1800);
-        assert_eq!(config.jwt.refresh_token_expiration, 86400);
+        assert_eq!(config.jwt.refresh_token_expiration, 12600); // 1800 * 7
         assert_eq!(config.jwt.issuer, "custom-api");
         assert!(config.create_default_admin);
         assert_eq!(config.default_admin_username, Some("admin".to_string()));
@@ -478,6 +480,12 @@ mod tests {
     #[serial]
     fn test_app_config_missing_jwt_secret() {
         clear_env_vars();
+        // Set up backend configuration but not JWT secret
+        env::set_var("DBX_BACKEND_1_URL", "mock://localhost:6379");
+        env::set_var("DBX_BACKEND_1_PROVIDER", "mock");
+        env::set_var("DBX_BACKEND_1_NAME", "test_backend");
+        env::set_var("DBX_BACKEND_1_POOL_SIZE", "10");
+        env::set_var("DBX_DEFAULT_BACKEND", "test_backend");
 
         let result = AppConfig::from_env();
         assert!(matches!(
@@ -496,7 +504,7 @@ mod tests {
         env::set_var("PORT", "invalid");
 
         let result = AppConfig::from_env();
-        assert!(matches!(result, Err(ConfigError::ParseError { .. })));
+        assert!(matches!(result, Err(ConfigError::DbxConfig(_))));
 
         clear_env_vars();
     }
@@ -522,6 +530,13 @@ mod tests {
     #[serial]
     fn test_app_config_short_jwt_secret() {
         clear_env_vars();
+        // Set up backend configuration
+        env::set_var("DBX_BACKEND_1_URL", "mock://localhost:6379");
+        env::set_var("DBX_BACKEND_1_PROVIDER", "mock");
+        env::set_var("DBX_BACKEND_1_NAME", "test_backend");
+        env::set_var("DBX_BACKEND_1_POOL_SIZE", "10");
+        env::set_var("DBX_DEFAULT_BACKEND", "test_backend");
+
         env::set_var("JWT_SECRET", "short");
 
         let result = AppConfig::from_env();
