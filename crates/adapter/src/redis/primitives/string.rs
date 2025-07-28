@@ -8,6 +8,7 @@ use tracing::error;
 /// so we store commonly used scripts as constants for reference.
 mod script_constants {
     /// Ping script for testing script execution
+    #[allow(dead_code)]
     pub const PING_SCRIPT: &str = "return redis.call('PING')";
 }
 

@@ -37,13 +37,6 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 uuid = { version = "1.11.0", features = ["v4"] }
 
-# Test coverage and development tools
-[workspace.dev-dependencies]
-tarpaulin = "0.31"
-criterion = "0.5"
-proptest = "1.0"
-serial_test = "3.0"
-
 # Coverage configuration
 [workspace.metadata.tarpaulin]
 # Include all workspace members in coverage

@@ -4,15 +4,6 @@ use tracing::error;
 
 use crate::redis::RedisConnectionHandler;
 
-/// Internal script storage for debugging and testing purposes.
-///
-/// The Redis crate doesn't expose script content after creation,
-/// so we store commonly used scripts as constants for reference.
-mod script_constants {
-    /// Ping script for testing script execution
-    pub const PING_SCRIPT: &str = "return redis.call('PING')";
-}
-
 /// Represents a Redis bitmap (string treated as bit array) with operations for manipulating bitmap values.
 ///
 /// This implementation supports:
