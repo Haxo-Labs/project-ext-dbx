@@ -999,7 +999,7 @@ pub struct RbacContextMiddleware {
 
 /// Flexible data operation permission middleware that can handle different permission types
 pub async fn data_read_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
+    State(_rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
@@ -1012,7 +1012,7 @@ pub async fn data_read_permission_middleware(
 }
 
 pub async fn data_write_permission_middleware(
-    State(rbac_service): State<Arc<RbacService>>,
+    State(_rbac_service): State<Arc<RbacService>>,
     request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {

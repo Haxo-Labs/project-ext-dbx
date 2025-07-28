@@ -95,7 +95,7 @@ pub fn create_health_routes() -> Router<Arc<BackendRouter>> {
 
 async fn get_system_health(
     State(router): State<Arc<BackendRouter>>,
-    rbac_context: RbacContext,
+    _rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<SystemHealthResponse>>, StatusCode> {
     // Get all configured backends
     let backend_names = router.get_all_backends().await;
@@ -189,7 +189,7 @@ async fn get_system_health(
 async fn get_backend_health(
     State(router): State<Arc<BackendRouter>>,
     Path(backend_name): Path<String>,
-    rbac_context: RbacContext,
+    _rbac_context: RbacContext,
 ) -> Result<Json<ApiResponse<BackendHealthResponse>>, StatusCode> {
     match router.get_backend(&backend_name).await {
         Some(backend) => {

@@ -8,12 +8,9 @@ use axum::{
 use std::sync::Arc;
 
 use crate::{
-    middleware::{
-        auth::{AuthResponse, UserStoreOperations},
-        AuthError, JwtService, UserStore,
-    },
+    middleware::{auth::UserStoreOperations, AuthError, JwtService, UserStore},
     models::{
-        ApiResponse, Claims, LoginRequest, RefreshRequest, TokenValidationResponse, User, UserInfo,
+        ApiResponse, Claims, LoginRequest, RefreshRequest, TokenValidationResponse, UserInfo,
     },
 };
 
@@ -36,7 +33,7 @@ pub async fn login(
     Json<ApiResponse<crate::middleware::auth::AuthResponse>>,
     (StatusCode, Json<ApiResponse<()>>),
 > {
-    let user = user_store
+    let _user = user_store
         .get_user_by_username(&login_request.username)
         .await
         .map_err(|_| {

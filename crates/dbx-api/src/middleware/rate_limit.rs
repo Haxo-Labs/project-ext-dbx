@@ -126,7 +126,7 @@ impl SlidingWindowRateLimiter {
         endpoint: &str,
         policy: &RateLimitPolicy,
     ) -> Result<RateLimitResult, String> {
-        let context = RateLimitContext {
+        let _context = RateLimitContext {
             identifier: identifier.to_string(),
             policy: policy.clone(),
             endpoint: endpoint.to_string(),
@@ -1538,7 +1538,7 @@ pub fn add_rate_limit_headers(response: &mut axum::response::Response, result: &
 pub async fn rate_limit_middleware(
     State(rate_limit_service): State<Arc<PolicyRateLimitService>>,
     headers: HeaderMap,
-    mut request: Request,
+    request: Request,
     next: Next,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
     let endpoint = request.uri().path().to_string();
@@ -1602,9 +1602,6 @@ pub async fn rate_limit_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use std::time::Duration;
-    use tokio::time::sleep;
 
     fn create_test_policy() -> RateLimitPolicy {
         RateLimitPolicy {
@@ -2265,7 +2262,8 @@ mod tests {
         // Verify metrics contain expected fields
         assert!(metrics.compression_ratio > 0.0);
         assert!(metrics.sliding_window_bytes > 0);
-        assert!(metrics.bit_vector_bytes >= 0);
+        // Verify bit vector bytes is calculated correctly
+        assert!(metrics.bit_vector_bytes > 0);
     }
 
     #[tokio::test]

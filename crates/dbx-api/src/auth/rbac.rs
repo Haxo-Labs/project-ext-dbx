@@ -1,8 +1,5 @@
 use crate::{
-    auth::{
-        permissions::{Permission, PermissionType, Role, RoleRegistry},
-        RbacService,
-    },
+    auth::permissions::{Permission, PermissionType, Role, RoleRegistry},
     models::{AuditEventType, AuditLogEntry, AuditQueryParams, RbacContext, UserRoleAssignment},
 };
 use chrono::{Duration, Utc};
@@ -924,9 +921,7 @@ mod tests {
     use super::*;
     use crate::auth::permissions::{Permission, PermissionType};
     use crate::models::{AuditEventType, AuditQueryParams, PermissionCheckContext};
-    use redis::{Client, Connection};
     use std::sync::Arc;
-    use tokio::time::{sleep, Duration};
 
     fn create_test_rbac_config() -> RbacConfig {
         RbacConfig {

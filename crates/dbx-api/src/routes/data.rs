@@ -94,7 +94,7 @@ pub async fn get_data(
                 Ok(Json(ApiResponse::success(response)))
             }
             Err(e) => {
-                let error_response = DataResponse {
+                let _error_response = DataResponse {
                     operation_id: Uuid::new_v4().to_string(),
                     success: false,
                     data: None,

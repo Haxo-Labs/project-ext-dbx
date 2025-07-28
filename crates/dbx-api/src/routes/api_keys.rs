@@ -76,7 +76,7 @@ pub async fn list_api_keys(
     let (api_keys, total) = api_key_service
         .list_user_api_keys(&claims.sub, limit, offset, active_only)
         .await
-        .map_err(|e| {
+        .map_err(|_e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse::<()>::error(
