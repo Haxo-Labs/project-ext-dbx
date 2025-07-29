@@ -301,9 +301,13 @@ pub async fn get_rate_limit_metrics(
     let all_policies = rate_limit_service.get_all_policies().await;
     let policies_count = all_policies.len() as u32;
 
-    let global_policy = rate_limit_service.global_policy.read().unwrap();
-    let has_global_policy = global_policy.is_some();
-    drop(global_policy); // Release the lock early
+    let has_global_policy = match rate_limit_service.global_policy.read() {
+        Ok(global_policy) => global_policy.is_some(),
+        Err(_) => {
+            tracing::error!("Failed to acquire read lock on global policy");
+            false
+        }
+    };
 
     let active_limiters = if has_global_policy {
         policies_count + 1

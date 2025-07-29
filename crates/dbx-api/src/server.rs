@@ -593,13 +593,13 @@ pub async fn run_server(config_path: Option<&str>) -> Result<(), ServerError> {
         .await
         .map_err(|e| ServerError::ServerBinding(format!("Failed to bind to {}: {}", addr, e)))?;
 
-    println!("DBX Server running on http://{}", addr);
-    println!("API Endpoints:");
-    println!("  Health: GET /health");
-    println!("  Data Operations: POST/GET/PUT/DELETE /api/v1/data/{{key}}");
-    println!("  Query Operations: POST /api/v1/query");
-    println!("  Stream Operations: POST /api/v1/stream/{{stream}}");
-    println!("  Authentication: POST /auth/login");
+    tracing::info!("DBX Server running on http://{}", addr);
+    tracing::info!("API Endpoints:");
+    tracing::info!("  Health: GET /health");
+    tracing::info!("  Data Operations: POST/GET/PUT/DELETE /api/v1/data/{{key}}");
+    tracing::info!("  Query Operations: POST /api/v1/query");
+    tracing::info!("  Stream Operations: POST /api/v1/stream/{{stream}}");
+    tracing::info!("  Authentication: POST /auth/login");
 
     axum::serve(listener, app)
         .await

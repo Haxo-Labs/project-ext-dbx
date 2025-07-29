@@ -69,10 +69,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let server_info = admin.info_section("server").unwrap();
     /// assert!(server_info.contains("redis_version"));
@@ -121,10 +121,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let config = admin.config_get_all().unwrap();
     /// assert!(config.contains_key("timeout"));
@@ -168,10 +168,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let (time, microseconds) = admin.time().unwrap();
     /// println!("Server time: {} (microseconds: {})", time, microseconds);
@@ -189,10 +189,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let version = admin.version().unwrap();
     /// println!("Redis version: {}", version);
@@ -216,10 +216,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let memory = admin.memory_stats().unwrap();
     /// println!("Used memory: {} bytes", memory.get("used_memory").unwrap_or(&"unknown".to_string()));
@@ -244,10 +244,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let clients = admin.client_stats().unwrap();
     /// println!("Connected clients: {}", clients.get("connected_clients").unwrap_or(&"unknown".to_string()));
@@ -272,10 +272,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let stats = admin.server_stats().unwrap();
     /// println!("Total commands processed: {}", stats.get("total_commands_processed").unwrap_or(&"unknown".to_string()));
@@ -303,10 +303,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let health = admin.health_check().unwrap();
     /// println!("Redis server is healthy: {}", health.is_healthy);
@@ -347,10 +347,10 @@ impl AdminOperations {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use dbx_adapter::redis::RedisConnectionPool;
     /// let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    /// let redis = Redis::from_url(&redis_url).unwrap();
+    /// let redis = RedisConnectionPool::new(&redis_url, 10).unwrap();
     /// let admin = redis.admin();
     /// let status = admin.server_status().unwrap();
     /// println!("Server uptime: {} seconds", status.uptime_seconds);

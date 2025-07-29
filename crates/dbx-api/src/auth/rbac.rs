@@ -183,7 +183,9 @@ impl RbacService {
     ) -> Result<UserRoleAssignment, RbacError> {
         // Verify role exists
         {
-            let role_registry = self.role_registry.read().unwrap();
+            let role_registry = self.role_registry.read().map_err(|_| {
+                RbacError::BackendError("Failed to acquire read lock on role registry".to_string())
+            })?;
             if role_registry.get_role(role_name).is_none() {
                 return Err(RbacError::RoleNotFound(role_name.to_string()));
             }
@@ -388,7 +390,9 @@ impl RbacService {
         inherits_from: Option<Vec<String>>,
         _updated_by: &str,
     ) -> Result<Role, RbacError> {
-        let mut registry = self.role_registry.write().unwrap();
+        let mut registry = self.role_registry.write().map_err(|_| {
+            RbacError::BackendError("Failed to acquire write lock on role registry".to_string())
+        })?;
 
         // Get existing role
         let existing_role = registry
@@ -434,7 +438,10 @@ impl RbacService {
             .backend
             .execute_data(dbx_core::DataOperation::Set {
                 key: format!("rbac:role:{}", role_name),
-                value: dbx_core::DataValue::String(serde_json::to_string(&updated_role).unwrap()),
+                value: dbx_core::DataValue::String(
+                    serde_json::to_string(&updated_role)
+                        .map_err(|e| RbacError::SerializationError(e.to_string()))?,
+                ),
                 ttl: None,
             })
             .await
@@ -577,7 +584,9 @@ impl RbacService {
         role_name: &str,
         inherits_from: &[String],
     ) -> Result<(), RbacError> {
-        let role_registry = self.role_registry.read().unwrap();
+        let role_registry = self.role_registry.read().map_err(|_| {
+            RbacError::BackendError("Failed to acquire read lock on role registry".to_string())
+        })?;
 
         // Cycle detection using depth-first search algorithm
         fn check_cycle(

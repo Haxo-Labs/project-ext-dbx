@@ -11,7 +11,7 @@ async fn main() {
         if e.to_string().contains("No such file") {
             // .env file doesn't exist, that's fine
         } else {
-            eprintln!("Warning: Error loading .env file: {}", e);
+            tracing::warn!("Error loading .env file: {}", e);
         }
     }
 
