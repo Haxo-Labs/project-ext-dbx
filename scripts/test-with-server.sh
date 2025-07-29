@@ -36,7 +36,7 @@ source "$SCRIPT_DIR/common.sh"
 
 # Default values
 ENV_FILE=".env"
-REDIS_URL=""
+BACKEND_URL=""
 SERVER_PORT="3000"
 SKIP_SERVER=false
 SKIP_REDIS=false
@@ -52,8 +52,8 @@ while [[ $# -gt 0 ]]; do
 		ENV_FILE="$2"
 		shift 2
 		;;
-	--redis-url)
-		REDIS_URL="$2"
+	--backend-url)
+		BACKEND_URL="$2"
 		shift 2
 		;;
 	--server-port)
@@ -138,20 +138,23 @@ load_environment() {
 	fi
 
 	# Override with command line arguments
-	if [ -n "$REDIS_URL" ]; then
-		export REDIS_URL="$REDIS_URL"
-		log_info "Using Redis URL from command line: $REDIS_URL"
+	if [ -n "$BACKEND_URL" ]; then
+		export DBX_BACKEND_1_URL="$BACKEND_URL"
+		log_info "Using Backend URL from command line: $BACKEND_URL"
 	fi
 
 	# Set defaults if not provided
-	export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
+	export DBX_BACKEND_1_PROVIDER="${DBX_BACKEND_1_PROVIDER:-redis}"
+	export DBX_BACKEND_1_URL="${DBX_BACKEND_1_URL:-redis://localhost:6379}"
+	export DBX_DEFAULT_BACKEND="${DBX_DEFAULT_BACKEND:-backend_1}"
 	export HOST="${HOST:-0.0.0.0}"
 	export PORT="${PORT:-$SERVER_PORT}"
 	export POOL_SIZE="${POOL_SIZE:-10}"
 	export LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 	log_info "Environment configuration:"
-	log_info "  Redis URL: $REDIS_URL"
+	log_info "  Backend Provider: $DBX_BACKEND_1_PROVIDER"
+	log_info "  Backend URL: $DBX_BACKEND_1_URL"
 	log_info "  Host: $HOST"
 	log_info "  Port: $PORT"
 	log_info "  Pool Size: $POOL_SIZE"
@@ -215,8 +218,9 @@ start_server() {
 	docker run -d \
 		--name "$DOCKER_CONTAINER_NAME" \
 		-p "$PORT:3000" \
-		-e DATABASE_URL="$REDIS_URL" \
-		-e DATABASE_TYPE=redis \
+		-e DBX_BACKEND_1_PROVIDER="$DBX_BACKEND_1_PROVIDER" \
+		-e DBX_BACKEND_1_URL="$DBX_BACKEND_1_URL" \
+		-e DBX_DEFAULT_BACKEND="$DBX_DEFAULT_BACKEND" \
 		-e HOST=0.0.0.0 \
 		-e PORT=3000 \
 		-e POOL_SIZE="$POOL_SIZE" \
@@ -263,10 +267,13 @@ run_crate_tests() {
 	log_step "Running crate tests against server..."
 
 	# Set environment variables for tests
-	export REDIS_URL="$REDIS_URL"
+	export DBX_BACKEND_1_PROVIDER="$DBX_BACKEND_1_PROVIDER"
+	export DBX_BACKEND_1_URL="$DBX_BACKEND_1_URL"
+	export DBX_DEFAULT_BACKEND="$DBX_DEFAULT_BACKEND"
 
 	log_info "Test environment:"
-	log_info "  REDIS_URL: $REDIS_URL"
+	log_info "  Backend Provider: $DBX_BACKEND_1_PROVIDER"
+	log_info "  Backend URL: $DBX_BACKEND_1_URL"
 	log_info "  SERVER_PORT: $PORT"
 
 	# Run tests in sequential order

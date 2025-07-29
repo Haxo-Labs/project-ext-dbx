@@ -29,15 +29,15 @@ source "$SCRIPT_DIR/config.sh"
 source "$SCRIPT_DIR/common.sh"
 
 # Default values
-REDIS_URL="redis://localhost:6379"
+BACKEND_URL="redis://localhost:6379"
 SERVER_URL="http://localhost:3000"
 VERBOSE=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
 	case $1 in
-	--redis-url)
-		REDIS_URL="$2"
+	--backend-url)
+		BACKEND_URL="$2"
 		shift 2
 		;;
 	--server-url)
@@ -97,10 +97,12 @@ setup_environment() {
 	log_step "Setting up test environment..."
 
 	# Set environment variables for tests
-	export REDIS_URL="$REDIS_URL"
+	export DBX_BACKEND_1_PROVIDER="redis"
+	export DBX_BACKEND_1_URL="$BACKEND_URL"
+	export DBX_DEFAULT_BACKEND="backend_1"
 
 	log_info "Test environment:"
-	log_info "  REDIS_URL: $REDIS_URL"
+	log_info "  Backend URL: $BACKEND_URL"
 	log_info "  SERVER_URL: $SERVER_URL"
 }
 

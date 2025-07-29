@@ -98,7 +98,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - BACKEND_TYPE=redis
+      - DBX_BACKEND_1_PROVIDER=redis
       - DBX_BACKEND_1_PROVIDER=redis
       - DBX_BACKEND_1_URL=redis://redis:6379
       - DBX_DEFAULT_BACKEND=backend_1
@@ -152,7 +152,7 @@ DBX supports multiple configuration methods:
 
 ```bash
 # Backend type (auto-detected if not specified)
-BACKEND_TYPE=redis
+DBX_BACKEND_1_PROVIDER=redis
 
 # Backend-specific URLs
 DBX_BACKEND_1_PROVIDER=redis
@@ -353,9 +353,9 @@ DBX provides Docker images for multiple architectures:
 
 ## Links
 
-- **📖 Documentation**: [https://dbx.effortlesslabs.com](https://0dbx.vercel.app/)
-- **🐳 Docker Hub**: [https://hub.docker.com/r/effortlesslabs/0dbx_redis](https://hub.docker.com/r/effortlesslabs/0dbx_redis)
-- **📦 NPM Package**: [https://www.npmjs.com/package/@0dbx/redis](https://www.npmjs.com/package/@0dbx/redis)
+- **📖 Documentation**: [https://dbx.effortlesslabs.com](https://dbx.effortlesslabs.com/)
+- **🐳 Docker Hub**: [https://hub.docker.com/r/effortlesslabs/dbx](https://hub.docker.com/r/effortlesslabs/dbx)
+- **📦 NPM Package**: [https://www.npmjs.com/package/@dbx/ts](https://www.npmjs.com/package/@dbx/ts)
 - **🐙 GitHub**: [https://github.com/effortlesslabs/dbx](https://github.com/effortlesslabs/dbx)
 
 ## Publishing

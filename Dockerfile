@@ -27,7 +27,7 @@ RUN cargo build --release
 RUN rm src/main.rs
 
 # Build the application
-RUN cargo build --release --bin dbx-redis-api
+RUN cargo build --release --bin dbx
 
 # Create a new stage with a minimal runtime image (supports multi-platform)
 FROM --platform=$TARGETPLATFORM debian:bookworm-slim
@@ -45,7 +45,7 @@ RUN useradd -r -s /bin/false dbx
 WORKDIR /app
 
 # Copy the binary from the builder stage
-COPY --from=builder /usr/src/dbx/target/release/dbx-redis-api /app/dbx-redis-api
+COPY --from=builder /usr/src/dbx/target/release/dbx /app/dbx
 
 # Copy the static files
 COPY static/ ./static/
@@ -61,7 +61,7 @@ EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000/redis/admin/ping || exit 1
+    CMD curl -f http://localhost:3000/health || exit 1
 
 # Default environment variables
 ENV HOST=0.0.0.0
@@ -71,9 +71,9 @@ ENV LOG_LEVEL=INFO
 
 # Add labels for better image metadata
 LABEL maintainer="DBX Team"
-LABEL description="High-performance API Gateway with HTTP and WebSocket interfaces"
+LABEL description="High-performance Database Abstraction Gateway with multi-backend support"
 LABEL version="0.1.6"
 LABEL org.opencontainers.image.source="https://github.com/effortlesslabs/dbx"
 
 # Run the binary
-CMD ["./dbx-api"]
+CMD ["./dbx"]

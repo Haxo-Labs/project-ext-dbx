@@ -90,7 +90,7 @@ cd bindings/dbx_ts && npm test && cd ../..
 docker build -t effortlesslabs/dbx:test .
 
 # Test multi-backend support
-BACKEND_TYPE=redis docker run -d effortlesslabs/dbx:test
+DBX_BACKEND_1_PROVIDER=redis DBX_BACKEND_1_URL=redis://localhost:6379 DBX_DEFAULT_BACKEND=backend_1 docker run -d effortlesslabs/dbx:test
 ```
 
 ### 3. Publish TypeScript SDK
@@ -345,8 +345,9 @@ docker rm -f dbx-test
 
 # Test Redis backend
 docker run -d --name dbx-redis-test \
-  -e BACKEND_TYPE=redis \
-  -e REDIS_URL=redis://redis:6379 \
+  -e DBX_BACKEND_1_PROVIDER=redis \
+-e DBX_BACKEND_1_URL=redis://redis:6379 \
+-e DBX_DEFAULT_BACKEND=backend_1 \
   effortlesslabs/dbx:redis
 ```
 

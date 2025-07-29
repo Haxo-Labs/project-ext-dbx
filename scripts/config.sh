@@ -3,7 +3,7 @@
 # =============================================================================
 # DBX PUBLISHING SCRIPTS - CONFIGURATION
 # =============================================================================
-# 
+#
 # This file contains all configuration values for DBX publishing scripts.
 # Modify these values to customize the publishing behavior.
 
@@ -13,7 +13,7 @@
 
 # Docker Hub settings
 DOCKER_USERNAME="${DOCKER_USERNAME:-effortlesslabs}"
-DOCKER_REPO="${DOCKER_REPO:-0dbx_redis}"
+DOCKER_REPO="${DOCKER_REPO:-dbx}"
 DOCKER_PLATFORMS="${DOCKER_PLATFORMS:-linux/amd64,linux/arm64}"
 
 # Docker build settings
@@ -28,7 +28,7 @@ DOCKER_RAILWAY_TAG_SUFFIX="${DOCKER_RAILWAY_TAG_SUFFIX:-amd64-only}"
 # =============================================================================
 
 # NPM package settings
-NPM_PACKAGE_NAME="${NPM_PACKAGE_NAME:-@0dbx/redis}"
+NPM_PACKAGE_NAME="${NPM_PACKAGE_NAME:-@dbx/ts}"
 NPM_PACKAGE_ACCESS="${NPM_PACKAGE_ACCESS:-public}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org/}"
 
@@ -38,9 +38,9 @@ NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org/}"
 
 # Version files to update
 VERSION_FILES=(
-    "Cargo.toml"
-    "bindings/redis_ts/package.json"
-    "Dockerfile"
+	"Cargo.toml"
+	"bindings/dbx_ts/package.json"
+	"Dockerfile"
 )
 
 # Version validation
@@ -52,8 +52,8 @@ VERSION_REGEX="^[0-9]+\.[0-9]+\.[0-9]+$"
 
 # Test commands (sequential order: adapter → api → client)
 RUST_TEST_CMD_ADAPTER="${RUST_TEST_CMD_ADAPTER:-cd crates/adapter && cargo test}"
-RUST_TEST_CMD_API="${RUST_TEST_CMD_API:-cd crates/redis_api && cargo test}"
-RUST_TEST_CMD_CLIENT="${RUST_TEST_CMD_CLIENT:-cd crates/redis_client && cargo test}"
+RUST_TEST_CMD_API="${RUST_TEST_CMD_API:-cd crates/dbx-api && cargo test --features test-utils}"
+RUST_TEST_CMD_ADAPTER="${RUST_TEST_CMD_ADAPTER:-cd crates/adapter && cargo test}"
 TYPESCRIPT_TEST_CMD="${TYPESCRIPT_TEST_CMD:-npm run test:run}"
 TYPESCRIPT_BUILD_CMD="${TYPESCRIPT_BUILD_CMD:-npm run build}"
 
@@ -66,7 +66,7 @@ TEST_ORDER=("adapter" "api" "client")
 # =============================================================================
 
 # Build directories
-TYPESCRIPT_BUILD_DIR="${TYPESCRIPT_BUILD_DIR:-bindings/redis_ts}"
+TYPESCRIPT_BUILD_DIR="${TYPESCRIPT_BUILD_DIR:-bindings/dbx_ts}"
 RUST_BUILD_DIR="${RUST_BUILD_DIR:-.}"
 
 # =============================================================================
@@ -74,7 +74,7 @@ RUST_BUILD_DIR="${RUST_BUILD_DIR:-.}"
 # =============================================================================
 
 # Log levels
-LOG_LEVEL="${LOG_LEVEL:-info}"  # debug, info, warning, error
+LOG_LEVEL="${LOG_LEVEL:-info}" # debug, info, warning, error
 ENABLE_COLORED_OUTPUT="${ENABLE_COLORED_OUTPUT:-true}"
 ENABLE_PROGRESS_INDICATORS="${ENABLE_PROGRESS_INDICATORS:-true}"
 
@@ -108,17 +108,17 @@ MAX_PARALLEL_JOBS="${MAX_PARALLEL_JOBS:-2}"
 
 # Required tools
 REQUIRED_TOOLS=(
-    "docker"
-    "cargo"
-    "npm"
-    "git"
+	"docker"
+	"cargo"
+	"npm"
+	"git"
 )
 
 # Optional tools (warn if missing)
 OPTIONAL_TOOLS=(
-    "parallel"
-    "jq"
-    "yq"
+	"parallel"
+	"jq"
+	"yq"
 )
 
 # =============================================================================
@@ -139,15 +139,15 @@ ARCH="$(uname -m)"
 # =============================================================================
 
 # macOS specific settings
-if [[ "$OS" == "Darwin" ]]; then
-    # Use GNU sed on macOS if available
-    if command -v gsed > /dev/null 2>&1; then
-        SED_CMD="gsed"
-    else
-        SED_CMD="sed"
-    fi
+if [[ $OS == "Darwin" ]]; then
+	# Use GNU sed on macOS if available
+	if command -v gsed >/dev/null 2>&1; then
+		SED_CMD="gsed"
+	else
+		SED_CMD="sed"
+	fi
 else
-    SED_CMD="sed"
+	SED_CMD="sed"
 fi
 
 # =============================================================================
@@ -176,20 +176,20 @@ MASK_CREDENTIALS_IN_LOGS="${MASK_CREDENTIALS_IN_LOGS:-true}"
 
 # Default deployment platforms
 DEPLOYMENT_PLATFORMS=(
-    "docker-hub"
-    "npm"
-    "github"
+	"docker-hub"
+	"npm"
+	"github"
 )
 
 # Platform-specific settings
 DOCKER_HUB_SETTINGS=(
-    "multi-platform"
-    "railway-compatible"
+	"multi-platform"
+	"railway-compatible"
 )
 
 NPM_SETTINGS=(
-    "public-access"
-    "typescript-support"
+	"public-access"
+	"typescript-support"
 )
 
 # =============================================================================
@@ -198,7 +198,7 @@ NPM_SETTINGS=(
 
 # Success/failure notifications
 ENABLE_NOTIFICATIONS="${ENABLE_NOTIFICATIONS:-false}"
-NOTIFICATION_WEBHOOK="${NOTIFICATION_WEBHOOK:-}"
+NOTIFICATION_WEBHOOK="${NOTIFICATION_WEBHOOK-}"
 
 # =============================================================================
 # DEBUGGING CONFIGURATION
@@ -210,7 +210,7 @@ VERBOSE="${VERBOSE:-false}"
 
 # Debug output
 if [ "$DEBUG" = "true" ]; then
-    set -x
+	set -x
 fi
 
 # =============================================================================
@@ -239,4 +239,4 @@ export MAX_RETRIES RETRY_DELAY
 export VALIDATE_CREDENTIALS MASK_CREDENTIALS_IN_LOGS
 export DEPLOYMENT_PLATFORMS DOCKER_HUB_SETTINGS NPM_SETTINGS
 export ENABLE_NOTIFICATIONS NOTIFICATION_WEBHOOK
-export DEBUG VERBOSE 
+export DEBUG VERBOSE

@@ -94,7 +94,7 @@ DBX_BASE_URL=http://localhost:3000
 DBX_WS_HOST_URL=ws://localhost:3000/ws
 
 # Backend selection
-BACKEND_TYPE=redis  # or mongo, postgres, sqlite
+DBX_BACKEND_1_PROVIDER=redis  # or mongodb, postgresql, sqlite
 
 # Backend-specific URLs
 DBX_BACKEND_1_PROVIDER=redis

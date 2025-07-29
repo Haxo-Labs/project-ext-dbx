@@ -16,7 +16,7 @@ services:
   # DBX API service
   dbx-api:
     # Use published image (replace with your Docker Hub username)
-    # image: effortlesslabs/0dbx_redis:latest
+    # image: effortlesslabs/dbx:latest
     # Or build from local Dockerfile
     build:
       context: .
@@ -39,7 +39,7 @@ services:
     depends_on:
       - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/redis/admin/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
