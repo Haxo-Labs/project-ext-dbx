@@ -1,7 +1,7 @@
 //! # DBX Router
 //!
 //! Backend routing and operation dispatch for DBX.
-//! This crate provides functionality to route operations to appropriate backends
+//! Route operations to appropriate backends
 //! based on configuration rules and load balancing strategies.
 
 pub mod error;

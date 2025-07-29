@@ -991,7 +991,7 @@ pub async fn rbac_permission_check_middleware(
             )),
         )),
         Err(e) => {
-            eprintln!("Permission check error: {:?}", e);
+            tracing::error!("Permission check failed: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse::<()>::error(
@@ -1011,7 +1011,7 @@ pub struct RbacContextMiddleware {
     pub rbac_service: Arc<RbacService>,
 }
 
-/// Flexible data operation permission middleware that can handle different permission types
+/// Data operation permission middleware
 pub async fn data_read_permission_middleware(
     State(_rbac_service): State<Arc<RbacService>>,
     request: Request,

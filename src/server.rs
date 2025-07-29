@@ -12,7 +12,7 @@ use crate::{
     models::ApiResponse,
     routes::auth::create_auth_routes,
 };
-use dbx_adapter::redis::{client::RedisPool, factory::RedisBackendFactory};
+use dbx_adapter::redis::{client::RedisConnectionPool, factory::RedisBackendFactory};
 use dbx_config::{BackendConfig, DbxConfig, LoadBalancingConfig, RoutingConfig};
 use dbx_core::LoadBalancingStrategy;
 use dbx_router::{BackendRegistryBuilder, BackendRouter};

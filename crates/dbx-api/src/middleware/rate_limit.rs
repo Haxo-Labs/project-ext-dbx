@@ -326,7 +326,7 @@ impl SlidingWindowRateLimiter {
     }
 }
 
-/// Memory-efficient bit vector rate limiter
+/// Bit vector rate limiter
 pub struct BitVectorRateLimiter {
     backend: Arc<dyn UniversalBackend>,
     bucket_size_seconds: u32, // Size of each time bucket in seconds
@@ -1612,23 +1612,7 @@ mod tests {
     }
 
     async fn create_redis_pool() -> Arc<dyn UniversalBackend> {
-        use crate::test_utils::MockBackendFactory;
-        use dbx_config::BackendConfig;
-        use dbx_router::registry::BackendFactory;
-
-        let config = BackendConfig {
-            provider: "mock".to_string(),
-            url: "mock://localhost:6379".to_string(),
-            pool_size: Some(1),
-            timeout_ms: Some(5000),
-            retry_attempts: Some(3),
-            retry_delay_ms: Some(1000),
-            capabilities: None,
-            additional_config: std::collections::HashMap::new(),
-        };
-
-        let factory = MockBackendFactory::new();
-        factory.create_backend("test", &config).await.unwrap()
+        crate::test_helpers::create_mock_backend()
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ use crate::RouterError;
 
 /// Key matcher for routing operations based on key patterns
 pub struct KeyMatcher {
-    /// Radix trie for efficient prefix matching
+    /// Radix trie for prefix matching
     prefix_trie: Trie<String, RoutingTarget>,
     /// Fast lookup for exact matches
     exact_matches: HashMap<String, RoutingTarget>,
@@ -122,7 +122,7 @@ impl KeyMatcher {
         })
     }
 
-    /// Match a key against routing rules with efficient lookup
+    /// Match a key against routing rules
     pub fn match_key(&self, key: &str) -> Option<String> {
         // 1. Try exact match first - O(1)
         if let Some(target) = self.exact_matches.get(key) {

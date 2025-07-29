@@ -579,7 +579,7 @@ fn validate_against_allowlist(
         if normalized_allowed.starts_with("*.") {
             let wildcard_domain = &normalized_allowed[2..];
             if normalized_host.ends_with(wildcard_domain) {
-                // Ensure it's a proper subdomain, not just suffix match
+                // Ensure it's a subdomain, not just suffix match
                 let prefix_len = normalized_host.len() - wildcard_domain.len();
                 if prefix_len > 0 && normalized_host.chars().nth(prefix_len - 1) == Some('.') {
                     return Ok(());
@@ -878,7 +878,7 @@ mod tests {
         };
 
         let _cors_layer = create_cors_layer(&cors_config);
-        // This test verifies that the CORS layer can be created without panicking
+        // Verify CORS layer creation
         assert!(true);
     }
 

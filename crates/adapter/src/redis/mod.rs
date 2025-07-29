@@ -1,6 +1,6 @@
 //! Redis adapter module
 //!
-//! This module provides Redis database adapter implementation using deadpool-redis
+//! Redis database adapter implementation using deadpool-redis
 //! for high-performance async operations and connection pooling.
 
 pub mod backend;
@@ -10,7 +10,7 @@ pub mod primitives;
 
 // Re-export key types
 pub use backend::RedisBackend;
-pub use client::RedisConnectionPool as RedisPool; // Alias for compatibility
+
 pub use client::RedisConnectionPool;
 
 use redis::{Connection, RedisError};

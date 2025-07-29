@@ -7,7 +7,7 @@ use crate::{
 };
 
 /// Backend trait that all database implementations must implement
-/// This provides a database-agnostic interface for all operations
+/// Database-agnostic interface for all operations
 #[async_trait]
 pub trait UniversalBackend: Send + Sync {
     /// Get the name of this backend
@@ -297,7 +297,7 @@ mod tests {
         for operation in operations {
             let json = serde_json::to_string(&operation).unwrap();
             let deserialized: DataOperationType = serde_json::from_str(&json).unwrap();
-            // Note: Can't directly compare due to no PartialEq, but serialization test is sufficient
+
             let _json2 = serde_json::to_string(&deserialized).unwrap();
         }
     }

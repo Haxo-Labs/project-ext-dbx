@@ -217,8 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_api_key_endpoint() {
-        // This test would require a proper test setup with Redis
-        // Implementation structure for API key rotation endpoint
+        // Test would require Redis setup
         let request = CreateApiKeyRequest {
             name: "Test API Key".to_string(),
             description: Some("Test description".to_string()),

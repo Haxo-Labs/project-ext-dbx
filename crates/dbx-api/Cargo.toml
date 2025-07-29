@@ -3,6 +3,9 @@ name = "dbx-api"
 version = "0.1.6"
 edition = "2021"
 
+[features]
+test-utils = []
+
 [[bin]]
 name = "dbx"
 path = "src/main.rs"

@@ -166,13 +166,6 @@ impl AppState {
         let redis_factory = dbx_adapter::redis::factory::RedisBackendFactory::new();
         registry_builder = registry_builder.with_factory("redis", redis_factory);
 
-        // Register mock backend factory for testing
-        #[cfg(test)]
-        {
-            let mock_factory = crate::test_utils::MockBackendFactory::new();
-            registry_builder = registry_builder.with_factory("mock", mock_factory);
-        }
-
         // Build the registry
         let registry = registry_builder.build();
 
@@ -238,13 +231,6 @@ impl AppState {
         // Register Redis backend factory
         let redis_factory = dbx_adapter::redis::factory::RedisBackendFactory::new();
         registry_builder = registry_builder.with_factory("redis", redis_factory);
-
-        // Register mock backend factory for testing
-        #[cfg(test)]
-        {
-            let mock_factory = crate::test_utils::MockBackendFactory::new();
-            registry_builder = registry_builder.with_factory("mock", mock_factory);
-        }
 
         // Build the registry
         let registry = registry_builder.build();
@@ -345,6 +331,189 @@ async fn health_check() -> axum::Json<ApiResponse<String>> {
     axum::Json(ApiResponse::success("Server is running".to_string()))
 }
 
+/// Middleware helper functions to eliminate duplication
+mod middleware_helpers {
+    use super::*;
+    use axum::Router;
+
+    /// Apply standard protected route middleware (rate limiting + RBAC auth)
+    pub fn apply_protected_middleware<S>(router: Router<S>, state: &AppState) -> Router<S>
+    where
+        S: Clone + Send + Sync + 'static,
+    {
+        router
+            .layer(axum::middleware::from_fn_with_state(
+                state.rate_limit_service.clone(),
+                rate_limit_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                (
+                    state.jwt_service.clone(),
+                    state.api_key_service.clone(),
+                    state.rbac_service.clone(),
+                ),
+                rbac_auth_middleware,
+            ))
+    }
+
+    /// Apply admin-only middleware (admin permissions + standard protected middleware)
+    pub fn apply_admin_middleware<S>(router: Router<S>, state: &AppState) -> Router<S>
+    where
+        S: Clone + Send + Sync + 'static,
+    {
+        router
+            .layer(axum::middleware::from_fn_with_state(
+                state.rbac_service.clone(),
+                admin_info_permission_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                (
+                    state.jwt_service.clone(),
+                    state.api_key_service.clone(),
+                    state.rbac_service.clone(),
+                ),
+                rbac_auth_middleware,
+            ))
+    }
+
+    /// Apply global security middleware stack
+    pub fn apply_global_security_middleware(
+        router: Router,
+        security_config: crate::config::SecurityConfig,
+        cors_layer: tower_http::cors::CorsLayer,
+    ) -> Router {
+        let security_config_validation = security_config.clone();
+        let security_config_headers = security_config;
+
+        router
+            // Global CORS layer (applied first to handle preflight requests)
+            .layer(cors_layer)
+            // Global security validation middleware (applied after CORS)
+            .layer(axum::middleware::from_fn(move |req, next| {
+                let config = security_config_validation.clone();
+                async move { security_validation_middleware(config, req, next).await }
+            }))
+            // Global security headers middleware
+            .layer(axum::middleware::from_fn(move |req, next| {
+                let config = security_config_headers.clone();
+                async move {
+                    if config.development_mode {
+                        development_security_middleware(config, req, next).await
+                    } else {
+                        security_headers_middleware(config, req, next)
+                            .await
+                            .into_response()
+                    }
+                }
+            }))
+    }
+}
+
+/// Router builder pattern for organized route configuration
+struct RouterBuilder {
+    state: AppState,
+    security_config: crate::config::SecurityConfig,
+    cors_layer: tower_http::cors::CorsLayer,
+}
+
+impl RouterBuilder {
+    /// Create a new router builder
+    fn new(
+        state: AppState,
+        security_config: crate::config::SecurityConfig,
+        cors_layer: tower_http::cors::CorsLayer,
+    ) -> Self {
+        Self {
+            state,
+            security_config,
+            cors_layer,
+        }
+    }
+
+    /// Build the complete application router
+    fn build(self) -> Router {
+        let router = Router::new()
+            .route("/health", get(health_check))
+            .merge(self.build_auth_routes())
+            .merge(self.build_protected_routes())
+            .merge(self.build_admin_routes());
+
+        // Apply global security middleware
+        middleware_helpers::apply_global_security_middleware(
+            router,
+            self.security_config,
+            self.cors_layer,
+        )
+    }
+
+    /// Build authentication routes (no middleware required)
+    fn build_auth_routes(&self) -> Router {
+        Router::new().nest(
+            "/api/v1/auth",
+            create_auth_routes(
+                self.state.jwt_service.clone(),
+                self.state.user_store.clone(),
+            ),
+        )
+    }
+
+    /// Build protected routes with standard middleware
+    fn build_protected_routes(&self) -> Router {
+        let api_key_routes = middleware_helpers::apply_protected_middleware(
+            create_api_key_routes(self.state.api_key_service.clone()),
+            &self.state,
+        );
+
+        let data_routes =
+            middleware_helpers::apply_protected_middleware(create_data_routes(), &self.state);
+
+        let query_routes =
+            middleware_helpers::apply_protected_middleware(create_query_routes(), &self.state);
+
+        let stream_routes =
+            middleware_helpers::apply_protected_middleware(create_stream_routes(), &self.state);
+
+        let role_routes = middleware_helpers::apply_protected_middleware(
+            create_role_routes(self.state.rbac_service.clone()),
+            &self.state,
+        );
+
+        let rate_limit_routes =
+            middleware_helpers::apply_protected_middleware(create_rate_limit_routes(), &self.state);
+
+        Router::new()
+            .nest("/api/v1/api-keys", api_key_routes)
+            .nest(
+                "/api/v1/data",
+                data_routes.with_state(self.state.backend_router.clone()),
+            )
+            .nest(
+                "/api/v1/query",
+                query_routes.with_state(self.state.backend_router.clone()),
+            )
+            .nest(
+                "/api/v1/stream",
+                stream_routes.with_state(self.state.backend_router.clone()),
+            )
+            .nest("/api/v1/roles", role_routes)
+            .nest(
+                "/api/v1/rate-limit",
+                rate_limit_routes.with_state(self.state.rate_limit_service.clone()),
+            )
+    }
+
+    /// Build admin routes with admin-only middleware
+    fn build_admin_routes(&self) -> Router {
+        let health_routes =
+            middleware_helpers::apply_admin_middleware(create_health_routes(), &self.state);
+
+        Router::new().nest(
+            "/api/v1/admin",
+            health_routes.with_state(self.state.backend_router.clone()),
+        )
+    }
+}
+
 /// Create the application router with BackendRouter
 pub async fn create_app(state: AppState) -> Result<Router, ServerError> {
     #[cfg(test)]
@@ -404,168 +573,10 @@ fn create_test_app_config() -> AppConfig {
 
 /// Create the application router with BackendRouter and optional config
 pub fn create_app_with_config(state: AppState, app_config: AppConfig) -> Router {
-    // Use the provided configuration for security settings
     let cors_layer = create_cors_layer(&app_config.security.cors);
     let security_config = app_config.security.clone();
-    let security_config_validation = security_config.clone();
-    let security_config_headers = security_config.clone();
 
-    // Create route groups with security middleware
-    let auth_routes = create_auth_routes(state.jwt_service.clone(), state.user_store.clone());
-
-    // Create API key management routes (rate limited + RBAC authentication required)
-    let api_key_routes = create_api_key_routes(state.api_key_service.clone())
-        .layer(axum::middleware::from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ));
-
-    // Create data operation routes (rate limited + RBAC authentication required)
-    let data_routes = create_data_routes()
-        .layer(axum::middleware::from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ));
-
-    // Create query routes (rate limited + RBAC authentication required)
-    let query_routes = create_query_routes()
-        .layer(axum::middleware::from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ));
-
-    // Create streaming routes (rate limited + RBAC authentication required)
-    let stream_routes = create_stream_routes()
-        .layer(axum::middleware::from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ));
-
-    // Create role management routes (rate limited + RBAC authentication required)
-    let role_routes = create_role_routes(state.rbac_service.clone())
-        .layer(axum::middleware::from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ));
-
-    // Create rate limit management routes (rate limited + RBAC authentication required)
-    let rate_limit_routes = create_rate_limit_routes()
-        .layer(axum::middleware::from_fn_with_state(
-            state.rate_limit_service.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ));
-
-    // Create health routes (admin permission required)
-    let health_routes = create_health_routes()
-        .layer(axum::middleware::from_fn_with_state(
-            (
-                state.jwt_service.clone(),
-                state.api_key_service.clone(),
-                state.rbac_service.clone(),
-            ),
-            rbac_auth_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            state.rbac_service.clone(),
-            admin_info_permission_middleware,
-        ));
-
-    // Configure global middleware stack
-    let app = Router::new()
-        .route("/health", get(health_check))
-        .nest("/api/v1/auth", auth_routes)
-        .nest("/api/v1/api-keys", api_key_routes)
-        .nest(
-            "/api/v1/data",
-            data_routes.with_state(state.backend_router.clone()),
-        )
-        .nest(
-            "/api/v1/query",
-            query_routes.with_state(state.backend_router.clone()),
-        )
-        .nest(
-            "/api/v1/stream",
-            stream_routes.with_state(state.backend_router.clone()),
-        )
-        .nest("/api/v1/roles", role_routes)
-        .nest(
-            "/api/v1/admin",
-            health_routes.with_state(state.backend_router.clone()),
-        )
-        .nest(
-            "/api/v1/rate-limit",
-            rate_limit_routes.with_state(state.rate_limit_service.clone()),
-        )
-        // Global CORS layer (applied first to handle preflight requests)
-        .layer(cors_layer.clone())
-        // Global security validation middleware (applied after CORS)
-        .layer(axum::middleware::from_fn(move |req, next| {
-            let config = security_config_validation.clone();
-            async move { security_validation_middleware(config, req, next).await }
-        }))
-        // Global security headers middleware
-        .layer(axum::middleware::from_fn(move |req, next| {
-            let config = security_config_headers.clone();
-            async move {
-                if config.development_mode {
-                    development_security_middleware(config, req, next).await
-                } else {
-                    security_headers_middleware(config, req, next)
-                        .await
-                        .into_response()
-                }
-            }
-        }));
-
-    app
+    RouterBuilder::new(state, security_config, cors_layer).build()
 }
 
 /// Start the server with BackendRouter (now the main/default server)
@@ -595,14 +606,6 @@ pub async fn run_server(config_path: Option<&str>) -> Result<(), ServerError> {
         .map_err(|e| ServerError::ServerRuntime(e.to_string()))?;
 
     Ok(())
-}
-
-/// Public run function for compatibility
-pub async fn run() -> Result<(), ConfigError> {
-    run_server(None).await.map_err(|e| match e {
-        ServerError::Configuration(config_err) => config_err,
-        _ => ConfigError::MissingEnvironmentVariable("SERVER_ERROR".to_string()),
-    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -658,33 +661,11 @@ mod tests {
         std::env::remove_var("DEFAULT_ADMIN_PASSWORD");
     }
 
-    /// Helper function to create test AppState for tests, handling user conflicts gracefully
+    /// Helper function to create AppState for tests with error handling
     async fn create_test_app_state() -> AppState {
-        let app_config = create_test_app_config();
-
-        let result = AppState::new_with_optional_app_config(None, Some(app_config.clone())).await;
-
-        match result {
-            Ok(state) => state,
-            Err(ServerError::UserStoreInitialization(msg)) if msg.contains("already exists") => {
-                // If user already exists from parallel tests, create without default admin
-                let mut modified_app_config = app_config;
-                modified_app_config.create_default_admin = false;
-
-                AppState::new_with_optional_app_config(None, Some(modified_app_config))
-                    .await
-                    .expect("Failed to create AppState without default admin")
-            }
-            Err(_) => {
-                // For any other error, try without default admin
-                let mut modified_app_config = app_config;
-                modified_app_config.create_default_admin = false;
-
-                AppState::new_with_optional_app_config(None, Some(modified_app_config))
-                    .await
-                    .expect("Failed to create AppState in test fallback")
-            }
-        }
+        crate::test_helpers::create_test_app_state()
+            .await
+            .expect("Failed to create test AppState")
     }
 
     #[tokio::test]
@@ -704,7 +685,7 @@ mod tests {
 
         let result = AppState::new(None).await;
         // Default admin creation might fail in some test environments (concurrent tests, permissions, etc.)
-        // The important thing is that the application handles the configuration correctly
+        // The important thing is that the application handles the configuration
         match result {
             Ok(_) => {
                 // Admin creation succeeded
@@ -914,7 +895,7 @@ mod tests {
     fn test_health_check_response() {
         let _response = health_check();
         // Async function compilation and return type validation
-        assert!(true); // This test ensures the function compiles
+        assert!(true); // Compilation test
     }
 
     #[tokio::test]

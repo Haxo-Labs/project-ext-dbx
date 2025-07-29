@@ -1,7 +1,7 @@
 //! # DBX Config
 //!
 //! Configuration management and validation for DBX.
-//! This crate provides functionality to load, validate, and manage database configurations.
+//! Load, validate, and manage database configurations.
 
 pub mod config;
 pub mod error;

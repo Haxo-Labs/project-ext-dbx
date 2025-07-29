@@ -375,7 +375,7 @@ impl BackendRouter {
                 // Batch operations - prefer backends with batch optimization
                 for backend_name in &capable_backends {
                     if let Some(backend) = self.registry.get_backend(backend_name).await {
-                        // Check if this backend supports efficient batching
+                        // Check if this backend supports batching
                         if backend_name.contains("batch") || backend_name.contains("bulk") {
                             debug!(backend = %backend_name, "Using batch backend");
                             return Ok(Some(backend));

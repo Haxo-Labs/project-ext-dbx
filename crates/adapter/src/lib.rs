@@ -1,6 +1,6 @@
 //! DBX Adapter library
 //!
-//! This library provides various adapters and utilities for database interactions.
+//! Database adapters and utilities for database interactions.
 
 pub mod error;
 pub mod redis;

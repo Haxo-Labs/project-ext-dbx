@@ -26,8 +26,8 @@ pub enum RbacError {
     InvalidRoleName(String),
     #[error("Role inheritance cycle detected")]
     InheritanceCycle,
-    #[error("Redis error: {0}")]
-    RedisError(String),
+    #[error("Backend error: {0}")]
+    BackendError(String),
     #[error("Serialization error: {0}")]
     SerializationError(String),
     #[error("Role already exists: {0}")]
@@ -140,6 +140,7 @@ impl RbacService {
         user_id: &str,
     ) -> Result<Permission, RbacError> {
         let assignments = self.get_user_role_assignments(user_id).await?;
+
         let mut effective_permissions = Permission::empty();
 
         let role_registry = match self.role_registry.read() {
@@ -151,7 +152,7 @@ impl RbacService {
             }
         };
 
-        for assignment in assignments {
+        for assignment in &assignments {
             if assignment.is_active {
                 // Check if assignment has expired
                 if let Some(expires_at) = assignment.expires_at {
@@ -167,7 +168,6 @@ impl RbacService {
                 }
             }
         }
-
         Ok(effective_permissions)
     }
 
@@ -244,7 +244,7 @@ impl RbacService {
 
         // Get existing assignment
         let mut assignment: UserRoleAssignment = self
-            .get_redis_value(&assignment_key)
+            .get_backend_value(&assignment_key)
             .await?
             .ok_or(RbacError::AssignmentNotFound)?;
 
@@ -252,12 +252,7 @@ impl RbacService {
         assignment.is_active = false;
 
         // Store updated assignment
-        self.set_redis_value(&assignment_key, &assignment).await?;
-
-        // Remove from user's active roles set
-        let user_roles_key = format!("rbac:user_roles:{}", user_id);
-        self.remove_from_redis_set(&user_roles_key, role_name)
-            .await?;
+        self.set_backend_value(&assignment_key, &assignment).await?;
 
         // Audit log the revocation
         if self.config.audit_enabled {
@@ -357,9 +352,9 @@ impl RbacService {
             role_registry.register_role(role.clone());
         }
 
-        // Store role in Redis
+        // Store role
         let role_key = format!("rbac:role:{}", name);
-        self.set_redis_value(&role_key, &role).await?;
+        self.set_backend_value(&role_key, &role).await?;
 
         // Audit log the creation
         if self.config.audit_enabled {
@@ -443,7 +438,7 @@ impl RbacService {
                 ttl: None,
             })
             .await
-            .map_err(|e| RbacError::RedisError(format!("Failed to store role in Redis: {}", e)))?;
+            .map_err(|e| RbacError::BackendError(format!("Failed to store role: {}", e)))?;
 
         // Update registry
         registry.register_role(updated_role.clone());
@@ -489,7 +484,7 @@ impl RbacService {
 
         // Remove from Redis
         let role_key = format!("rbac:role:{}", name);
-        self.delete_redis_key(&role_key).await?;
+        self.delete_backend_key(&role_key).await?;
 
         // Revoke role from all users (mark assignments as inactive)
         // Mark all existing role assignments as inactive to maintain audit trail
@@ -528,13 +523,13 @@ impl RbacService {
         &self,
         user_id: &str,
     ) -> Result<Vec<UserRoleAssignment>, RbacError> {
-        let user_roles_key = format!("rbac:user_roles:{}", user_id);
-        let role_names: Vec<String> = self.get_redis_set_members(&user_roles_key).await?;
+        // Query all assignments for this user using pattern matching
+        let pattern = format!("rbac:assignment:{}:*", user_id);
+        let assignment_keys = self.query_keys(&pattern).await?;
 
         let mut assignments = Vec::new();
-        for role_name in role_names {
-            let assignment_key = format!("rbac:assignment:{}:{}", user_id, role_name);
-            if let Some(assignment) = self.get_redis_value(&assignment_key).await? {
+        for key in assignment_keys {
+            if let Some(assignment) = self.get_backend_value(&key).await? {
                 assignments.push(assignment);
             }
         }
@@ -544,8 +539,20 @@ impl RbacService {
 
     /// Get users with specific role
     async fn get_users_with_role(&self, role_name: &str) -> Result<Vec<String>, RbacError> {
-        let role_users_key = format!("rbac:role_users:{}", role_name);
-        self.get_redis_set_members(&role_users_key).await
+        // Query all assignments for this role using pattern matching
+        let pattern = format!("rbac:assignment:*:{}", role_name);
+        let assignment_keys = self.query_keys(&pattern).await?;
+
+        let mut user_ids = Vec::new();
+        for key in assignment_keys {
+            if let Some(assignment) = self.get_backend_value::<UserRoleAssignment>(&key).await? {
+                if assignment.is_active {
+                    user_ids.push(assignment.user_id);
+                }
+            }
+        }
+
+        Ok(user_ids)
     }
 
     /// Store user role assignment
@@ -557,19 +564,9 @@ impl RbacService {
             "rbac:assignment:{}:{}",
             assignment.user_id, assignment.role_name
         );
-        let user_roles_key = format!("rbac:user_roles:{}", assignment.user_id);
-        let role_users_key = format!("rbac:role_users:{}", assignment.role_name);
 
-        // Store assignment
-        self.set_redis_value(&assignment_key, assignment).await?;
-
-        // Add to user's roles set
-        self.add_to_redis_set(&user_roles_key, &assignment.role_name)
-            .await?;
-
-        // Add to role's users set
-        self.add_to_redis_set(&role_users_key, &assignment.user_id)
-            .await?;
+        // Store assignment record
+        self.set_backend_value(&assignment_key, assignment).await?;
 
         Ok(())
     }
@@ -682,18 +679,14 @@ impl RbacService {
 
     /// Log audit event
     async fn log_audit_event(&self, entry: AuditLogEntry) -> Result<(), RbacError> {
+        if !self.config.audit_enabled {
+            return Ok(());
+        }
+
         let audit_key = format!("rbac:audit:{}", entry.id);
-        let audit_index_key = format!("rbac:audit_index:{}", entry.timestamp.format("%Y%m%d"));
 
         // Store audit entry
-        self.set_redis_value(&audit_key, &entry).await?;
-
-        // Add to daily index for efficient querying
-        self.add_to_redis_set(&audit_index_key, &entry.id).await?;
-
-        // Set TTL on daily index for automatic cleanup
-        let ttl_seconds = self.config.audit_retention_days as i64 * 24 * 60 * 60;
-        self.set_redis_ttl(&audit_index_key, ttl_seconds).await?;
+        self.set_backend_value(&audit_key, &entry).await?;
 
         Ok(())
     }
@@ -709,49 +702,42 @@ impl RbacService {
         let end_date = params.end_date.unwrap_or_else(|| Utc::now());
         let limit = params.limit.unwrap_or(100).min(1000); // Cap at 1000
 
+        // Query all audit entries using pattern matching
+        let pattern = "rbac:audit:*";
+        let audit_keys = self.query_keys(&pattern).await?;
+
         let mut entries = Vec::new();
-        let mut current_date = start_date.date_naive();
-        let end_date_naive = end_date.date_naive();
-
-        while current_date <= end_date_naive && entries.len() < limit as usize {
-            let audit_index_key = format!("rbac:audit_index:{}", current_date.format("%Y%m%d"));
-            let entry_ids: Vec<String> = self.get_redis_set_members(&audit_index_key).await?;
-
-            for entry_id in entry_ids {
-                if entries.len() >= limit as usize {
-                    break;
-                }
-
-                let audit_key = format!("rbac:audit:{}", entry_id);
-                if let Some(entry) = self.get_redis_value::<AuditLogEntry>(&audit_key).await? {
-                    // Apply filters
-                    if entry.timestamp >= start_date && entry.timestamp <= end_date {
-                        if let Some(ref user_filter) = params.user_id {
-                            if entry.user_id.as_ref() != Some(user_filter) {
-                                continue;
-                            }
-                        }
-
-                        if let Some(ref event_type_filter) = params.event_type {
-                            if std::mem::discriminant(&entry.event_type)
-                                != std::mem::discriminant(event_type_filter)
-                            {
-                                continue;
-                            }
-                        }
-
-                        if let Some(ref resource_filter) = params.resource {
-                            if !entry.resource.contains(resource_filter) {
-                                continue;
-                            }
-                        }
-
-                        entries.push(entry);
-                    }
-                }
+        for audit_key in audit_keys {
+            if entries.len() >= limit as usize {
+                break;
             }
 
-            current_date = current_date.succ_opt().unwrap_or(end_date_naive);
+            if let Some(entry) = self.get_backend_value::<AuditLogEntry>(&audit_key).await? {
+                // Apply filters
+                if entry.timestamp >= start_date && entry.timestamp <= end_date {
+                    if let Some(ref user_filter) = params.user_id {
+                        if entry.user_id.as_ref() != Some(user_filter) {
+                            continue;
+                        }
+                    }
+
+                    if let Some(ref event_type_filter) = params.event_type {
+                        if std::mem::discriminant(&entry.event_type)
+                            != std::mem::discriminant(event_type_filter)
+                        {
+                            continue;
+                        }
+                    }
+
+                    if let Some(ref resource_filter) = params.resource {
+                        if !entry.resource.contains(resource_filter) {
+                            continue;
+                        }
+                    }
+
+                    entries.push(entry);
+                }
+            }
         }
 
         // Sort by timestamp descending
@@ -768,8 +754,36 @@ impl RbacService {
         Ok(entries)
     }
 
-    // Redis helper methods
-    async fn get_redis_value<T>(&self, key: &str) -> Result<Option<T>, RbacError>
+    // Backend helper methods
+    async fn query_keys(&self, pattern: &str) -> Result<Vec<String>, RbacError> {
+        use dbx_core::{QueryFilter, QueryOperation};
+        use uuid::Uuid;
+
+        let operation = QueryOperation {
+            id: Uuid::new_v4(),
+            filter: QueryFilter::KeyPattern {
+                pattern: pattern.to_string(),
+            },
+            projection: None,
+            limit: None,
+            offset: None,
+            sort: None,
+        };
+
+        match self.backend.execute_query(operation).await {
+            Ok(result) => {
+                if result.success {
+                    let keys = result.results.into_iter().map(|item| item.key).collect();
+                    Ok(keys)
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            Err(e) => Err(RbacError::BackendError(e.to_string())),
+        }
+    }
+
+    async fn get_backend_value<T>(&self, key: &str) -> Result<Option<T>, RbacError>
     where
         T: for<'de> Deserialize<'de>,
     {
@@ -796,11 +810,11 @@ impl RbacService {
                     Ok(None)
                 }
             }
-            Err(e) => Err(RbacError::RedisError(e.to_string())),
+            Err(e) => Err(RbacError::BackendError(e.to_string())),
         }
     }
 
-    async fn set_redis_value<T>(&self, key: &str, value: &T) -> Result<(), RbacError>
+    async fn set_backend_value<T>(&self, key: &str, value: &T) -> Result<(), RbacError>
     where
         T: Serialize,
     {
@@ -816,12 +830,12 @@ impl RbacService {
                 ttl: None,
             })
             .await
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
+            .map_err(|e| RbacError::BackendError(e.to_string()))?;
 
         Ok(())
     }
 
-    async fn delete_redis_key(&self, key: &str) -> Result<(), RbacError> {
+    async fn delete_backend_key(&self, key: &str) -> Result<(), RbacError> {
         use dbx_core::DataOperation;
 
         self.backend
@@ -830,87 +844,8 @@ impl RbacService {
                 fields: None,
             })
             .await
-            .map_err(|e| RbacError::RedisError(e.to_string()))?;
+            .map_err(|e| RbacError::BackendError(e.to_string()))?;
 
-        Ok(())
-    }
-
-    async fn add_to_redis_set(&self, key: &str, member: &str) -> Result<(), RbacError> {
-        use dbx_core::{DataOperation, DataValue};
-
-        // Handle set operations using JSON array
-        let mut members = self.get_redis_set_members(key).await?;
-        if !members.contains(&member.to_string()) {
-            members.push(member.to_string());
-            let json = serde_json::to_string(&members)
-                .map_err(|e| RbacError::SerializationError(e.to_string()))?;
-
-            self.backend
-                .execute_data(DataOperation::Set {
-                    key: key.to_string(),
-                    value: DataValue::String(json),
-                    ttl: None,
-                })
-                .await
-                .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        }
-
-        Ok(())
-    }
-
-    async fn remove_from_redis_set(&self, key: &str, member: &str) -> Result<(), RbacError> {
-        use dbx_core::{DataOperation, DataValue};
-
-        let mut members = self.get_redis_set_members(key).await?;
-        if let Some(pos) = members.iter().position(|x| x == member) {
-            members.remove(pos);
-            let json = serde_json::to_string(&members)
-                .map_err(|e| RbacError::SerializationError(e.to_string()))?;
-
-            self.backend
-                .execute_data(DataOperation::Set {
-                    key: key.to_string(),
-                    value: DataValue::String(json),
-                    ttl: None,
-                })
-                .await
-                .map_err(|e| RbacError::RedisError(e.to_string()))?;
-        }
-
-        Ok(())
-    }
-
-    async fn get_redis_set_members(&self, key: &str) -> Result<Vec<String>, RbacError> {
-        use dbx_core::{DataOperation, DataValue};
-
-        match self
-            .backend
-            .execute_data(DataOperation::Get {
-                key: key.to_string(),
-                fields: None,
-            })
-            .await
-        {
-            Ok(result) => {
-                if result.success {
-                    if let Some(DataValue::String(json)) = result.data {
-                        serde_json::from_str(&json)
-                            .map_err(|e| RbacError::SerializationError(e.to_string()))
-                    } else {
-                        Ok(Vec::new())
-                    }
-                } else {
-                    Ok(Vec::new())
-                }
-            }
-            Err(e) => Err(RbacError::RedisError(e.to_string())),
-        }
-    }
-
-    async fn set_redis_ttl(&self, _key: &str, _ttl_seconds: i64) -> Result<(), RbacError> {
-        // TTL is now handled directly in the Set operation with the ttl parameter
-        // This method is kept for compatibility but doesn't need to do anything
-        // as TTL is set during the initial Set operation
         Ok(())
     }
 }
@@ -933,26 +868,7 @@ mod tests {
     }
 
     async fn create_test_redis_pool() -> Arc<dyn UniversalBackend> {
-        use crate::test_utils::MockBackendFactory;
-        use dbx_config::BackendConfig;
-        use dbx_router::registry::BackendFactory;
-
-        let config = BackendConfig {
-            provider: "mock".to_string(),
-            url: "mock://localhost:6379".to_string(),
-            pool_size: Some(1),
-            timeout_ms: Some(5000),
-            retry_attempts: Some(3),
-            retry_delay_ms: Some(1000),
-            capabilities: None,
-            additional_config: std::collections::HashMap::new(),
-        };
-
-        let factory = MockBackendFactory::new();
-        factory
-            .create_backend("test_backend", &config)
-            .await
-            .unwrap()
+        crate::test_helpers::create_mock_backend()
     }
 
     #[tokio::test]
