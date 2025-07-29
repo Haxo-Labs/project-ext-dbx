@@ -554,7 +554,7 @@ fn create_test_app_config() -> AppConfig {
             per_user_enabled: false,
             per_ip_enabled: false,
             endpoint_overrides: std::collections::HashMap::new(),
-            redis_key_prefix: "test".to_string(),
+            key_prefix: "test".to_string(),
             graceful_degradation: true,
         },
         security: crate::config::SecurityConfig::default(),
@@ -636,7 +636,7 @@ mod tests {
             "JWT_SECRET",
             "test-jwt-secret-that-is-at-least-32-characters-long-for-security",
         );
-        // Set up mock backend instead of Redis
+        // Set up mock backend for testing
         std::env::set_var("DBX_BACKEND_1_URL", "mock://localhost:6379");
         std::env::set_var("DBX_BACKEND_1_PROVIDER", "mock");
         std::env::set_var("DBX_BACKEND_1_NAME", "test_backend");
@@ -671,8 +671,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_app_state_success() {
         let _app_state = create_test_app_state().await;
-        // If we reach here, the app state was created successfully
-        assert!(true);
+        // App state creation test - compiles and succeeds
     }
 
     #[tokio::test]
@@ -894,8 +893,7 @@ mod tests {
     #[test]
     fn test_health_check_response() {
         let _response = health_check();
-        // Async function compilation and return type validation
-        assert!(true); // Compilation test
+        // Health check compilation test - compiles successfully
     }
 
     #[tokio::test]

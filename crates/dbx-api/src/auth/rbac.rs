@@ -429,7 +429,7 @@ impl RbacService {
             updated_role.permissions = role_permissions;
         }
 
-        // Store updated role in Redis
+        // Store updated role
         let _conn = self
             .backend
             .execute_data(dbx_core::DataOperation::Set {
@@ -482,7 +482,7 @@ impl RbacService {
                 .map_err(|e| RbacError::InvalidRoleName(e))?;
         }
 
-        // Remove from Redis
+        // Remove from storage
         let role_key = format!("rbac:role:{}", name);
         self.delete_backend_key(&role_key).await?;
 
@@ -867,7 +867,7 @@ mod tests {
         }
     }
 
-    async fn create_test_redis_pool() -> Arc<dyn UniversalBackend> {
+    async fn create_test_backend() -> Arc<dyn UniversalBackend> {
         crate::test_helpers::create_mock_backend()
     }
 
@@ -936,8 +936,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_inheritance_chain_cycle() {
-        let redis_pool = create_test_redis_pool().await;
-        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+        let backend = create_test_backend().await;
+        let rbac = RbacService::new(backend, create_test_rbac_config());
 
         // Set up roles in registry: A -> B
         {
@@ -972,8 +972,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_inheritance_chain_self_cycle() {
-        let redis_pool = create_test_redis_pool().await;
-        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+        let backend = create_test_backend().await;
+        let rbac = RbacService::new(backend, create_test_rbac_config());
 
         // Test self-inheritance: A -> A
         let result = rbac.validate_inheritance_chain("role_a", &["role_a".to_string()]);
@@ -987,8 +987,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_inheritance_chain_deep_cycle() {
-        let redis_pool = create_test_redis_pool().await;
-        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+        let backend = create_test_backend().await;
+        let rbac = RbacService::new(backend, create_test_rbac_config());
 
         // Set up deep chain: A -> B -> C -> D
         {
@@ -1039,10 +1039,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_inheritance_chain_depth_limit() {
-        let redis_pool = create_test_redis_pool().await;
+        let backend = create_test_backend().await;
         let mut config = create_test_rbac_config();
         config.max_role_inheritance_depth = 2; // Set low depth limit
-        let rbac = RbacService::new(redis_pool, config);
+        let rbac = RbacService::new(backend, config);
 
         // Set up chain that exceeds depth: A -> B -> C
         {
@@ -1085,8 +1085,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_inheritance_chain_multiple_parents() {
-        let redis_pool = create_test_redis_pool().await;
-        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+        let backend = create_test_backend().await;
+        let rbac = RbacService::new(backend, create_test_rbac_config());
 
         // Set up: A -> B, A -> C, C -> D
         {
@@ -1138,8 +1138,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_inheritance_chain_valid_cases() {
-        let redis_pool = create_test_redis_pool().await;
-        let rbac = RbacService::new(redis_pool, create_test_rbac_config());
+        let backend = create_test_backend().await;
+        let rbac = RbacService::new(backend, create_test_rbac_config());
 
         // Set up valid chain: A -> B -> C
         {

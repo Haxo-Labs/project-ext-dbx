@@ -878,8 +878,7 @@ mod tests {
         };
 
         let _cors_layer = create_cors_layer(&cors_config);
-        // Verify CORS layer creation
-        assert!(true);
+        // CORS layer creation test - compiles successfully
     }
 
     #[test]
@@ -911,7 +910,7 @@ mod tests {
         };
 
         let _cors_layer = create_cors_layer(&cors_config);
-        assert!(true);
+        // Wildcard CORS test - compiles successfully
     }
 
     #[test]

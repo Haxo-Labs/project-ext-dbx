@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_health_status_variants() {
-        let statuses = vec![
+        let statuses = [
             HealthStatus::Healthy,
             HealthStatus::Degraded,
             HealthStatus::Unhealthy,

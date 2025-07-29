@@ -345,7 +345,7 @@ pub trait UserStoreOperations {
 }
 
 /// Handle database errors and convert them to HTTP responses
-pub fn handle_redis_error(_error: impl std::fmt::Display) -> (StatusCode, Json<ApiResponse<()>>) {
+pub fn handle_backend_error(_error: impl std::fmt::Display) -> (StatusCode, Json<ApiResponse<()>>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiResponse::<()>::error(

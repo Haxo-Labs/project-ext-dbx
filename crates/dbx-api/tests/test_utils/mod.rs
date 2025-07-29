@@ -51,7 +51,6 @@ impl TestServer {
 
         Self::setup_test_env(&backend_url, port)?;
 
-
         // Create application state
         let app_state = Self::create_test_app_state(&backend_url).await?;
         let app = create_app(app_state)

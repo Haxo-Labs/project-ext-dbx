@@ -669,7 +669,7 @@ pub mod test_helpers {
                     per_user_enabled: false,
                     per_ip_enabled: false,
                     endpoint_overrides: std::collections::HashMap::new(),
-                    redis_key_prefix: "test".to_string(),
+                    key_prefix: "test".to_string(),
                     graceful_degradation: true,
                 },
                 security: crate::config::SecurityConfig::default(),

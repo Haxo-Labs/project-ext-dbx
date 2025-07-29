@@ -109,7 +109,7 @@ pub struct RateLimitConfig {
     pub per_user_enabled: bool,
     pub per_ip_enabled: bool,
     pub endpoint_overrides: HashMap<String, EndpointRateLimitConfig>,
-    pub redis_key_prefix: String,
+    pub key_prefix: String,
     pub graceful_degradation: bool,
 }
 
@@ -123,7 +123,7 @@ impl Default for RateLimitConfig {
             per_user_enabled: true,
             per_ip_enabled: true,
             endpoint_overrides: HashMap::new(),
-            redis_key_prefix: "dbx:rate_limit".to_string(),
+            key_prefix: "dbx:rate_limit".to_string(),
             graceful_degradation: true,
         }
     }
@@ -384,7 +384,7 @@ impl AppConfig {
                 per_user_enabled: rl.per_user,
                 per_ip_enabled: rl.per_ip,
                 endpoint_overrides: HashMap::new(),
-                redis_key_prefix: "dbx:rate_limit".to_string(),
+                key_prefix: "dbx:rate_limit".to_string(),
                 graceful_degradation: true,
             })
             .unwrap_or_default();

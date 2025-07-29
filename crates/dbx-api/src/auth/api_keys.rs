@@ -192,7 +192,7 @@ impl ApiKeyService {
             rate_limit_window_seconds: request.rate_limit_window_seconds,
         };
 
-        // Store in Redis
+        // Store in backend
         self.store_api_key(&api_key_obj).await?;
 
         Ok((api_key_obj, api_key))
@@ -208,7 +208,7 @@ impl ApiKeyService {
         // Hash the key to find it in storage
         let key_hash = Self::hash_api_key(key)?;
 
-        // Retrieve from Redis
+        // Retrieve from backend
         let api_key = self.get_api_key_by_hash(&key_hash).await?;
 
         // Check if key is active
@@ -993,15 +993,15 @@ mod tests {
             rate_limit_window_seconds: None,
         };
 
-        // Validation tests that don't require Redis
+        // Validation tests that don't require backend storage
         assert!(!request.name.is_empty());
         assert!(request.name.len() <= 100);
         assert_eq!(request.permission, ApiKeyPermission::ReadWrite);
     }
 
     #[tokio::test]
-    async fn test_validation_logic_without_redis() {
-        // Test validation logic that doesn't require Redis connection
+    async fn test_validation_logic_without_backend() {
+        // Test validation logic that doesn't require backend connection
 
         // Test key format validation
         let valid_key = "dbx_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

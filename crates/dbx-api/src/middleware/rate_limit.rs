@@ -1611,14 +1611,14 @@ mod tests {
         }
     }
 
-    async fn create_redis_pool() -> Arc<dyn UniversalBackend> {
+    async fn create_test_backend() -> Arc<dyn UniversalBackend> {
         crate::test_helpers::create_mock_backend()
     }
 
     #[tokio::test]
     async fn test_sliding_window_rate_limiter() {
-        let redis_pool = create_redis_pool().await;
-        let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
+        let backend = create_test_backend().await;
+        let limiter = SlidingWindowRateLimiter::new(backend.clone());
 
         let test_prefix = format!(
             "test_{}",
@@ -1632,7 +1632,7 @@ mod tests {
 
         // Clean up any existing keys using backend abstraction
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key.clone(),
                 fields: None,
@@ -1659,15 +1659,15 @@ mod tests {
         assert!(result.retry_after.is_some());
 
         // Cleanup
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete { key, fields: None })
             .await;
     }
 
     #[tokio::test]
     async fn test_rate_limit_reset() {
-        let redis_pool = create_redis_pool().await;
-        let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
+        let backend = create_test_backend().await;
+        let limiter = SlidingWindowRateLimiter::new(backend.clone());
 
         let test_prefix = format!(
             "test_reset_{}",
@@ -1685,7 +1685,7 @@ mod tests {
 
         // Clean up any existing keys
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key.clone(),
                 fields: None,
@@ -1717,7 +1717,7 @@ mod tests {
 
         // Cleanup
         let cleanup_key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: cleanup_key,
                 fields: None,
@@ -1727,8 +1727,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limit_service_global_policy() {
-        let redis_pool = create_redis_pool().await;
-        let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
+        let backend = create_test_backend().await;
+        let service = PolicyRateLimitService::new(backend.clone()); // Explicitly set to false
 
         service.set_global_policy(create_test_policy()).await;
 
@@ -1741,7 +1741,7 @@ mod tests {
 
         // Clean up any existing keys
         let key = format!("rate_limit:{}:{}", user_id, endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key.clone(),
                 fields: None,
@@ -1755,7 +1755,7 @@ mod tests {
 
         // Cleanup
         let cleanup_key = format!("rate_limit:{}:{}", user_id, endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: cleanup_key,
                 fields: None,
@@ -1765,8 +1765,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limit_service_endpoint_specific_policy() {
-        let redis_pool = create_redis_pool().await;
-        let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
+        let backend = create_test_backend().await;
+        let service = PolicyRateLimitService::new(backend.clone()); // Explicitly set to false
 
         service.set_global_policy(create_test_policy()).await;
 
@@ -1792,13 +1792,13 @@ mod tests {
         // Clean up any existing keys
         let key1 = format!("rate_limit:{}:{}", user_id, general_endpoint);
         let key2 = format!("rate_limit:{}:{}", user_id, special_endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key1.clone(),
                 fields: None,
             })
             .await;
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key2.clone(),
                 fields: None,
@@ -1822,13 +1822,13 @@ mod tests {
         assert_eq!(result.limit, 2);
 
         // Cleanup
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key1,
                 fields: None,
             })
             .await;
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key2,
                 fields: None,
@@ -1838,8 +1838,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_different_users_separate_limits() {
-        let redis_pool = create_redis_pool().await;
-        let service = PolicyRateLimitService::new(redis_pool.clone()); // Explicitly set to false
+        let backend = create_test_backend().await;
+        let service = PolicyRateLimitService::new(backend.clone()); // Explicitly set to false
 
         // Use unique test prefix to avoid conflicts with other tests
         let test_prefix = format!(
@@ -1861,13 +1861,13 @@ mod tests {
         // Clean up any existing keys for this test
         let key1 = format!("rate_limit:{}:{}", user1_id, endpoint);
         let key2 = format!("rate_limit:{}:{}", user2_id, endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key1.clone(),
                 fields: None,
             })
             .await;
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key2.clone(),
                 fields: None,
@@ -1902,13 +1902,13 @@ mod tests {
         assert_eq!(result.remaining, 2);
 
         // Cleanup
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key1,
                 fields: None,
             })
             .await;
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key2,
                 fields: None,
@@ -1918,8 +1918,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_rate_limit_info_without_incrementing() {
-        let redis_pool = create_redis_pool().await;
-        let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
+        let backend = create_test_backend().await;
+        let limiter = SlidingWindowRateLimiter::new(backend.clone());
 
         let policy = RateLimitPolicy {
             requests: 5,
@@ -1936,7 +1936,7 @@ mod tests {
 
         // Clean up any existing keys
         let key = format!("rate_limit:{}:{}", identifier, endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: key.clone(),
                 fields: None,
@@ -1978,7 +1978,7 @@ mod tests {
 
         // Cleanup
         let cleanup_key = format!("rate_limit:{}:{}", identifier, endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: cleanup_key,
                 fields: None,
@@ -1988,8 +1988,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_burst_allowance_behavior() {
-        let redis_pool = create_redis_pool().await;
-        let limiter = SlidingWindowRateLimiter::new(redis_pool.clone());
+        let backend = create_test_backend().await;
+        let limiter = SlidingWindowRateLimiter::new(backend.clone());
 
         let test_prefix = format!(
             "test_burst_{}",
@@ -2007,7 +2007,7 @@ mod tests {
 
         // Clean up any existing keys
         let key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete { key, fields: None })
             .await;
 
@@ -2032,7 +2032,7 @@ mod tests {
 
         // Cleanup
         let cleanup_key = format!("rate_limit:{}:{}", context.identifier, context.endpoint);
-        let _ = redis_pool
+        let _ = backend
             .execute_data(DataOperation::Delete {
                 key: cleanup_key,
                 fields: None,
@@ -2105,7 +2105,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bit_vector_rate_limiter() {
-        let backend = create_redis_pool().await;
+        let backend = create_test_backend().await;
         let limiter = BitVectorRateLimiter::new(backend);
 
         let policy = RateLimitPolicy {
@@ -2136,7 +2136,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bit_vector_memory_efficiency() {
-        let backend = create_redis_pool().await;
+        let backend = create_test_backend().await;
         let limiter = BitVectorRateLimiter::with_bucket_size(backend, 1); // 1-second buckets
 
         let policy = RateLimitPolicy {
@@ -2175,7 +2175,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limit_service() {
-        let backend = create_redis_pool().await;
+        let backend = create_test_backend().await;
 
         // Test sliding window implementation
         let service_sliding = RateLimitService::new(backend.clone(), false);
@@ -2194,7 +2194,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bit_vector_sliding_window_behavior() {
-        let backend = create_redis_pool().await;
+        let backend = create_test_backend().await;
         let limiter = BitVectorRateLimiter::with_bucket_size(backend, 1);
 
         let policy = RateLimitPolicy {
@@ -2228,7 +2228,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_efficiency_metrics() {
-        let backend = create_redis_pool().await;
+        let backend = create_test_backend().await;
         let service = RateLimitService::new(backend, true); // Enable bit vector
 
         // Make requests and check metrics structure

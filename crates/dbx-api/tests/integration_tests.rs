@@ -339,7 +339,7 @@ async fn test_health_endpoint() -> Result<()> {
     Ok(())
 }
 
-// Redis String Operations Tests
+// String Operations Tests
 
 #[tokio::test]
 #[serial_test::serial]

@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(DataValue::Null.to_string_lossy(), "null");
         assert_eq!(DataValue::Bool(true).to_string_lossy(), "true");
         assert_eq!(DataValue::Int(42).to_string_lossy(), "42");
-        assert_eq!(DataValue::Float(3.14).to_string_lossy(), "3.14");
+        assert_eq!(DataValue::Float(3.15).to_string_lossy(), "3.15");
         assert_eq!(
             DataValue::String("hello".to_string()).to_string_lossy(),
             "hello"
@@ -315,8 +315,8 @@ mod tests {
         let int_val = DataValue::Int(42);
         assert_eq!(int_val.as_int(), Some(42));
 
-        let float_val = DataValue::Float(3.14);
-        assert_eq!(float_val.as_float(), Some(3.14));
+        let float_val = DataValue::Float(3.15);
+        assert_eq!(float_val.as_float(), Some(3.15));
 
         let bool_val = DataValue::Bool(true);
         assert_eq!(bool_val.as_bool(), Some(true));
@@ -337,7 +337,7 @@ mod tests {
             DataValue::String("world".to_string())
         );
         assert_eq!(DataValue::from(42i64), DataValue::Int(42));
-        assert_eq!(DataValue::from(3.14f64), DataValue::Float(3.14));
+        assert_eq!(DataValue::from(3.15f64), DataValue::Float(3.15));
         assert_eq!(DataValue::from(true), DataValue::Bool(true));
         assert_eq!(
             DataValue::from(vec![1u8, 2u8, 3u8]),
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(DataValue::Null, DataValue::Null);
         assert_eq!(DataValue::Bool(true), DataValue::Bool(true));
         assert_eq!(DataValue::Int(42), DataValue::Int(42));
-        assert_eq!(DataValue::Float(3.14), DataValue::Float(3.14));
+        assert_eq!(DataValue::Float(3.15), DataValue::Float(3.15));
         assert_eq!(
             DataValue::String("test".to_string()),
             DataValue::String("test".to_string())
@@ -373,7 +373,7 @@ mod tests {
             DataValue::Null,
             DataValue::Bool(true),
             DataValue::Int(42),
-            DataValue::Float(3.14),
+            DataValue::Float(3.15),
             DataValue::String("test".to_string()),
             DataValue::Array(vec![
                 DataValue::Int(1),
