@@ -622,7 +622,6 @@ mod tests {
 #[cfg(test)]
 mod examples {
     use super::*;
-    
 
     #[test]
     #[ignore = "Demonstration only"]

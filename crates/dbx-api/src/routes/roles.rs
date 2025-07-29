@@ -145,7 +145,7 @@ pub async fn create_role(
     if let Err(_) = rbac_context
         .rbac_service
         .check_user_permission(
-            &rbac_context.username,
+            &rbac_context.user_id,
             crate::auth::permissions::PermissionType::RoleManage,
             rbac_context.clone(),
         )
@@ -220,7 +220,7 @@ pub async fn delete_role(
     if let Err(_) = rbac_context
         .rbac_service
         .check_user_permission(
-            &rbac_context.username,
+            &rbac_context.user_id,
             crate::auth::permissions::PermissionType::RoleManage,
             rbac_context.clone(),
         )

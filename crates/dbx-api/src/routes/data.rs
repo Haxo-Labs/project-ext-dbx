@@ -64,7 +64,7 @@ pub async fn get_data(
     if let Err(_) = rbac_context
         .rbac_service
         .check_user_permission(
-            &rbac_context.username,
+            &rbac_context.user_id,
             PermissionType::StringGet,
             rbac_context.clone(),
         )
@@ -126,7 +126,7 @@ pub async fn set_data(
     if let Err(_) = rbac_context
         .rbac_service
         .check_user_permission(
-            &rbac_context.username,
+            &rbac_context.user_id,
             PermissionType::StringSet,
             rbac_context.clone(),
         )
@@ -181,7 +181,7 @@ pub async fn update_data(
     if let Err(_) = rbac_context
         .rbac_service
         .check_user_permission(
-            &rbac_context.username,
+            &rbac_context.user_id,
             PermissionType::StringSet,
             rbac_context.clone(),
         )
@@ -239,7 +239,7 @@ pub async fn delete_data(
     if let Err(_) = rbac_context
         .rbac_service
         .check_user_permission(
-            &rbac_context.username,
+            &rbac_context.user_id,
             PermissionType::StringSet,
             rbac_context.clone(),
         )
@@ -290,7 +290,7 @@ pub async fn check_exists(
     if let Err(_) = rbac_context
         .rbac_service
         .check_user_permission(
-            &rbac_context.username,
+            &rbac_context.user_id,
             PermissionType::StringGet,
             rbac_context.clone(),
         )
@@ -341,7 +341,7 @@ pub async fn batch_operations(
     if let Err(_) = rbac_context
         .rbac_service
         .check_user_permission(
-            &rbac_context.username,
+            &rbac_context.user_id,
             PermissionType::StringSet,
             rbac_context.clone(),
         )

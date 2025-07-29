@@ -738,7 +738,7 @@ impl RedisSortedSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use redis::pipe;
     use std::sync::{Arc, Mutex};
 
@@ -897,7 +897,6 @@ mod tests {
 #[cfg(test)]
 mod examples {
     use super::*;
-    
 
     #[test]
     #[ignore = "Demonstration only"]

@@ -485,7 +485,6 @@ impl ServerStatus {
 
 #[cfg(test)]
 mod tests {
-    
 
     fn _get_redis_url() -> String {
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string())

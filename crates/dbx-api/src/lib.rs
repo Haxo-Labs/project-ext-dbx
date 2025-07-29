@@ -6,5 +6,3 @@ pub mod models;
 pub mod routes;
 pub mod server;
 
-#[cfg(test)]
-pub mod test_utils;
