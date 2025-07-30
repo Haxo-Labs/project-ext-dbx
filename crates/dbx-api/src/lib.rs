@@ -401,6 +401,15 @@ pub mod test_helpers {
                     let length = data.get(&key).map(|v| v.len() as i64).unwrap_or(0);
                     Ok(DataResult::success(operation_id, DataValue::Int(length)))
                 }
+                DataOperation::CompareAndSwap { key, expected_value, new_value, ttl: _ } => {
+                    let current_value = data.get(&key).cloned().unwrap_or_default();
+                    if current_value == expected_value || (current_value.is_empty() && expected_value.is_empty()) {
+                        data.insert(key, new_value);
+                        Ok(DataResult::success(operation_id, DataValue::Bool(true)))
+                    } else {
+                        Ok(DataResult::success(operation_id, DataValue::Bool(false)))
+                    }
+                }
                 DataOperation::Batch { operations } => {
                     // Execute batch operations directly on the data store without recursion
 
@@ -485,6 +494,15 @@ pub mod test_helpers {
                             DataOperation::Length { key } => {
                                 let length = data.get(&key).map(|v| v.len() as i64).unwrap_or(0);
                                 DataResult::success(op_id, DataValue::Int(length))
+                            }
+                            DataOperation::CompareAndSwap { key, expected_value, new_value, ttl: _ } => {
+                                let current_value = data.get(&key).cloned().unwrap_or_default();
+                                if current_value == expected_value || (current_value.is_empty() && expected_value.is_empty()) {
+                                    data.insert(key.clone(), new_value);
+                                    DataResult::success(op_id, DataValue::Bool(true))
+                                } else {
+                                    DataResult::success(op_id, DataValue::Bool(false))
+                                }
                             }
                             DataOperation::Batch { .. } => {
                                 // Prevent infinite nesting

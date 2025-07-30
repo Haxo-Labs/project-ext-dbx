@@ -90,9 +90,61 @@ impl BatchManager {
             .header("Authorization", auth_header)
             .json(&request_data);
 
-        let api_response: ApiResponse<DataResponseData> = self.execute_request(request).await?;
+        let api_response: ApiResponse<serde_json::Value> = self.execute_request(request).await?;
 
-        Ok(HttpUtils::convert_data_response(api_response))
+        // Handle batch-specific response format
+        if api_response.success {
+            if let Some(data) = api_response.data {
+                // Extract the batch results from the nested structure
+                let batch_data = if let Some(arr) = data.as_array() {
+                    if let Some(first) = arr.first() {
+                        if let Some(inner_data) = first.get("data") {
+                            if let Some(inner_arr) = inner_data.as_array() {
+                                serde_json::to_string(inner_arr).unwrap_or_default()
+                            } else {
+                                serde_json::to_string(inner_data).unwrap_or_default()
+                            }
+                        } else {
+                            serde_json::to_string(&data).unwrap_or_default()
+                        }
+                    } else {
+                        "[]".to_string()
+                    }
+                } else {
+                    serde_json::to_string(&data).unwrap_or_default()
+                };
+
+                Ok(DbxResponse {
+                    success: true,
+                    data: Some(batch_data),
+                    error: None,
+                    operation_id: None,
+                    execution_time_ms: Some(0),
+                    backend: None,
+                    metadata: None,
+                })
+            } else {
+                Ok(DbxResponse {
+                    success: true,
+                    data: Some("[]".to_string()),
+                    error: None,
+                    operation_id: None,
+                    execution_time_ms: Some(0),
+                    backend: None,
+                    metadata: None,
+                })
+            }
+        } else {
+            Ok(DbxResponse {
+                success: false,
+                data: None,
+                error: api_response.error,
+                operation_id: None,
+                execution_time_ms: Some(0),
+                backend: None,
+                metadata: None,
+            })
+        }
     }
 
     /// Execute multiple get operations

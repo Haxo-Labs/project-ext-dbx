@@ -301,6 +301,7 @@ impl BackendRouter {
             DataOperation::Decrement { key, .. } => Some(key),
             DataOperation::Append { key, .. } => Some(key),
             DataOperation::Length { key } => Some(key),
+            DataOperation::CompareAndSwap { key, .. } => Some(key),
             DataOperation::Batch { operations } => {
                 // Use the first operation's key for routing batch operations
                 operations
@@ -353,7 +354,7 @@ impl BackendRouter {
                     }
                 }
             }
-            Set { .. } | Update { .. } | Delete { .. } | SetTtl { .. } => {
+            Set { .. } | Update { .. } | Delete { .. } | SetTtl { .. } | CompareAndSwap { .. } => {
                 // Write operations - prefer primary/master backends
                 for backend_name in &capable_backends {
                     if let Some(backend) = self.registry.get_backend(backend_name).await {
@@ -448,6 +449,7 @@ impl BackendRouter {
             DataOperation::Decrement { .. } => "data:decrement".to_string(),
             DataOperation::Append { .. } => "data:append".to_string(),
             DataOperation::Length { .. } => "data:length".to_string(),
+            DataOperation::CompareAndSwap { .. } => "data:compare_and_swap".to_string(),
             DataOperation::Batch { .. } => "data:batch".to_string(),
         }
     }
@@ -471,6 +473,9 @@ impl BackendRouter {
             dbx_core::DataOperationType::Decrement => operation_type == "data:decrement",
             dbx_core::DataOperationType::Append => operation_type == "data:append",
             dbx_core::DataOperationType::Length => operation_type == "data:length",
+            dbx_core::DataOperationType::CompareAndSwap => {
+                operation_type == "data:compare_and_swap"
+            }
             dbx_core::DataOperationType::Batch => operation_type == "data:batch",
         })
     }

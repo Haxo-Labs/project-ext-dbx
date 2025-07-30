@@ -53,6 +53,14 @@ pub struct AppendRequest {
     pub value: String,
 }
 
+/// Request for compare and swap operation
+#[derive(Debug, Deserialize)]
+pub struct CompareAndSwapRequest {
+    pub expected_value: String,
+    pub new_value: String,
+    pub ttl: Option<u64>,
+}
+
 /// Request for batch operations
 #[derive(Debug, Deserialize)]
 pub struct BatchDataRequest {
@@ -686,6 +694,60 @@ pub async fn append_data(
     }
 }
 
+/// Compare and swap operation
+pub async fn compare_and_swap_data(
+    Path(key): Path<String>,
+    State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
+    Json(request): Json<CompareAndSwapRequest>,
+) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringSet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let operation = DataOperation::CompareAndSwap {
+        key: key.clone(),
+        expected_value: request.expected_value,
+        new_value: request.new_value,
+        ttl: request.ttl,
+    };
+
+    match router.route_data_operation(&operation).await {
+        Ok(backend) => match backend.execute_data(operation).await {
+            Ok(result) => {
+                let response = DataResponse {
+                    operation_id: result.operation_id.to_string(),
+                    success: result.success,
+                    data: result
+                        .data
+                        .map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null)),
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::success(response)))
+            }
+            Err(e) => Ok(Json(ApiResponse::error(format!(
+                "Failed to compare and swap key {}: {}",
+                key, e
+            )))),
+        },
+        Err(e) => Ok(Json(ApiResponse::error(format!(
+            "Failed to route operation for key {}: {}",
+            key, e
+        )))),
+    }
+}
+
 /// Get length of a value
 pub async fn length_data(
     Path(key): Path<String>,
@@ -908,6 +970,12 @@ pub fn create_data_routes() -> Router<Arc<BackendRouter>> {
             "/:key/length",
             MethodRouter::new()
                 .get(length_data)
+                .fallback(method_not_allowed),
+        )
+        .route(
+            "/:key/cas",
+            MethodRouter::new()
+                .put(compare_and_swap_data)
                 .fallback(method_not_allowed),
         )
         .route(

@@ -2169,8 +2169,6 @@ mod tests {
             stats.compression_ratio > 1.0,
             "Should provide compression ratio for timestamp storage"
         );
-
-        println!("Bit vector memory stats: {:?}", stats);
     }
 
     #[tokio::test]

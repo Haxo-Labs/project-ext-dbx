@@ -49,6 +49,7 @@ impl RedisBackend {
                 DataOperationType::Decrement,
                 DataOperationType::Append,
                 DataOperationType::Length,
+                DataOperationType::CompareAndSwap,
                 DataOperationType::Batch,
             ],
             query_capabilities: QueryCapabilities {
@@ -754,6 +755,100 @@ impl RedisBackend {
                             )
                         })?;
                     Ok(DataValue::Int(result))
+                }
+
+                DataOperation::CompareAndSwap {
+                    key,
+                    expected_value,
+                    new_value,
+                    ttl,
+                } => {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Failed to acquire lock: {}", e),
+                        )
+                    })?;
+
+                    // Use Redis transaction for atomic compare and swap
+                    let result: Option<String> = redis::cmd("GET")
+                        .arg(key)
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("CompareAndSwap GET failed: {}", e),
+                            )
+                        })?;
+
+                    if let Some(current_value) = result {
+                        if current_value == *expected_value {
+                            // Values match, perform the swap
+                            if let Some(ttl_seconds) = ttl {
+                                redis::cmd("SETEX")
+                                    .arg(key)
+                                    .arg(ttl_seconds)
+                                    .arg(&new_value)
+                                    .query_async::<_, ()>(&mut *conn)
+                                    .await
+                                    .map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("CompareAndSwap SETEX failed: {}", e),
+                                        )
+                                    })?;
+                            } else {
+                                redis::cmd("SET")
+                                    .arg(key)
+                                    .arg(&new_value)
+                                    .query_async::<_, ()>(&mut *conn)
+                                    .await
+                                    .map_err(|e| {
+                                        DbxError::backend(
+                                            self.backend_name.clone(),
+                                            format!("CompareAndSwap SET failed: {}", e),
+                                        )
+                                    })?;
+                            }
+                            Ok(DataValue::Bool(true))
+                        } else {
+                            // Values don't match, swap failed
+                            Ok(DataValue::Bool(false))
+                        }
+                    } else if expected_value.is_empty() {
+                        // Key doesn't exist and we expect empty/null, perform the set
+                        if let Some(ttl_seconds) = ttl {
+                            redis::cmd("SETEX")
+                                .arg(key)
+                                .arg(ttl_seconds)
+                                .arg(&new_value)
+                                .query_async::<_, ()>(&mut *conn)
+                                .await
+                                .map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("CompareAndSwap SETEX failed: {}", e),
+                                    )
+                                })?;
+                        } else {
+                            redis::cmd("SET")
+                                .arg(key)
+                                .arg(&new_value)
+                                .query_async::<_, ()>(&mut *conn)
+                                .await
+                                .map_err(|e| {
+                                    DbxError::backend(
+                                        self.backend_name.clone(),
+                                        format!("CompareAndSwap SET failed: {}", e),
+                                    )
+                                })?;
+                        }
+                        Ok(DataValue::Bool(true))
+                    } else {
+                        // Key doesn't exist but we expect a value, swap failed
+                        Ok(DataValue::Bool(false))
+                    }
                 }
 
                 DataOperation::Batch { operations } => {
