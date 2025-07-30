@@ -169,7 +169,7 @@ impl TestServer {
                 ))
             })?;
 
-        // Create services using the same pattern as production
+        // Create services using the standard configuration pattern
         let user_store =
             std::sync::Arc::new(dbx_api::middleware::UserStore::new(auth_backend.clone()));
 
@@ -189,7 +189,7 @@ impl TestServer {
         let rate_limit_service =
             dbx_api::middleware::PolicyRateLimitService::new(auth_backend.clone());
 
-        // Initialize global rate limit policy if enabled (same as production)
+        // Initialize global rate limit policy if enabled
         if app_config.rate_limit.enabled {
             let global_policy = dbx_api::models::RateLimitPolicy {
                 requests: app_config.rate_limit.global_requests_per_window,

@@ -20,7 +20,7 @@ impl HttpUtils {
             .await
     }
 
-    /// Execute HTTP request with retry logic and structured logging
+    /// Execute HTTP request with retry logic and optional logging
     pub async fn execute_with_retry_and_logging<T: for<'de> Deserialize<'de>>(
         request_builder: reqwest::RequestBuilder,
         max_retries: u32,
@@ -30,15 +30,12 @@ impl HttpUtils {
         let mut last_error = None;
 
         if enable_logging {
-            eprintln!(
-                "[DBX] Starting request with {} retries, {}ms delay",
-                max_retries, retry_delay_ms
-            );
+            // Starting request with retries
         }
 
         for attempt in 0..=max_retries {
             if enable_logging {
-                eprintln!("[DBX] Attempt {}/{}", attempt + 1, max_retries + 1);
+                // Attempt logging
             }
 
             let request = request_builder.try_clone().ok_or_else(|| {
@@ -51,27 +48,21 @@ impl HttpUtils {
                     let url = response.url().to_string();
 
                     if enable_logging {
-                        eprintln!("[DBX] Response: {} {}", status, url);
-                        if let Some(content_type) = response.headers().get("content-type") {
-                            eprintln!("[DBX] Content-Type: {:?}", content_type);
-                        }
-                        if let Some(content_length) = response.headers().get("content-length") {
-                            eprintln!("[DBX] Content-Length: {:?}", content_length);
-                        }
+                        // Response details would be logged here
                     }
 
                     if status.is_success() {
                         match response.json::<T>().await {
                             Ok(data) => {
                                 if enable_logging {
-                                    eprintln!("[DBX] Successfully parsed JSON response");
+                                    // Success logging
                                 }
                                 return Ok(data);
                             }
                             Err(e) => {
                                 let error_msg = format!("JSON parsing failed: {}", e);
                                 if enable_logging {
-                                    eprintln!("[DBX] {}", error_msg);
+                                    // Error logging
                                 }
                                 if attempt == max_retries {
                                     return Err(DbxError::serialization(error_msg));
@@ -80,9 +71,9 @@ impl HttpUtils {
                             }
                         }
                     } else {
-                        let error_msg = format!("HTTP error: {} {}", status, url);
+                        let _error_msg = format!("HTTP error: {} {}", status, url);
                         if enable_logging {
-                            eprintln!("[DBX] {}", error_msg);
+                            // Error logging
                         }
                         if attempt == max_retries {
                             let body = response.text().await.ok();
@@ -92,9 +83,9 @@ impl HttpUtils {
                     }
                 }
                 Err(e) => {
-                    let error_msg = format!("Request failed: {}", e);
+                    let _error_msg = format!("Request failed: {}", e);
                     if enable_logging {
-                        eprintln!("[DBX] {}", error_msg);
+                        // Error logging
                     }
                     if attempt == max_retries {
                         return Err(DbxError::from(e));
@@ -105,7 +96,7 @@ impl HttpUtils {
 
             if attempt < max_retries {
                 if enable_logging {
-                    eprintln!("[DBX] Retrying in {}ms...", retry_delay_ms);
+                    // Retry logging
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms as u64)).await;
             }
@@ -114,22 +105,9 @@ impl HttpUtils {
         Err(last_error.unwrap_or_else(|| DbxError::unknown("Maximum retries exceeded".to_string())))
     }
 
-    /// Build authorization header from token or API key
-    pub fn build_auth_header(
-        token: Option<&str>,
-        api_key: Option<&str>,
-    ) -> Result<String, DbxError> {
-        if let Some(api_key) = api_key {
-            return Ok(format!("Bearer {}", api_key));
-        }
-
-        if let Some(token) = token {
-            return Ok(format!("Bearer {}", token));
-        }
-
-        Err(DbxError::authentication(
-            "Not authenticated. Call authenticate() first or provide API key.".to_string(),
-        ))
+    /// Build authorization header
+    pub fn build_auth_header(token: &str) -> String {
+        format!("Bearer {}", token)
     }
 
     /// Convert API response to DbxResponse
@@ -141,7 +119,11 @@ impl HttpUtils {
                 other => Some(serde_json::to_string(other).unwrap_or_default()),
             })
         });
-        let operation_id = api_response.data.as_ref().map(|d| d.operation_id.clone());
+
+        let operation_id = api_response
+            .data
+            .as_ref()
+            .and_then(|d| Some(d.operation_id.clone()));
         let execution_time_ms = api_response
             .data
             .as_ref()
@@ -172,7 +154,7 @@ impl HttpUtils {
                     .into_iter()
                     .map(|item| crate::types::DbxQueryResult {
                         key: item.key,
-                        data: serde_json::to_string(&item.data).unwrap_or_default(),
+                        data: item.data.to_string(),
                         score: item.score,
                     })
                     .collect(),
@@ -188,7 +170,9 @@ impl HttpUtils {
                 total_count: None,
                 execution_time_ms: None,
                 backend: None,
-                error: api_response.error,
+                error: api_response
+                    .error
+                    .or(Some("No data in response".to_string())),
             },
         }
     }
@@ -199,10 +183,10 @@ impl HttpUtils {
             success: api_response.success,
             data: api_response
                 .data
-                .map(|d| serde_json::to_string(&d).unwrap_or_default()),
+                .and_then(|v| serde_json::to_string(&v).ok()),
             error: api_response.error,
             operation_id: None,
-            execution_time_ms: None,
+            execution_time_ms: Some(0),
             backend: None,
             metadata: None,
         }
@@ -213,23 +197,17 @@ impl HttpUtils {
 pub struct ConfigUtils;
 
 impl ConfigUtils {
-    /// Validate client configuration
+    /// Validate configuration
     pub fn validate_config(config: &crate::types::DbxConfig) -> Result<(), DbxError> {
-        if config.base_url.is_empty() {
-            return Err(DbxError::invalid_config(
-                "base_url cannot be empty".to_string(),
-            ));
-        }
-
         if !config.base_url.starts_with("http://") && !config.base_url.starts_with("https://") {
-            return Err(DbxError::invalid_config(
+            return Err(DbxError::validation(
                 "base_url must start with http:// or https://".to_string(),
             ));
         }
 
         if let Some(timeout) = config.timeout_ms {
             if timeout == 0 {
-                return Err(DbxError::invalid_config(
+                return Err(DbxError::validation(
                     "timeout_ms must be greater than 0".to_string(),
                 ));
             }
@@ -237,7 +215,7 @@ impl ConfigUtils {
 
         if let Some(retries) = config.max_retries {
             if retries > 10 {
-                return Err(DbxError::invalid_config(
+                return Err(DbxError::validation(
                     "max_retries should not exceed 10".to_string(),
                 ));
             }
@@ -245,7 +223,7 @@ impl ConfigUtils {
 
         if let Some(pool_size) = config.pool_size {
             if pool_size == 0 || pool_size > 100 {
-                return Err(DbxError::invalid_config(
+                return Err(DbxError::validation(
                     "pool_size must be between 1 and 100".to_string(),
                 ));
             }
@@ -262,32 +240,33 @@ impl ConfigUtils {
         Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(pool_size as usize)
-            .pool_idle_timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| DbxError::invalid_config(format!("Failed to create HTTP client: {}", e)))
+            .map_err(|e| DbxError::network(format!("Failed to create HTTP client: {}", e)))
     }
 }
 
-/// JSON utilities for serialization/deserialization
+/// JSON parsing utilities
 pub struct JsonUtils;
 
 impl JsonUtils {
-    /// Parse JSON string to serde_json::Value
+    /// Parse JSON value from string
     pub fn parse_json_value(json_str: &str) -> Result<serde_json::Value, DbxError> {
-        serde_json::from_str(json_str).map_err(DbxError::from)
+        serde_json::from_str(json_str)
+            .map_err(|e| DbxError::serialization(format!("JSON parsing failed: {}", e)))
     }
 
-    /// Convert string to JSON value, fallback to string if invalid JSON
-    pub fn string_to_json_value(value: &str) -> serde_json::Value {
-        serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.to_string()))
+    /// Convert string to JSON value
+    pub fn string_to_json_value(s: String) -> serde_json::Value {
+        serde_json::Value::String(s)
     }
 
-    /// Serialize value to JSON string
+    /// Serialize value to string
     pub fn serialize_to_string<T: serde::Serialize>(value: &T) -> Result<String, DbxError> {
-        serde_json::to_string(value).map_err(DbxError::from)
+        serde_json::to_string(value)
+            .map_err(|e| DbxError::serialization(format!("Serialization failed: {}", e)))
     }
 
-    /// Parse JSON fields for hash operations
+    /// Parse fields JSON
     pub fn parse_fields_json(
         fields_json: &str,
     ) -> Result<std::collections::HashMap<String, serde_json::Value>, DbxError> {
@@ -296,7 +275,7 @@ impl JsonUtils {
     }
 }
 
-/// URL utilities for building API endpoints
+/// URL building utilities
 pub struct UrlUtils;
 
 impl UrlUtils {
@@ -305,24 +284,14 @@ impl UrlUtils {
         format!("{}/api/v1/data/{}", base_url, key)
     }
 
-    /// Build data exists endpoint URL
-    pub fn data_exists_endpoint(base_url: &str, key: &str) -> String {
-        format!("{}/api/v1/data/{}/exists", base_url, key)
-    }
-
     /// Build batch endpoint URL
     pub fn batch_endpoint(base_url: &str) -> String {
         format!("{}/api/v1/data/batch", base_url)
     }
 
-    /// Build query pattern endpoint URL
-    pub fn query_pattern_endpoint(base_url: &str) -> String {
-        format!("{}/api/v1/query/pattern", base_url)
-    }
-
-    /// Build query text endpoint URL
-    pub fn query_text_endpoint(base_url: &str) -> String {
-        format!("{}/api/v1/query/text", base_url)
+    /// Build health endpoint URL
+    pub fn health_endpoint(base_url: &str) -> String {
+        format!("{}/health", base_url)
     }
 
     /// Build auth login endpoint URL
@@ -345,48 +314,13 @@ impl UrlUtils {
         format!("{}/api/v1/auth/validate", base_url)
     }
 
-    /// Build API keys endpoint URL
-    pub fn api_keys_endpoint(base_url: &str) -> String {
-        format!("{}/api/v1/api-keys", base_url)
+    /// Build query pattern endpoint URL
+    pub fn query_pattern_endpoint(base_url: &str) -> String {
+        format!("{}/api/v1/query/pattern", base_url)
     }
 
-    /// Build API key by ID endpoint URL
-    pub fn api_key_by_id_endpoint(base_url: &str, key_id: &str) -> String {
-        format!("{}/api/v1/api-keys/{}", base_url, key_id)
-    }
-
-    /// Build roles endpoint URL
-    pub fn roles_endpoint(base_url: &str) -> String {
-        format!("{}/api/v1/roles", base_url)
-    }
-
-    /// Build role assign endpoint URL
-    pub fn role_assign_endpoint(base_url: &str) -> String {
-        format!("{}/api/v1/roles/assign", base_url)
-    }
-
-    /// Build rate limit policies endpoint URL
-    pub fn rate_limit_policies_endpoint(base_url: &str) -> String {
-        format!("{}/api/v1/rate-limit/policies", base_url)
-    }
-
-    /// Build rate limit status endpoint URL
-    pub fn rate_limit_status_endpoint(base_url: &str, identifier: &str) -> String {
-        format!("{}/api/v1/rate-limit/status/{}", base_url, identifier)
-    }
-
-    /// Build admin system endpoint URL
-    pub fn admin_system_endpoint(base_url: &str) -> String {
-        format!("{}/api/v1/admin/system", base_url)
-    }
-
-    /// Build admin metrics endpoint URL
-    pub fn admin_metrics_endpoint(base_url: &str) -> String {
-        format!("{}/api/v1/admin/metrics", base_url)
-    }
-
-    /// Build health endpoint URL
-    pub fn health_endpoint(base_url: &str) -> String {
-        format!("{}/health", base_url)
+    /// Build query text endpoint URL
+    pub fn query_text_endpoint(base_url: &str) -> String {
+        format!("{}/api/v1/query/text", base_url)
     }
 }

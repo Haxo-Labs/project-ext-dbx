@@ -1,9 +1,10 @@
-use axum::{extract::State, http::StatusCode, response::Json, routing::post, Router};
+use axum::{extract::State, http::StatusCode, response::Json, routing::post, Extension, Router};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::models::ApiResponse;
+use crate::auth::permissions::PermissionType;
+use crate::models::{ApiResponse, RbacContext};
 use dbx_core::{DataValue, QueryFilter, QueryOperation, SortField};
 use dbx_router::BackendRouter;
 
@@ -57,8 +58,22 @@ pub fn create_query_routes() -> Router<Arc<BackendRouter>> {
 
 async fn execute_query(
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<ExecuteQueryRequest>,
 ) -> Result<Json<ApiResponse<QueryResponse>>, StatusCode> {
+    // Check QueryExecute permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::QueryExecute,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let operation = QueryOperation {
         id: uuid::Uuid::new_v4(),
         filter: request.filter,
@@ -103,8 +118,22 @@ async fn execute_query(
 
 async fn pattern_search(
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<PatternSearchRequest>,
 ) -> Result<Json<ApiResponse<QueryResponse>>, StatusCode> {
+    // Check QueryExecute permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::QueryExecute,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let operation = QueryOperation {
         id: uuid::Uuid::new_v4(),
         filter: QueryFilter::KeyPattern {
@@ -151,8 +180,22 @@ async fn pattern_search(
 
 async fn text_search(
     State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
     Json(request): Json<TextSearchRequest>,
 ) -> Result<Json<ApiResponse<QueryResponse>>, StatusCode> {
+    // Check QueryExecute permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::QueryExecute,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let operation = QueryOperation {
         id: uuid::Uuid::new_v4(),
         filter: QueryFilter::TextSearch {

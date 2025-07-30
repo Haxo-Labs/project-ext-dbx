@@ -1,8 +1,7 @@
 use crate::auth::AuthManager;
 use crate::error::DbxError;
 use crate::types::{
-    ApiResponse, BatchOperation, BatchOperationRequest, DataResponseData, DbxBatchOperation,
-    DbxResponse,
+    ApiResponse, BatchOperation, BatchOperationRequest, DbxBatchOperation, DbxResponse,
 };
 use crate::utils::{HttpUtils, JsonUtils, UrlUtils};
 use reqwest::Client;
@@ -92,31 +91,15 @@ impl BatchManager {
 
         let api_response: ApiResponse<serde_json::Value> = self.execute_request(request).await?;
 
-        // Handle batch-specific response format
         if api_response.success {
             if let Some(data) = api_response.data {
-                // Extract the batch results from the nested structure
-                let batch_data = if let Some(arr) = data.as_array() {
-                    if let Some(first) = arr.first() {
-                        if let Some(inner_data) = first.get("data") {
-                            if let Some(inner_arr) = inner_data.as_array() {
-                                serde_json::to_string(inner_arr).unwrap_or_default()
-                            } else {
-                                serde_json::to_string(inner_data).unwrap_or_default()
-                            }
-                        } else {
-                            serde_json::to_string(&data).unwrap_or_default()
-                        }
-                    } else {
-                        "[]".to_string()
-                    }
-                } else {
-                    serde_json::to_string(&data).unwrap_or_default()
-                };
+                // The batch API returns: {"success": true, "data": [...operation results...]}
+                // Each operation result has: {"operation_id": "...", "success": bool, "data": [...], ...}
+                let batch_results = Some(serde_json::to_string(&data).unwrap_or("[]".to_string()));
 
                 Ok(DbxResponse {
                     success: true,
-                    data: Some(batch_data),
+                    data: batch_results,
                     error: None,
                     operation_id: None,
                     execution_time_ms: Some(0),
@@ -250,7 +233,7 @@ impl BatchManager {
     /// Convert DbxBatchOperation to internal BatchOperation
     fn convert_batch_operation(&self, op: DbxBatchOperation) -> Result<BatchOperation, DbxError> {
         let value = if let Some(v) = op.value {
-            Some(JsonUtils::string_to_json_value(&v))
+            Some(JsonUtils::string_to_json_value(v.clone()))
         } else {
             None
         };

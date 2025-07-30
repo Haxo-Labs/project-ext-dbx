@@ -323,7 +323,7 @@ impl LoadBalancer {
             return Ok(None);
         }
 
-        // Direct linear scan approach for reliable production operation
+        // Direct linear scan approach for reliable operation
         let mut min_connections = usize::MAX;
         let mut selected_backend = None;
 

@@ -135,7 +135,7 @@ pub mod test_helpers {
                 return true;
             }
 
-            // For now, just implement prefix matching for patterns ending with *
+            // Implement prefix matching for patterns ending with *
             if pattern.ends_with('*') {
                 let prefix = &pattern[..pattern.len() - 1];
                 return text.starts_with(prefix);
@@ -401,9 +401,16 @@ pub mod test_helpers {
                     let length = data.get(&key).map(|v| v.len() as i64).unwrap_or(0);
                     Ok(DataResult::success(operation_id, DataValue::Int(length)))
                 }
-                DataOperation::CompareAndSwap { key, expected_value, new_value, ttl: _ } => {
+                DataOperation::CompareAndSwap {
+                    key,
+                    expected_value,
+                    new_value,
+                    ttl: _,
+                } => {
                     let current_value = data.get(&key).cloned().unwrap_or_default();
-                    if current_value == expected_value || (current_value.is_empty() && expected_value.is_empty()) {
+                    if current_value == expected_value
+                        || (current_value.is_empty() && expected_value.is_empty())
+                    {
                         data.insert(key, new_value);
                         Ok(DataResult::success(operation_id, DataValue::Bool(true)))
                     } else {
@@ -495,9 +502,16 @@ pub mod test_helpers {
                                 let length = data.get(&key).map(|v| v.len() as i64).unwrap_or(0);
                                 DataResult::success(op_id, DataValue::Int(length))
                             }
-                            DataOperation::CompareAndSwap { key, expected_value, new_value, ttl: _ } => {
+                            DataOperation::CompareAndSwap {
+                                key,
+                                expected_value,
+                                new_value,
+                                ttl: _,
+                            } => {
                                 let current_value = data.get(&key).cloned().unwrap_or_default();
-                                if current_value == expected_value || (current_value.is_empty() && expected_value.is_empty()) {
+                                if current_value == expected_value
+                                    || (current_value.is_empty() && expected_value.is_empty())
+                                {
                                     data.insert(key.clone(), new_value);
                                     DataResult::success(op_id, DataValue::Bool(true))
                                 } else {
@@ -542,6 +556,27 @@ pub mod test_helpers {
                                     score: None,
                                 });
                             }
+                        }
+                    }
+
+                    Ok(QueryResult::success(operation.id, results))
+                }
+                dbx_core::QueryFilter::TextSearch { query, fields: _ } => {
+                    let data = self.data.read().await;
+                    let mut results = Vec::new();
+
+                    // Simple text search - look for query string in keys and values
+                    for (key, value) in data.iter() {
+                        let query_lower = query.to_lowercase();
+                        let key_matches = key.to_lowercase().contains(&query_lower);
+                        let value_matches = value.to_lowercase().contains(&query_lower);
+
+                        if key_matches || value_matches {
+                            results.push(dbx_core::QueryResultItem {
+                                key: key.clone(),
+                                data: DataValue::String(value.clone()),
+                                score: Some(if key_matches { 1.0 } else { 0.5 }),
+                            });
                         }
                     }
 

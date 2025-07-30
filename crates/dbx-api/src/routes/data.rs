@@ -435,7 +435,7 @@ pub async fn get_ttl(
                 Ok(Json(ApiResponse::success(response)))
             }
             Err(e) => {
-                let response = DataResponse {
+                let _response = DataResponse {
                     operation_id: Uuid::new_v4().to_string(),
                     success: false,
                     data: None,
@@ -497,7 +497,7 @@ pub async fn set_ttl(
                 Ok(Json(ApiResponse::success(response)))
             }
             Err(e) => {
-                let response = DataResponse {
+                let _response = DataResponse {
                     operation_id: Uuid::new_v4().to_string(),
                     success: false,
                     data: None,
@@ -559,7 +559,7 @@ pub async fn increment_data(
                 Ok(Json(ApiResponse::success(response)))
             }
             Err(e) => {
-                let response = DataResponse {
+                let _response = DataResponse {
                     operation_id: Uuid::new_v4().to_string(),
                     success: false,
                     data: None,
@@ -621,7 +621,7 @@ pub async fn decrement_data(
                 Ok(Json(ApiResponse::success(response)))
             }
             Err(e) => {
-                let response = DataResponse {
+                let _response = DataResponse {
                     operation_id: Uuid::new_v4().to_string(),
                     success: false,
                     data: None,

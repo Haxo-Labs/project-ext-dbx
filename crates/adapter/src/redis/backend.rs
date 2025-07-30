@@ -56,7 +56,7 @@ impl RedisBackend {
                 key_patterns: true,
                 field_filters: false,
                 range_queries: false,
-                text_search: false,
+                text_search: true,
                 logical_operations: false,
                 sorting: false,
                 pagination: true,
@@ -952,6 +952,134 @@ impl UniversalBackend for RedisBackend {
                         data: data_value,
                         score: None,
                     });
+                }
+
+                let execution_time = start_time.elapsed().as_millis() as u64;
+                let metadata = ResultMetadata::new(self.backend_name.clone(), execution_time);
+
+                let result_count = results.len();
+                let mut query_result =
+                    QueryResult::success_with_count(operation.id, results, result_count);
+                query_result.metadata = Some(metadata);
+                Ok(query_result)
+            }
+            dbx_core::QueryFilter::TextSearch { query, fields: _ } => {
+                // Use SCAN with COUNT to limit iterations and prevent hanging
+                let mut conn = self.pool.acquire_connection().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                let mut results = Vec::new();
+                let query_lower = query.to_lowercase();
+                let mut cursor = 0u64;
+                let max_iterations = 10; // Limit iterations to prevent hanging
+                let mut iteration_count = 0;
+
+                loop {
+                    if iteration_count >= max_iterations {
+                        break;
+                    }
+
+                    let scan_result: (u64, Vec<String>) = redis::cmd("SCAN")
+                        .arg(cursor)
+                        .arg("COUNT")
+                        .arg(100) // Scan 100 keys at a time
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Key scan failed: {}", e),
+                            )
+                        })?;
+
+                    cursor = scan_result.0;
+                    let keys = scan_result.1;
+
+                    for key in keys {
+                        // Check if key matches
+                        let key_matches = key.to_lowercase().contains(&query_lower);
+
+                        // Get key type and value in one check for string keys
+                        let (key_type, value) = if key_matches {
+                            // Key matches, get the value regardless of type
+                            let key_type: String = redis::cmd("TYPE")
+                                .arg(&key)
+                                .query_async(&mut *conn)
+                                .await
+                                .unwrap_or_else(|_| "unknown".to_string());
+
+                            let value = if key_type == "string" {
+                                redis::cmd("GET")
+                                    .arg(&key)
+                                    .query_async(&mut *conn)
+                                    .await
+                                    .unwrap_or(None)
+                            } else {
+                                None
+                            };
+
+                            (key_type, value)
+                        } else {
+                            // Key doesn't match, check if it's a string and if value matches
+                            let key_type: String = redis::cmd("TYPE")
+                                .arg(&key)
+                                .query_async(&mut *conn)
+                                .await
+                                .unwrap_or_else(|_| "unknown".to_string());
+
+                            if key_type == "string" {
+                                let value: Option<String> = redis::cmd("GET")
+                                    .arg(&key)
+                                    .query_async(&mut *conn)
+                                    .await
+                                    .unwrap_or(None);
+
+                                let value_matches = value
+                                    .as_ref()
+                                    .map(|v| v.to_lowercase().contains(&query_lower))
+                                    .unwrap_or(false);
+
+                                if value_matches {
+                                    (key_type, value)
+                                } else {
+                                    continue; // Neither key nor value matches
+                                }
+                            } else {
+                                continue; // Not a string type and key doesn't match
+                            }
+                        };
+
+                        // Create result item
+                        let data_value = if let Some(val) = value {
+                            DataValue::String(val)
+                        } else if key_type == "string" {
+                            DataValue::Null
+                        } else {
+                            DataValue::String(format!("({})", key_type))
+                        };
+
+                        results.push(QueryResultItem {
+                            key: key.clone(),
+                            data: data_value,
+                            score: Some(if key_matches { 1.0 } else { 0.5 }),
+                        });
+
+                        // Limit results to prevent too much data
+                        if results.len() >= 1000 {
+                            break;
+                        }
+                    }
+
+                    iteration_count += 1;
+
+                    // Break if we've scanned all keys or have enough results
+                    if cursor == 0 || results.len() >= 1000 {
+                        break;
+                    }
                 }
 
                 let execution_time = start_time.elapsed().as_millis() as u64;

@@ -263,7 +263,6 @@ impl BackendRegistry {
         for name in backend_names {
             if let Some(_backend) = self.remove_backend(&name).await {
                 debug!(backend = %name, "Backend removed during shutdown");
-                // Note: If backends had explicit shutdown methods, we'd call them here
             }
         }
 

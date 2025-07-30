@@ -59,7 +59,7 @@ impl DataManager {
         ttl: Option<u32>,
     ) -> Result<DbxResponse, DbxError> {
         let auth_header = auth_manager.get_auth_header().await?;
-        let json_value = JsonUtils::string_to_json_value(&value);
+        let json_value = JsonUtils::string_to_json_value(value.clone());
         let request_data = SetDataRequest {
             value: json_value,
             ttl: ttl.map(|t| t as u64),
@@ -147,9 +147,10 @@ impl DataManager {
     ) -> Result<DbxResponse, DbxError> {
         let auth_header = auth_manager.get_auth_header().await?;
 
+        let exists_url = format!("{}/api/v1/data/{}/exists", self.base_url, key);
         let request = self
             .client
-            .get(&UrlUtils::data_exists_endpoint(&self.base_url, &key))
+            .get(&exists_url)
             .header("Authorization", auth_header);
 
         let api_response: ApiResponse<DataResponseData> = self.execute_request(request).await?;
@@ -300,7 +301,7 @@ impl DataManager {
         ttl: Option<u32>,
     ) -> Result<DbxResponse, DbxError> {
         let auth_header = auth_manager.get_auth_header().await?;
-        let json_value = JsonUtils::string_to_json_value(&value);
+        let json_value = JsonUtils::string_to_json_value(value.clone());
 
         let mut request_data = HashMap::new();
         request_data.insert("value".to_string(), json_value);
@@ -337,11 +338,11 @@ impl DataManager {
         let mut request_data = HashMap::new();
         request_data.insert(
             "expected_value".to_string(),
-            JsonUtils::string_to_json_value(&expected_value),
+            JsonUtils::string_to_json_value(expected_value.clone()),
         );
         request_data.insert(
             "new_value".to_string(),
-            JsonUtils::string_to_json_value(&new_value),
+            JsonUtils::string_to_json_value(new_value.clone()),
         );
         if let Some(ttl) = ttl {
             request_data.insert(

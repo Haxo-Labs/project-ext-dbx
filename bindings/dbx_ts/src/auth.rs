@@ -155,11 +155,17 @@ impl AuthManager {
     /// Get authorization header
     pub async fn get_auth_header(&self) -> Result<String, DbxError> {
         if let Some(api_key) = &self.api_key {
-            return HttpUtils::build_auth_header(None, Some(api_key));
+            return Ok(HttpUtils::build_auth_header(api_key));
         }
 
         let token = self.access_token.read().await;
-        HttpUtils::build_auth_header(token.as_deref(), None)
+        if let Some(token) = token.as_deref() {
+            return Ok(HttpUtils::build_auth_header(token));
+        }
+
+        Err(DbxError::authentication(
+            "Not authenticated. Call authenticate() first or provide API key.".to_string(),
+        ))
     }
 
     /// Check if currently authenticated
