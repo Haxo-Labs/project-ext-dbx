@@ -61,6 +61,11 @@ pub enum DataOperationType {
     Exists,
     GetTtl,
     SetTtl,
+    Increment,
+    Decrement,
+    Append,
+    Length,
+    CompareAndSwap,
     Batch,
 }
 
@@ -291,6 +296,11 @@ mod tests {
             DataOperationType::Exists,
             DataOperationType::GetTtl,
             DataOperationType::SetTtl,
+            DataOperationType::Increment,
+            DataOperationType::Decrement,
+            DataOperationType::Append,
+            DataOperationType::Length,
+            DataOperationType::CompareAndSwap,
             DataOperationType::Batch,
         ];
 
@@ -626,6 +636,11 @@ mod tests {
                 DataOperationType::Exists,
                 DataOperationType::GetTtl,
                 DataOperationType::SetTtl,
+                DataOperationType::Increment,
+                DataOperationType::Decrement,
+                DataOperationType::Append,
+                DataOperationType::Length,
+                DataOperationType::CompareAndSwap,
                 DataOperationType::Batch,
             ],
             query_capabilities: QueryCapabilities {
@@ -661,7 +676,7 @@ mod tests {
         let deserialized: BackendCapabilities = serde_json::from_str(&json).unwrap();
 
         // Verify data operations
-        assert_eq!(deserialized.data_operations.len(), 8);
+        assert_eq!(deserialized.data_operations.len(), 13);
 
         // Verify query capabilities
         assert!(deserialized.query_capabilities.key_patterns);

@@ -370,6 +370,37 @@ pub mod test_helpers {
                 DataOperation::SetTtl { .. } => {
                     Ok(DataResult::success(operation_id, DataValue::Bool(true)))
                 }
+                DataOperation::Increment { key, amount } => {
+                    let current_value = data
+                        .get(&key)
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .unwrap_or(0);
+                    let new_value = current_value + amount;
+                    data.insert(key, new_value.to_string());
+                    Ok(DataResult::success(operation_id, DataValue::Int(new_value)))
+                }
+                DataOperation::Decrement { key, amount } => {
+                    let current_value = data
+                        .get(&key)
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .unwrap_or(0);
+                    let new_value = current_value - amount;
+                    data.insert(key, new_value.to_string());
+                    Ok(DataResult::success(operation_id, DataValue::Int(new_value)))
+                }
+                DataOperation::Append { key, value } => {
+                    let current_value = data.get(&key).cloned().unwrap_or_default();
+                    let new_value = format!("{}{}", current_value, value);
+                    data.insert(key, new_value.clone());
+                    Ok(DataResult::success(
+                        operation_id,
+                        DataValue::Int(new_value.len() as i64),
+                    ))
+                }
+                DataOperation::Length { key } => {
+                    let length = data.get(&key).map(|v| v.len() as i64).unwrap_or(0);
+                    Ok(DataResult::success(operation_id, DataValue::Int(length)))
+                }
                 DataOperation::Batch { operations } => {
                     // Execute batch operations directly on the data store without recursion
 
@@ -426,6 +457,34 @@ pub mod test_helpers {
                             }
                             DataOperation::SetTtl { .. } => {
                                 DataResult::success(op_id, DataValue::Bool(true))
+                            }
+                            DataOperation::Increment { key, amount } => {
+                                let current_value = data
+                                    .get(&key)
+                                    .and_then(|v| v.parse::<i64>().ok())
+                                    .unwrap_or(0);
+                                let new_value = current_value + amount;
+                                data.insert(key.clone(), new_value.to_string());
+                                DataResult::success(op_id, DataValue::Int(new_value))
+                            }
+                            DataOperation::Decrement { key, amount } => {
+                                let current_value = data
+                                    .get(&key)
+                                    .and_then(|v| v.parse::<i64>().ok())
+                                    .unwrap_or(0);
+                                let new_value = current_value - amount;
+                                data.insert(key.clone(), new_value.to_string());
+                                DataResult::success(op_id, DataValue::Int(new_value))
+                            }
+                            DataOperation::Append { key, value } => {
+                                let current_value = data.get(&key).cloned().unwrap_or_default();
+                                let new_value = format!("{}{}", current_value, value);
+                                data.insert(key.clone(), new_value.clone());
+                                DataResult::success(op_id, DataValue::Int(new_value.len() as i64))
+                            }
+                            DataOperation::Length { key } => {
+                                let length = data.get(&key).map(|v| v.len() as i64).unwrap_or(0);
+                                DataResult::success(op_id, DataValue::Int(length))
                             }
                             DataOperation::Batch { .. } => {
                                 // Prevent infinite nesting

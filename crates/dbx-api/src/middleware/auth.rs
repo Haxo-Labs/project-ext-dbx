@@ -400,27 +400,61 @@ impl UserStoreOperations for UserStore {
         use dbx_core::{DataOperation, DataValue};
 
         let key = format!("user:username:{}", username);
+        tracing::info!("Looking up user with key: {}", key);
 
         match self
             .backend
-            .execute_data(DataOperation::Get { key, fields: None })
+            .execute_data(DataOperation::Get {
+                key: key.clone(),
+                fields: None,
+            })
             .await
         {
             Ok(result) => {
+                tracing::info!(
+                    "Backend query result for {}: success={}, data={:?}",
+                    key,
+                    result.success,
+                    result.data
+                );
                 if result.success {
-                    if let Some(DataValue::String(json)) = result.data {
-                        let user: User = serde_json::from_str(&json).map_err(|e| {
-                            AuthError::InternalError(format!("JSON parse error: {}", e))
-                        })?;
-                        Ok(Some(user))
-                    } else {
-                        Ok(None)
+                    match result.data {
+                        Some(DataValue::String(json)) => {
+                            let user: User = serde_json::from_str(&json).map_err(|e| {
+                                AuthError::InternalError(format!("JSON parse error: {}", e))
+                            })?;
+                            tracing::info!("Successfully found and parsed user: {}", username);
+                            Ok(Some(user))
+                        }
+                        Some(DataValue::Object(_)) => {
+                            let obj_value = result.data.unwrap();
+                            let json_str = obj_value.to_string_lossy();
+                            let user: User = serde_json::from_str(&json_str).map_err(|e| {
+                                AuthError::InternalError(format!("JSON object parse error: {}", e))
+                            })?;
+                            tracing::info!(
+                                "Successfully found and parsed user from object: {}",
+                                username
+                            );
+                            Ok(Some(user))
+                        }
+                        _ => {
+                            tracing::warn!(
+                                "Backend returned success but no valid data for key: {}",
+                                key
+                            );
+                            Ok(None)
+                        }
                     }
                 } else {
+                    tracing::warn!("Backend returned failure for key: {}", key);
                     Ok(None)
                 }
             }
-            Err(e) => Err(AuthError::DatabaseError(e.to_string())),
+            Err(e) => {
+                tracing::error!("Backend error during user lookup for {}: {}", key, e);
+                Err(AuthError::DatabaseError(e.to_string()))
+            }
         }
     }
 
@@ -436,13 +470,22 @@ impl UserStoreOperations for UserStore {
         {
             Ok(result) => {
                 if result.success {
-                    if let Some(DataValue::String(json)) = result.data {
-                        let user: User = serde_json::from_str(&json).map_err(|e| {
-                            AuthError::InternalError(format!("JSON parse error: {}", e))
-                        })?;
-                        Ok(Some(user))
-                    } else {
-                        Ok(None)
+                    match result.data {
+                        Some(DataValue::String(json)) => {
+                            let user: User = serde_json::from_str(&json).map_err(|e| {
+                                AuthError::InternalError(format!("JSON parse error: {}", e))
+                            })?;
+                            Ok(Some(user))
+                        }
+                        Some(DataValue::Object(_)) => {
+                            let obj_value = result.data.unwrap();
+                            let json_str = obj_value.to_string_lossy();
+                            let user: User = serde_json::from_str(&json_str).map_err(|e| {
+                                AuthError::InternalError(format!("JSON object parse error: {}", e))
+                            })?;
+                            Ok(Some(user))
+                        }
+                        _ => Ok(None),
                     }
                 } else {
                     Ok(None)

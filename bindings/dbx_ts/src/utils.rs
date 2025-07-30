@@ -135,9 +135,11 @@ impl HttpUtils {
     /// Convert API response to DbxResponse
     pub fn convert_data_response(api_response: ApiResponse<DataResponseData>) -> DbxResponse {
         let data = api_response.data.as_ref().and_then(|d| {
-            d.data
-                .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default())
+            d.data.as_ref().and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Null => None,
+                other => Some(serde_json::to_string(other).unwrap_or_default()),
+            })
         });
         let operation_id = api_response.data.as_ref().map(|d| d.operation_id.clone());
         let execution_time_ms = api_response

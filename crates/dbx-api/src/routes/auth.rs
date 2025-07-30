@@ -33,16 +33,26 @@ pub async fn login(
     Json<ApiResponse<crate::middleware::auth::AuthResponse>>,
     (StatusCode, Json<ApiResponse<()>>),
 > {
+    tracing::info!(
+        "Authentication attempt for username: {}",
+        login_request.username
+    );
     let _user = user_store
         .get_user_by_username(&login_request.username)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(
+                "Database error during user lookup for {}: {}",
+                login_request.username,
+                e
+            );
             (
                 StatusCode::UNAUTHORIZED,
                 Json(ApiResponse::<()>::error("Invalid credentials".to_string())),
             )
         })?
         .ok_or_else(|| {
+            tracing::warn!("User not found in database: {}", login_request.username);
             (
                 StatusCode::UNAUTHORIZED,
                 Json(ApiResponse::<()>::error("User not found".to_string())),

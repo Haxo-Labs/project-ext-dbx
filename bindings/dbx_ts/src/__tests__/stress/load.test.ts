@@ -296,7 +296,7 @@ describe("DBX API Stress Tests", () => {
           true,
           `Invalid operation ${index} failed unexpectedly`
         );
-        expect(result.data).toBeNull();
+        expect(result.data).toBeUndefined();
       });
 
       console.log(
@@ -339,8 +339,8 @@ describe("DBX API Stress Tests", () => {
           // Valid operation should have data
           validSuccesses++;
         } else {
-          // Invalid operation should return null
-          expect(result.data).toBeNull();
+          // Invalid operation should return undefined
+          expect(result.data).toBeUndefined();
           invalidHandled++;
         }
       });

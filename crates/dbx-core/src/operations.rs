@@ -37,6 +37,21 @@ pub enum DataOperation {
     GetTtl { key: String },
     /// Set TTL for data
     SetTtl { key: String, ttl: u64 },
+    /// Increment a numeric value
+    Increment { key: String, amount: i64 },
+    /// Decrement a numeric value
+    Decrement { key: String, amount: i64 },
+    /// Append to a string value
+    Append { key: String, value: String },
+    /// Get length of a value
+    Length { key: String },
+    /// Compare and swap operation
+    CompareAndSwap {
+        key: String,
+        expected_value: String,
+        new_value: String,
+        ttl: Option<u64>,
+    },
     /// Batch operations
     Batch { operations: Vec<DataOperation> },
 }
@@ -516,6 +531,83 @@ mod tests {
                 assert_eq!(ttl, 7200);
             }
             _ => panic!("Expected SetTtl variant"),
+        }
+
+        // Test Increment operation
+        let increment_op = DataOperation::Increment {
+            key: "test_key".to_string(),
+            amount: 10,
+        };
+
+        match increment_op {
+            DataOperation::Increment { key, amount } => {
+                assert_eq!(key, "test_key");
+                assert_eq!(amount, 10);
+            }
+            _ => panic!("Expected Increment variant"),
+        }
+
+        // Test Decrement operation
+        let decrement_op = DataOperation::Decrement {
+            key: "test_key".to_string(),
+            amount: 5,
+        };
+
+        match decrement_op {
+            DataOperation::Decrement { key, amount } => {
+                assert_eq!(key, "test_key");
+                assert_eq!(amount, 5);
+            }
+            _ => panic!("Expected Decrement variant"),
+        }
+
+        // Test Append operation
+        let append_op = DataOperation::Append {
+            key: "test_key".to_string(),
+            value: "more_text".to_string(),
+        };
+
+        match append_op {
+            DataOperation::Append { key, value } => {
+                assert_eq!(key, "test_key");
+                assert_eq!(value, "more_text".to_string());
+            }
+            _ => panic!("Expected Append variant"),
+        }
+
+        // Test Length operation
+        let length_op = DataOperation::Length {
+            key: "test_key".to_string(),
+        };
+
+        match length_op {
+            DataOperation::Length { key } => {
+                assert_eq!(key, "test_key");
+            }
+            _ => panic!("Expected Length variant"),
+        }
+
+        // Test CompareAndSwap operation
+        let compare_and_swap_op = DataOperation::CompareAndSwap {
+            key: "test_key".to_string(),
+            expected_value: "old_value".to_string(),
+            new_value: "new_value".to_string(),
+            ttl: Some(3600),
+        };
+
+        match compare_and_swap_op {
+            DataOperation::CompareAndSwap {
+                key,
+                expected_value,
+                new_value,
+                ttl,
+            } => {
+                assert_eq!(key, "test_key");
+                assert_eq!(expected_value, "old_value".to_string());
+                assert_eq!(new_value, "new_value".to_string());
+                assert_eq!(ttl, Some(3600));
+            }
+            _ => panic!("Expected CompareAndSwap variant"),
         }
 
         // Test Batch operation

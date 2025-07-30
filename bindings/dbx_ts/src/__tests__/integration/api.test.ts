@@ -170,7 +170,7 @@ describe("DBX API Integration Tests", () => {
         expect.fail("Should have thrown authentication error");
       } catch (error) {
         expect(error.message).toMatch(
-          /authentication|credentials|unauthorized|login/i
+          /authentication|credentials|unauthorized|login|user not found/i
         );
       }
     });
@@ -496,7 +496,7 @@ describe("DBX API Integration Tests", () => {
     it("should handle non-existent key gracefully", async () => {
       const response = await adminClient.get("non:existent:key:987654321");
       expect(response.success).toBe(true);
-      expect(response.data).toBeNull();
+      expect(response.data).toBeUndefined();
     });
 
     it("should handle large values", async () => {
@@ -534,7 +534,7 @@ describe("DBX API Integration Tests", () => {
         expect.fail("Should have thrown authentication error");
       } catch (error) {
         expect(error.message).toMatch(
-          /authentication|unauthorized|token|login/i
+          /authentication|unauthorized|token|login|not authenticated/i
         );
       }
     });

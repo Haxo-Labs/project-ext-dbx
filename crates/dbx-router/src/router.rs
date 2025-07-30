@@ -297,6 +297,10 @@ impl BackendRouter {
             DataOperation::Exists { key, .. } => Some(key),
             DataOperation::GetTtl { key } => Some(key),
             DataOperation::SetTtl { key, .. } => Some(key),
+            DataOperation::Increment { key, .. } => Some(key),
+            DataOperation::Decrement { key, .. } => Some(key),
+            DataOperation::Append { key, .. } => Some(key),
+            DataOperation::Length { key } => Some(key),
             DataOperation::Batch { operations } => {
                 // Use the first operation's key for routing batch operations
                 operations
@@ -371,6 +375,42 @@ impl BackendRouter {
                     }
                 }
             }
+            Increment { .. } | Decrement { .. } => {
+                // Increment/Decrement operations - prefer backends with atomic operations
+                for backend_name in &capable_backends {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        // Check if this backend supports atomic operations
+                        if backend_name.contains("atomic") || backend_name.contains("atomic_ops") {
+                            debug!(backend = %backend_name, "Using atomic backend for increment/decrement");
+                            return Ok(Some(backend));
+                        }
+                    }
+                }
+                // Fall back to any capable backend
+                if let Some(backend_name) = capable_backends.first() {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        return Ok(Some(backend));
+                    }
+                }
+            }
+            Append { .. } | Length { .. } => {
+                // Append/Length operations - prefer backends with string/list operations
+                for backend_name in &capable_backends {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        // Check if this backend supports string/list operations
+                        if backend_name.contains("string") || backend_name.contains("list") {
+                            debug!(backend = %backend_name, "Using string/list backend for append/length");
+                            return Ok(Some(backend));
+                        }
+                    }
+                }
+                // Fall back to any capable backend
+                if let Some(backend_name) = capable_backends.first() {
+                    if let Some(backend) = self.registry.get_backend(backend_name).await {
+                        return Ok(Some(backend));
+                    }
+                }
+            }
             Batch { .. } => {
                 // Batch operations - prefer backends with batch optimization
                 for backend_name in &capable_backends {
@@ -404,6 +444,10 @@ impl BackendRouter {
             DataOperation::Exists { .. } => "data:exists".to_string(),
             DataOperation::SetTtl { .. } => "data:set_ttl".to_string(),
             DataOperation::GetTtl { .. } => "data:get_ttl".to_string(),
+            DataOperation::Increment { .. } => "data:increment".to_string(),
+            DataOperation::Decrement { .. } => "data:decrement".to_string(),
+            DataOperation::Append { .. } => "data:append".to_string(),
+            DataOperation::Length { .. } => "data:length".to_string(),
             DataOperation::Batch { .. } => "data:batch".to_string(),
         }
     }
@@ -423,6 +467,10 @@ impl BackendRouter {
             dbx_core::DataOperationType::Exists => operation_type == "data:exists",
             dbx_core::DataOperationType::GetTtl => operation_type == "data:get_ttl",
             dbx_core::DataOperationType::SetTtl => operation_type == "data:set_ttl",
+            dbx_core::DataOperationType::Increment => operation_type == "data:increment",
+            dbx_core::DataOperationType::Decrement => operation_type == "data:decrement",
+            dbx_core::DataOperationType::Append => operation_type == "data:append",
+            dbx_core::DataOperationType::Length => operation_type == "data:length",
             dbx_core::DataOperationType::Batch => operation_type == "data:batch",
         })
     }

@@ -19,6 +19,7 @@ use dbx_router::BackendRouter;
 pub struct SetDataRequest {
     pub value: serde_json::Value,
     pub ttl: Option<u64>,
+    pub if_not_exists: Option<bool>,
 }
 
 /// Request for updating data
@@ -26,6 +27,30 @@ pub struct SetDataRequest {
 pub struct UpdateDataRequest {
     pub fields: HashMap<String, serde_json::Value>,
     pub ttl: Option<u64>,
+}
+
+/// Request for setting TTL
+#[derive(Debug, Deserialize)]
+pub struct SetTtlRequest {
+    pub ttl: u64,
+}
+
+/// Request for increment operation
+#[derive(Debug, Deserialize)]
+pub struct IncrementRequest {
+    pub amount: Option<i64>,
+}
+
+/// Request for decrement operation
+#[derive(Debug, Deserialize)]
+pub struct DecrementRequest {
+    pub amount: Option<i64>,
+}
+
+/// Request for append operation
+#[derive(Debug, Deserialize)]
+pub struct AppendRequest {
+    pub value: String,
 }
 
 /// Request for batch operations
@@ -136,6 +161,40 @@ pub async fn set_data(
     }
 
     let data_value = json_to_data_value(request.value);
+
+    // Handle conditional set (set if not exists)
+    if request.if_not_exists.unwrap_or(false) {
+        // First check if key exists
+        let exists_operation = DataOperation::Exists {
+            key: key.clone(),
+            fields: None,
+        };
+
+        match router.route_data_operation(&exists_operation).await {
+            Ok(backend) => match backend.execute_data(exists_operation).await {
+                Ok(exists_result) => {
+                    if exists_result.success && exists_result.data == Some(DataValue::Bool(true)) {
+                        // Key exists, return false to indicate set was not performed
+                        let response = DataResponse {
+                            operation_id: exists_result.operation_id.to_string(),
+                            success: true,
+                            data: Some(serde_json::Value::Bool(false)),
+                            execution_time_ms: None,
+                            backend: Some(backend.name().to_string()),
+                        };
+                        return Ok(Json(ApiResponse::success(response)));
+                    }
+                    // Key doesn't exist, proceed with set operation
+                }
+                Err(_) => {
+                    // Error checking existence, proceed with set operation anyway
+                }
+            },
+            Err(_) => {
+                // Error routing exists operation, proceed with set operation anyway
+            }
+        }
+    }
 
     let operation = DataOperation::Set {
         key: key.clone(),
@@ -331,6 +390,350 @@ pub async fn check_exists(
     }
 }
 
+/// Get TTL for a key
+pub async fn get_ttl(
+    Path(key): Path<String>,
+    State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
+) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringGet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::StringGet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let operation = DataOperation::GetTtl { key: key.clone() };
+
+    match router.route_data_operation(&operation).await {
+        Ok(backend) => match backend.execute_data(operation).await {
+            Ok(result) => {
+                let response = DataResponse {
+                    operation_id: result.operation_id.to_string(),
+                    success: result.success,
+                    data: result
+                        .data
+                        .map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null)),
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::success(response)))
+            }
+            Err(e) => {
+                let response = DataResponse {
+                    operation_id: Uuid::new_v4().to_string(),
+                    success: false,
+                    data: None,
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::error(format!(
+                    "Failed to get TTL for key {}: {}",
+                    key, e
+                ))))
+            }
+        },
+        Err(e) => Ok(Json(ApiResponse::error(format!(
+            "Failed to route operation for key {}: {}",
+            key, e
+        )))),
+    }
+}
+
+/// Set TTL for a key
+pub async fn set_ttl(
+    Path(key): Path<String>,
+    State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
+    Json(request): Json<SetTtlRequest>,
+) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringSet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let operation = DataOperation::SetTtl {
+        key: key.clone(),
+        ttl: request.ttl,
+    };
+
+    match router.route_data_operation(&operation).await {
+        Ok(backend) => match backend.execute_data(operation).await {
+            Ok(result) => {
+                let response = DataResponse {
+                    operation_id: result.operation_id.to_string(),
+                    success: result.success,
+                    data: result
+                        .data
+                        .map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null)),
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::success(response)))
+            }
+            Err(e) => {
+                let response = DataResponse {
+                    operation_id: Uuid::new_v4().to_string(),
+                    success: false,
+                    data: None,
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::error(format!(
+                    "Failed to set TTL for key {}: {}",
+                    key, e
+                ))))
+            }
+        },
+        Err(e) => Ok(Json(ApiResponse::error(format!(
+            "Failed to route operation for key {}: {}",
+            key, e
+        )))),
+    }
+}
+
+/// Increment a numeric value
+pub async fn increment_data(
+    Path(key): Path<String>,
+    State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
+    Json(request): Json<IncrementRequest>,
+) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringSet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let operation = DataOperation::Increment {
+        key: key.clone(),
+        amount: request.amount.unwrap_or(1),
+    };
+
+    match router.route_data_operation(&operation).await {
+        Ok(backend) => match backend.execute_data(operation).await {
+            Ok(result) => {
+                let response = DataResponse {
+                    operation_id: result.operation_id.to_string(),
+                    success: result.success,
+                    data: result
+                        .data
+                        .map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null)),
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::success(response)))
+            }
+            Err(e) => {
+                let response = DataResponse {
+                    operation_id: Uuid::new_v4().to_string(),
+                    success: false,
+                    data: None,
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::error(format!(
+                    "Failed to increment key {}: {}",
+                    key, e
+                ))))
+            }
+        },
+        Err(e) => Ok(Json(ApiResponse::error(format!(
+            "Failed to route operation for key {}: {}",
+            key, e
+        )))),
+    }
+}
+
+/// Decrement a numeric value
+pub async fn decrement_data(
+    Path(key): Path<String>,
+    State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
+    Json(request): Json<DecrementRequest>,
+) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringSet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let operation = DataOperation::Decrement {
+        key: key.clone(),
+        amount: request.amount.unwrap_or(1),
+    };
+
+    match router.route_data_operation(&operation).await {
+        Ok(backend) => match backend.execute_data(operation).await {
+            Ok(result) => {
+                let response = DataResponse {
+                    operation_id: result.operation_id.to_string(),
+                    success: result.success,
+                    data: result
+                        .data
+                        .map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null)),
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::success(response)))
+            }
+            Err(e) => {
+                let response = DataResponse {
+                    operation_id: Uuid::new_v4().to_string(),
+                    success: false,
+                    data: None,
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::error(format!(
+                    "Failed to decrement key {}: {}",
+                    key, e
+                ))))
+            }
+        },
+        Err(e) => Ok(Json(ApiResponse::error(format!(
+            "Failed to route operation for key {}: {}",
+            key, e
+        )))),
+    }
+}
+
+/// Append to a string value
+pub async fn append_data(
+    Path(key): Path<String>,
+    State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
+    Json(request): Json<AppendRequest>,
+) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringSet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::StringSet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let operation = DataOperation::Append {
+        key: key.clone(),
+        value: request.value,
+    };
+
+    match router.route_data_operation(&operation).await {
+        Ok(backend) => match backend.execute_data(operation).await {
+            Ok(result) => {
+                let response = DataResponse {
+                    operation_id: result.operation_id.to_string(),
+                    success: result.success,
+                    data: result
+                        .data
+                        .map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null)),
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::success(response)))
+            }
+            Err(e) => Ok(Json(ApiResponse::error(format!(
+                "Failed to append to key {}: {}",
+                key, e
+            )))),
+        },
+        Err(e) => Ok(Json(ApiResponse::error(format!(
+            "Failed to route operation for key {}: {}",
+            key, e
+        )))),
+    }
+}
+
+/// Get length of a value
+pub async fn length_data(
+    Path(key): Path<String>,
+    State(router): State<Arc<BackendRouter>>,
+    Extension(rbac_context): Extension<RbacContext>,
+) -> Result<Json<ApiResponse<DataResponse>>, StatusCode> {
+    // Check StringGet permission
+    if let Err(_) = rbac_context
+        .rbac_service
+        .check_user_permission(
+            &rbac_context.user_id,
+            PermissionType::StringGet,
+            rbac_context.clone(),
+        )
+        .await
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let operation = DataOperation::Length { key: key.clone() };
+
+    match router.route_data_operation(&operation).await {
+        Ok(backend) => match backend.execute_data(operation).await {
+            Ok(result) => {
+                let response = DataResponse {
+                    operation_id: result.operation_id.to_string(),
+                    success: result.success,
+                    data: result
+                        .data
+                        .map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null)),
+                    execution_time_ms: None,
+                    backend: Some(backend.name().to_string()),
+                };
+
+                Ok(Json(ApiResponse::success(response)))
+            }
+            Err(e) => Ok(Json(ApiResponse::error(format!(
+                "Failed to get length for key {}: {}",
+                key, e
+            )))),
+        },
+        Err(e) => Ok(Json(ApiResponse::error(format!(
+            "Failed to route operation for key {}: {}",
+            key, e
+        )))),
+    }
+}
+
 /// Perform batch operations
 pub async fn batch_operations(
     State(router): State<Arc<BackendRouter>>,
@@ -474,6 +877,37 @@ pub fn create_data_routes() -> Router<Arc<BackendRouter>> {
             "/:key/exists",
             MethodRouter::new()
                 .get(check_exists)
+                .fallback(method_not_allowed),
+        )
+        .route(
+            "/:key/ttl",
+            MethodRouter::new()
+                .get(get_ttl)
+                .post(set_ttl)
+                .fallback(method_not_allowed),
+        )
+        .route(
+            "/:key/incr",
+            MethodRouter::new()
+                .post(increment_data)
+                .fallback(method_not_allowed),
+        )
+        .route(
+            "/:key/decr",
+            MethodRouter::new()
+                .post(decrement_data)
+                .fallback(method_not_allowed),
+        )
+        .route(
+            "/:key/append",
+            MethodRouter::new()
+                .post(append_data)
+                .fallback(method_not_allowed),
+        )
+        .route(
+            "/:key/length",
+            MethodRouter::new()
+                .get(length_data)
                 .fallback(method_not_allowed),
         )
         .route(

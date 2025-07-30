@@ -64,6 +64,7 @@ pub struct DbxQueryResult {
 #[napi(object)]
 #[derive(Clone)]
 pub struct DbxBatchOperation {
+    #[napi(js_name = "operationType")]
     pub operation_type: String,
     pub key: String,
     pub value: Option<String>,

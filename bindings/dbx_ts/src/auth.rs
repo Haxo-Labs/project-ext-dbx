@@ -137,7 +137,9 @@ impl AuthManager {
             let request = self
                 .client
                 .post(&UrlUtils::auth_logout_endpoint(&self.base_url))
-                .header("Authorization", auth_header);
+                .header("Authorization", auth_header)
+                .header("Content-Type", "application/json")
+                .json(&serde_json::json!({}));
 
             let _: ApiResponse<String> = self.execute_request(request).await?;
         }

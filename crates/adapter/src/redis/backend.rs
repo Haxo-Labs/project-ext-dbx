@@ -45,6 +45,10 @@ impl RedisBackend {
                 DataOperationType::Exists,
                 DataOperationType::GetTtl,
                 DataOperationType::SetTtl,
+                DataOperationType::Increment,
+                DataOperationType::Decrement,
+                DataOperationType::Append,
+                DataOperationType::Length,
                 DataOperationType::Batch,
             ],
             query_capabilities: QueryCapabilities {
@@ -667,6 +671,89 @@ impl RedisBackend {
                             )
                         })?;
                     Ok(DataValue::Int(ttl))
+                }
+
+                DataOperation::Increment { key, amount } => {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Failed to acquire lock: {}", e),
+                        )
+                    })?;
+                    let result: i64 = redis::cmd("INCRBY")
+                        .arg(key)
+                        .arg(amount)
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Increment failed: {}", e),
+                            )
+                        })?;
+                    Ok(DataValue::Int(result))
+                }
+
+                DataOperation::Decrement { key, amount } => {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Failed to acquire lock: {}", e),
+                        )
+                    })?;
+                    let result: i64 = redis::cmd("DECRBY")
+                        .arg(key)
+                        .arg(amount)
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Decrement failed: {}", e),
+                            )
+                        })?;
+                    Ok(DataValue::Int(result))
+                }
+
+                DataOperation::Append { key, value } => {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Failed to acquire lock: {}", e),
+                        )
+                    })?;
+                    let result: i64 = redis::cmd("APPEND")
+                        .arg(key)
+                        .arg(value)
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Append failed: {}", e),
+                            )
+                        })?;
+                    Ok(DataValue::Int(result))
+                }
+
+                DataOperation::Length { key } => {
+                    let mut conn = self.pool.acquire_connection().await.map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Failed to acquire lock: {}", e),
+                        )
+                    })?;
+                    let result: i64 = redis::cmd("STRLEN")
+                        .arg(key)
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Length failed: {}", e),
+                            )
+                        })?;
+                    Ok(DataValue::Int(result))
                 }
 
                 DataOperation::Batch { operations } => {
