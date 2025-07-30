@@ -286,6 +286,77 @@ impl AppState {
         })
     }
 
+    /// Create default admin user if it doesn't exist
+    async fn create_default_admin_user(
+        app_config: &AppConfig,
+        user_store: &Arc<UserStore>,
+        rbac_service: &Arc<RbacService>,
+    ) -> Result<(), ServerError> {
+        use crate::{
+            middleware::auth::UserStoreOperations,
+            models::{CreateUserRequest, UserRole},
+        };
+
+        let username = app_config
+            .default_admin_username
+            .as_ref()
+            .ok_or_else(|| ServerError::Configuration(ConfigError::MissingDefaultAdminPassword))?;
+
+        let password = app_config
+            .default_admin_password
+            .as_ref()
+            .ok_or_else(|| ServerError::Configuration(ConfigError::MissingDefaultAdminPassword))?;
+
+        // Check if admin user already exists
+        match user_store.get_user_by_username(username).await {
+            Ok(Some(_)) => {
+                tracing::info!(
+                    "Default admin user '{}' already exists, skipping creation",
+                    username
+                );
+                return Ok(());
+            }
+            Ok(None) => {
+                // User doesn't exist, create it
+                tracing::info!("Creating default admin user '{}'", username);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to check for existing admin user: {}", e);
+                // Continue with creation attempt
+            }
+        }
+
+        // Create the admin user
+        let create_request = CreateUserRequest {
+            username: username.clone(),
+            password: password.clone(),
+            role: UserRole::Admin,
+        };
+
+        match user_store.create_user(create_request).await {
+            Ok(user) => {
+                tracing::info!("Successfully created default admin user '{}'", username);
+
+                // Assign admin role using RBAC
+                if let Err(e) = rbac_service
+                    .assign_role(&user.id, username, "Admin", "system", None, None)
+                    .await
+                {
+                    tracing::warn!("Failed to assign admin role to default user: {}", e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to create default admin user '{}': {}", username, e);
+                return Err(ServerError::UserStoreInitialization(format!(
+                    "Failed to create default admin user: {}",
+                    e
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     async fn create_auth_services(
         app_config: &AppConfig,
         backend: Arc<dyn dbx_core::UniversalBackend>,
@@ -315,6 +386,11 @@ impl AppState {
             let _ = rate_limit_service.set_global_policy(global_policy).await;
         }
         let rate_limit_service = Arc::new(rate_limit_service);
+
+        // Create default admin user if configured
+        if app_config.create_default_admin {
+            Self::create_default_admin_user(app_config, &user_store, &rbac_service).await?;
+        }
 
         Ok((
             user_store,
@@ -599,7 +675,7 @@ pub async fn run_server(config_path: Option<&str>) -> Result<(), ServerError> {
     tracing::info!("  Data Operations: POST/GET/PUT/DELETE /api/v1/data/{{key}}");
     tracing::info!("  Query Operations: POST /api/v1/query");
     tracing::info!("  Stream Operations: POST /api/v1/stream/{{stream}}");
-    tracing::info!("  Authentication: POST /auth/login");
+    tracing::info!("  Authentication: POST /api/v1/auth/login");
 
     axum::serve(listener, app)
         .await

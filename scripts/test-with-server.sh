@@ -20,7 +20,7 @@
 #
 # Options:
 #   --env-file <path>       Path to .env file (default: .env)
-#   --redis-url <url>       Redis connection URL (overrides .env)
+#   --backend-url <url>     Backend connection URL (overrides .env)
 #   --server-port <port>    Server port (default: 3000)
 #   --skip-server           Skip starting server (assume it's already running)
 #   --skip-cleanup          Don't stop server after tests
@@ -43,7 +43,7 @@ SKIP_REDIS=false
 SKIP_CLEANUP=false
 VERBOSE=false
 SERVER_PID=""
-DOCKER_CONTAINER_NAME="dbx-redis-api-test-server"
+DOCKER_CONTAINER_NAME="dbx-api-test-server"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -81,7 +81,7 @@ while [[ $# -gt 0 ]]; do
 		echo ""
 		echo "Options:"
 		echo "  --env-file <path>       Path to .env file (default: .env)"
-		echo "  --redis-url <url>       Redis connection URL (overrides .env)"
+		echo "  --backend-url <url>     Backend connection URL (overrides .env)"
 		echo "  --server-port <port>    Server port (default: 3000)"
 		echo "  --skip-server           Skip starting server (assume it's already running)"
 		echo "  --skip-redis            Skip starting Redis"
@@ -92,7 +92,7 @@ while [[ $# -gt 0 ]]; do
 		echo "Examples:"
 		echo "  $0"
 		echo "  $0 --env-file .env.test"
-		echo "  $0 --redis-url redis://localhost:6379 --server-port 3001"
+		echo "  $0 --backend-url redis://localhost:6379 --server-port 3001"
 		echo "  $0 --skip-server --skip-cleanup"
 		exit 0
 		;;
@@ -211,8 +211,8 @@ start_server() {
 	docker rm "$DOCKER_CONTAINER_NAME" 2>/dev/null || true
 
 	# Build the image
-	log_info "Building DBX Redis API Docker image..."
-	docker build -t dbx-redis-api:test .
+	log_info "Building DBX API Docker image..."
+	docker build -t dbx-api:test .
 
 	# Start the server
 	docker run -d \
@@ -221,16 +221,19 @@ start_server() {
 		-e DBX_BACKEND_1_PROVIDER="$DBX_BACKEND_1_PROVIDER" \
 		-e DBX_BACKEND_1_URL="$DBX_BACKEND_1_URL" \
 		-e DBX_DEFAULT_BACKEND="$DBX_DEFAULT_BACKEND" \
-		-e HOST=0.0.0.0 \
-		-e PORT=3000 \
-		-e POOL_SIZE="$POOL_SIZE" \
+		-e DBX_HOST=0.0.0.0 \
+		-e DBX_PORT=3000 \
 		-e LOG_LEVEL="$LOG_LEVEL" \
-		dbx-redis-api:test
+		-e RUST_LOG="$LOG_LEVEL" \
+		-e JWT_SECRET=test_jwt_secret_key \
+		-e JWT_EXPIRATION_SECONDS=900 \
+		-e KEY_PREFIX=dbx:rate_limit \
+		dbx-api:test
 
 	# Wait for server to be ready
 	log_info "Waiting for server to be ready..."
 	for i in {1..60}; do
-		if curl -s "http://localhost:$PORT/redis/admin/ping" >/dev/null 2>&1; then
+		if curl -s "http://localhost:$PORT/health" >/dev/null 2>&1; then
 			log_success "Server is ready at http://localhost:$PORT"
 			return 0
 		fi
@@ -251,7 +254,7 @@ wait_for_server() {
 
 	log_step "Waiting for server to be ready..."
 	for i in {1..30}; do
-		if curl -s "http://localhost:$PORT/redis/admin/ping" >/dev/null 2>&1; then
+		if curl -s "http://localhost:$PORT/health" >/dev/null 2>&1; then
 			log_success "Server is ready"
 			return 0
 		fi
@@ -277,7 +280,7 @@ run_crate_tests() {
 	log_info "  SERVER_PORT: $PORT"
 
 	# Run tests in sequential order
-	log_info "Running tests sequentially (adapter → api → client)..."
+	log_info "Running tests sequentially (adapter → api)..."
 
 	# 1. Adapter tests
 	log_step "Running adapter tests..."
@@ -289,19 +292,11 @@ run_crate_tests() {
 
 	# 2. API tests
 	log_step "Running API tests..."
-	if ! (cd "crates/redis_api" && cargo test); then
+	if ! (cd "crates/dbx-api" && cargo test --features test-utils); then
 		log_error "❌ API tests failed"
 		return 1
 	fi
 	log_success "✅ API tests passed"
-
-	# 3. Client tests
-	log_step "Running client tests..."
-	if ! (cd "crates/redis_client" && cargo test); then
-		log_error "❌ Client tests failed"
-		return 1
-	fi
-	log_success "✅ Client tests passed"
 
 	log_success "🎉 All crate tests passed!"
 	return 0
@@ -357,7 +352,6 @@ main() {
 		echo "📊 Test Summary:"
 		echo "   ✅ Adapter tests: PASSED"
 		echo "   ✅ API tests: PASSED"
-		echo "   ✅ Client tests: PASSED"
 		echo ""
 		log_info "Ready for next steps! 🚀"
 		return 0

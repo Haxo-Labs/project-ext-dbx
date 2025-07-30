@@ -16,7 +16,7 @@
 # Usage: ./scripts/test-simple.sh [options]
 #
 # Options:
-#   --redis-url <url>       Redis connection URL (default: redis://localhost:6379)
+#   --backend-url <url>     Backend connection URL (default: redis://localhost:6379)
 #   --server-url <url>      Server base URL (default: http://localhost:3000)
 #   --verbose               Enable verbose output
 #   --help                  Show this help message
@@ -52,14 +52,14 @@ while [[ $# -gt 0 ]]; do
 		echo "Usage: $0 [options]"
 		echo ""
 		echo "Options:"
-		echo "  --redis-url <url>       Redis connection URL (default: redis://localhost:6379)"
+		echo "  --backend-url <url>     Backend connection URL (default: redis://localhost:6379)"
 		echo "  --server-url <url>      Server base URL (default: http://localhost:3000)"
 		echo "  --verbose               Enable verbose output"
 		echo "  --help                  Show this help message"
 		echo ""
 		echo "Examples:"
 		echo "  $0"
-		echo "  $0 --redis-url redis://localhost:6379 --server-url http://localhost:3000"
+		echo "  $0 --backend-url redis://localhost:6379 --server-url http://localhost:3000"
 		echo "  $0 --verbose"
 		exit 0
 		;;
@@ -110,11 +110,11 @@ setup_environment() {
 check_server() {
 	log_step "Checking if server is running..."
 
-	if curl -s "$SERVER_URL/redis/admin/ping" >/dev/null 2>&1; then
+	if curl -s "$SERVER_URL/health" >/dev/null 2>&1; then
 		log_success "Server is running and responding"
 		return 0
 	else
-		log_error "Server is not responding at $SERVER_URL/redis/admin/ping"
+		log_error "Server is not responding at $SERVER_URL/health"
 		log_info "Make sure the DBX server is running before running tests"
 		return 1
 	fi
@@ -125,7 +125,7 @@ run_crate_tests() {
 	log_step "Running crate tests against server..."
 
 	# Run tests in sequential order
-	log_info "Running tests sequentially (adapter → api → client)..."
+	log_info "Running tests sequentially (adapter → api)..."
 
 	# 1. Adapter tests
 	log_step "Running adapter tests..."
@@ -137,19 +137,11 @@ run_crate_tests() {
 
 	# 2. API tests
 	log_step "Running API tests..."
-	if ! (cd "crates/redis_api" && cargo test); then
+	if ! (cd "crates/dbx-api" && cargo test --features test-utils); then
 		log_error "❌ API tests failed"
 		return 1
 	fi
 	log_success "✅ API tests passed"
-
-	# 3. Client tests
-	log_step "Running client tests..."
-	if ! (cd "crates/redis_client" && cargo test); then
-		log_error "❌ Client tests failed"
-		return 1
-	fi
-	log_success "✅ Client tests passed"
 
 	log_success "🎉 All crate tests passed!"
 	return 0
@@ -170,7 +162,6 @@ main() {
 		echo "📊 Test Summary:"
 		echo "   ✅ Adapter tests: PASSED"
 		echo "   ✅ API tests: PASSED"
-		echo "   ✅ Client tests: PASSED"
 		echo ""
 		log_info "Ready for next steps! 🚀"
 		return 0
