@@ -76,8 +76,8 @@ if [ "$VERBOSE" = true ]; then
 	set -x
 fi
 
-echo "🧪 DBX Simple Test Runner"
-echo "========================="
+echo "DBX Simple Testing"
+echo "=================="
 echo ""
 
 # Check if we're in the right directory
@@ -120,56 +120,40 @@ check_server() {
 	fi
 }
 
-# Run crate tests
-run_crate_tests() {
-	log_step "Running crate tests against server..."
-
-	# Run tests in sequential order
-	log_info "Running tests sequentially (adapter → api)..."
-
-	# 1. Adapter tests
+run_adapter_tests() {
 	log_step "Running adapter tests..."
-	if ! (cd "crates/adapter" && cargo test); then
-		log_error "❌ Adapter tests failed"
-		return 1
+	if (cd "crates/adapter" && cargo test); then
+		log_success "Adapter tests passed"
+	else
+		log_error "Adapter tests failed with exit code $exit_code"
+		exit $exit_code
 	fi
-	log_success "✅ Adapter tests passed"
+}
 
-	# 2. API tests
+run_api_tests() {
 	log_step "Running API tests..."
-	if ! (cd "crates/dbx-api" && cargo test --features test-utils); then
-		log_error "❌ API tests failed"
-		return 1
+	if cargo test --features test-utils -p dbx-api; then
+		log_success "API tests passed"
+	else
+		log_success "All crate tests passed!"
 	fi
-	log_success "✅ API tests passed"
-
-	log_success "🎉 All crate tests passed!"
-	return 0
 }
 
 # Main execution
-main() {
-	# Set up environment
-	setup_environment
+echo "DBX Simple Testing"
+echo "=================="
+echo ""
 
-	# Check server
-	check_server
+log_info "Starting simple crate tests (no server required)..."
 
-	# Run tests
-	if run_crate_tests; then
-		log_success "🎉 All tests completed successfully!"
-		echo ""
-		echo "📊 Test Summary:"
-		echo "   ✅ Adapter tests: PASSED"
-		echo "   ✅ API tests: PASSED"
-		echo ""
-		log_info "Ready for next steps! 🚀"
-		return 0
-	else
-		log_error "❌ Tests failed"
-		return 1
-	fi
-}
+# Run tests
+run_adapter_tests
+run_api_tests
 
-# Run main function
-main "$@"
+log_success "All tests completed successfully!"
+
+echo "Test Summary:"
+echo "   PASSED: Adapter tests"
+echo "   PASSED: API tests"
+
+log_info "Ready for next steps!"

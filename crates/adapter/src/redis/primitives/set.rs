@@ -14,17 +14,13 @@ mod script_constants {
 
 use crate::redis::RedisConnectionHandler;
 
-/// Represents a Redis set data type with operations for manipulating set values.
+/// Redis set operations with pipeline and transaction support.
 ///
-/// This implementation supports:
-/// - Individual commands (sadd, srem, smembers, etc.)
+/// Operations include:
+/// - Individual commands (sadd, srem, etc.)
 /// - Pipelined operations (for efficiency)
 /// - Transactions (for atomicity)
 /// - Lua script execution (for complex operations)
-///
-/// # Examples
-///
-/// ```ignore
 #[derive(Clone)]
 pub struct RedisSet {
     conn: Arc<Mutex<Connection>>,
@@ -304,7 +300,7 @@ impl RedisSet {
 impl RedisSet {
     /// Executes a transaction using MULTI/EXEC
     ///
-    /// This ensures all commands are executed atomically.
+    /// All commands execute atomically.
     /// If any command fails, the entire transaction is aborted.
     ///
     /// # Example

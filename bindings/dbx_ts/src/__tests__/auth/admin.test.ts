@@ -3,6 +3,8 @@ const { DbxClient } = require("../../../index.js");
 
 describe("DBX Admin Authentication Tests", () => {
   const TEST_BASE_URL = process.env.TEST_BASE_URL || "http://localhost:3000";
+  const TEST_ADMIN_USERNAME = "testadmin";
+  const TEST_ADMIN_PASSWORD = "password";
 
   it("should authenticate with the default admin user", async () => {
     const client = new DbxClient({
@@ -12,15 +14,13 @@ describe("DBX Admin Authentication Tests", () => {
     });
 
     try {
-      const result = await client.authenticate("testadmin", "password");
+      const result = await client.authenticate(
+        TEST_ADMIN_USERNAME,
+        TEST_ADMIN_PASSWORD
+      );
       expect(result).toBe(true);
-
-      const isAuth = await client.isAuthenticated();
-      expect(isAuth).toBe(true);
-
-      console.log("✅ Admin authentication successful");
+      expect(await client.isAuthenticated()).toBe(true);
     } catch (error) {
-      console.log("❌ Admin authentication failed:", error.message);
       throw error;
     }
   });
@@ -38,7 +38,6 @@ describe("DBX Admin Authentication Tests", () => {
       expect(error.message).toMatch(
         /user not found|invalid credentials|authentication/i
       );
-      console.log("✅ Wrong password correctly rejected:", error.message);
     }
   });
 
@@ -56,9 +55,7 @@ describe("DBX Admin Authentication Tests", () => {
     try {
       const setResult = await client.set("admin:test:key", "test value");
       expect(setResult.success).toBe(true);
-      console.log("✅ Authenticated data operation successful");
     } catch (error) {
-      console.log("❌ Authenticated operation failed:", error.message);
       throw error;
     }
   });

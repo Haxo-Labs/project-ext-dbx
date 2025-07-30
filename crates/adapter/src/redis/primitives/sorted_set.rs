@@ -13,17 +13,13 @@ mod script_constants {
 
 use crate::redis::RedisConnectionHandler;
 
-/// Represents a Redis sorted set data type with operations for manipulating sorted set values.
+/// Redis sorted set operations with pipeline and transaction support.
 ///
-/// This implementation supports:
-/// - Individual commands (zadd, zrem, zrange, zrank, etc.)
+/// Operations include:
+/// - Individual commands (zadd, zrem, etc.)
 /// - Pipelined operations (for efficiency)
 /// - Transactions (for atomicity)
 /// - Lua script execution (for complex operations)
-///
-/// # Examples
-///
-/// ```ignore
 #[derive(Clone)]
 pub struct RedisSortedSet {
     conn: Arc<Mutex<Connection>>,
@@ -438,7 +434,7 @@ impl RedisSortedSet {
 impl RedisSortedSet {
     /// Executes a transaction using MULTI/EXEC
     ///
-    /// This ensures all commands are executed atomically.
+    /// All commands execute atomically.
     /// If any command fails, the entire transaction is aborted.
     ///
     /// # Example

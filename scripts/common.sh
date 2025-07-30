@@ -37,15 +37,15 @@ NC='\033[0m' # No Color
 # =============================================================================
 
 log_info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
+    echo -e "${BLUE}INFO: $1${NC}"
 }
 
 log_success() {
-    echo -e "${GREEN}✅ $1${NC}"
+    echo -e "${GREEN}SUCCESS: $1${NC}"
 }
 
 log_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+    echo -e "${YELLOW}WARNING: $1${NC}"
 }
 
 log_error() {
@@ -53,13 +53,13 @@ log_error() {
 }
 
 log_debug() {
-    if [ "${DEBUG:-false}" = "true" ]; then
-        echo -e "${PURPLE}🔍 DEBUG: $1${NC}"
+    if [[ "${DBX_DEBUG:-}" == "true" ]]; then
+        echo -e "${PURPLE}DEBUG: $1${NC}"
     fi
 }
 
 log_step() {
-    echo -e "${CYAN}📋 $1${NC}"
+    echo -e "${CYAN}STEP: $1${NC}"
 }
 
 # =============================================================================

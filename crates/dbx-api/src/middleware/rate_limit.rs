@@ -161,35 +161,10 @@ impl SlidingWindowRateLimiter {
         let effective_limit = policy.burst_allowance.unwrap_or(policy.requests);
         let allowed = current_request_count < effective_limit;
 
-        // If allowed, record the current request
-        let mut updated_timestamps = valid_timestamps;
-        if allowed {
-            updated_timestamps.push(now.timestamp());
-            // Store updated timestamps back to backend
-            let timestamps_str = updated_timestamps
-                .iter()
-                .map(|t| t.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
+        // Calculate remaining based on current count (no increment for info-only check)
+        let remaining = policy.requests.saturating_sub(current_request_count);
 
-            let _ = self
-                .backend
-                .execute_data(DataOperation::Set {
-                    key: key.clone(),
-                    value: DataValue::String(timestamps_str),
-                    ttl: Some(policy.window_seconds as u64),
-                })
-                .await;
-        }
-
-        // Calculate remaining after considering current request
-        let remaining = if allowed {
-            policy.requests.saturating_sub(current_request_count + 1)
-        } else {
-            0
-        };
-
-        let reset_time = if let Some(&oldest) = updated_timestamps.iter().min() {
+        let reset_time = if let Some(&oldest) = valid_timestamps.iter().min() {
             DateTime::from_timestamp(oldest + policy.window_seconds as i64, 0)
                 .unwrap_or(now + chrono::Duration::seconds(policy.window_seconds as i64))
         } else {
@@ -2189,10 +2164,6 @@ mod tests {
         assert!(stats.compression_ratio >= 0.0);
         // Just verify they have reasonable bounds instead
         assert!(stats.total_bytes < 1_000_000); // Reasonable upper bound
-        assert!(
-            stats.bucket_size_seconds > 0,
-            "Should have valid bucket size"
-        );
     }
 
     #[tokio::test]

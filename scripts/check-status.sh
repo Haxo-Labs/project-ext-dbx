@@ -13,23 +13,24 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 log_info() {
-	echo -e "${BLUE}ℹ️  $1${NC}"
+    echo -e "${BLUE}INFO: $1${NC}"
 }
 
 log_success() {
-	echo -e "${GREEN}✅ $1${NC}"
+    echo -e "${GREEN}SUCCESS: $1${NC}"
 }
 
 log_warning() {
-	echo -e "${YELLOW}⚠️  $1${NC}"
+    echo -e "${YELLOW}WARNING: $1${NC}"
 }
 
 log_error() {
 	echo -e "${RED}❌ $1${NC}"
 }
 
-echo "🔍 DBX Project Status Check"
-echo "=========================="
+# Header
+echo "DBX Project Status Check"
+echo "========================"
 echo ""
 
 # Check current versions
@@ -144,7 +145,7 @@ fi
 
 # Check TypeScript dependencies
 if [ -d "bindings/redis_ts/node_modules" ]; then
-	echo "   ✅ TypeScript dependencies installed"
+	echo "   INSTALLED: TypeScript dependencies"
 else
 	echo "   ❌ TypeScript dependencies missing"
 	echo "      Run: cd bindings/redis_ts && npm install"
@@ -152,7 +153,7 @@ fi
 
 # Check TypeScript build
 if [ -d "bindings/redis_ts/dist" ]; then
-	echo "   ✅ TypeScript build exists"
+	echo "   EXISTS: TypeScript build"
 else
 	echo "   ❌ TypeScript build missing"
 	echo "      Run: cd bindings/redis_ts && npm run build"
@@ -176,7 +177,7 @@ echo "   • Manual publish: ./scripts/publish-release.sh --version <version>"
 echo "   • Docker only: ./scripts/publish.sh --tag <tag> --push"
 
 echo ""
-echo "🔧 Development:"
+echo "Development:"
 echo "   • Build Rust: cargo build --release"
 echo "   • Build TypeScript: cd bindings/redis_ts && npm run build"
 echo "   • Run tests (sequential): cd crates/adapter && cargo test && cd ../redis_api && cargo test && cd ../redis_client && cargo test"

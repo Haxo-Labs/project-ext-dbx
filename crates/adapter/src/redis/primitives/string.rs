@@ -14,17 +14,13 @@ mod script_constants {
 
 use crate::redis::RedisConnectionHandler;
 
-/// Represents a Redis string data type with operations for manipulating string values.
+/// Redis string operations with pipeline and transaction support.
 ///
-/// This implementation supports:
+/// Operations include:
 /// - Individual commands (get, set, etc.)
 /// - Pipelined operations (for efficiency)
 /// - Transactions (for atomicity)
 /// - Lua script execution (for complex operations)
-///
-/// # Examples
-///
-/// ```ignore
 #[derive(Clone)]
 pub struct RedisString {
     conn: Arc<Mutex<Connection>>,
@@ -263,7 +259,7 @@ impl RedisString {
 impl RedisString {
     /// Executes a transaction using MULTI/EXEC
     ///
-    /// This ensures all commands are executed atomically.
+    /// All commands execute atomically.
     /// If any command fails, the entire transaction is aborted.
     ///
     /// # Example

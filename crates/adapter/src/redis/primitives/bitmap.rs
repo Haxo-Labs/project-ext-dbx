@@ -4,9 +4,9 @@ use tracing::error;
 
 use crate::redis::RedisConnectionHandler;
 
-/// Represents a Redis bitmap (string treated as bit array) with operations for manipulating bitmap values.
+/// Redis bitmap operations with atomic transaction support.
 ///
-/// This implementation supports:
+/// Operations include:
 /// - Individual commands (setbit, getbit, bitcount, etc.)
 /// - Pipelined operations (for efficiency)
 /// - Transactions (for atomicity)
@@ -358,7 +358,7 @@ impl RedisBitmap {
 impl RedisBitmap {
     /// Executes a transaction using MULTI/EXEC
     ///
-    /// This ensures all commands are executed atomically.
+    /// All commands execute atomically.
     /// If any command fails, the entire transaction is aborted.
     ///
     /// # Example

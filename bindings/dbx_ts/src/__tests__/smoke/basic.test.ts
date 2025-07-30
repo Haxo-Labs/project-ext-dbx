@@ -15,8 +15,6 @@ describe("DBX API Smoke Tests", () => {
       const health = await client.health();
       expect(health.success).toBe(true);
       expect(health.data).toBeDefined();
-
-      console.log("✅ Health check response:", health);
     });
 
     it("should handle client configuration correctly", async () => {
@@ -40,8 +38,6 @@ describe("DBX API Smoke Tests", () => {
       expect(returnedConfig.poolSize).toBe(config.poolSize);
       expect(returnedConfig.autoRefreshToken).toBe(config.autoRefreshToken);
       expect(returnedConfig.enableLogging).toBe(config.enableLogging);
-
-      console.log("✅ Configuration test passed");
     });
 
     it("should handle authentication errors gracefully", async () => {
@@ -56,10 +52,6 @@ describe("DBX API Smoke Tests", () => {
       } catch (error) {
         expect(error.message).toMatch(
           /not authenticated|authentication|unauthorized/i
-        );
-        console.log(
-          "✅ Authentication error handled correctly:",
-          error.message
         );
       }
     });
@@ -77,7 +69,6 @@ describe("DBX API Smoke Tests", () => {
         expect.fail("Should have thrown connection error");
       } catch (error) {
         expect(error.message).toMatch(/network|connection|timeout|refused/i);
-        console.log("✅ Network error handled correctly:", error.message);
       }
     });
   });
@@ -94,7 +85,6 @@ describe("DBX API Smoke Tests", () => {
         expect.fail("Should have thrown validation error");
       } catch (error) {
         expect(error).toBeDefined();
-        console.log("✅ Configuration validation working:", error.message);
       }
     });
 
@@ -119,12 +109,6 @@ describe("DBX API Smoke Tests", () => {
         // But less than 10 seconds (reasonable upper bound)
         expect(duration).toBeGreaterThan(200); // At least some retry attempts
         expect(duration).toBeLessThan(10000); // But not forever
-
-        console.log(
-          `✅ Retry logic working: took ${duration}ms for ${
-            client.getConfig().maxRetries + 1
-          } attempts`
-        );
       }
     }, 15000);
   });
@@ -147,8 +131,6 @@ describe("DBX API Smoke Tests", () => {
       expect(typeof client.health).toBe("function");
       expect(typeof client.isAuthenticated).toBe("function");
       expect(typeof client.getConfig).toBe("function");
-
-      console.log("✅ All expected API methods are available");
     });
   });
 });

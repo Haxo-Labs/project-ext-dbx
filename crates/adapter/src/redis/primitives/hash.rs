@@ -4,10 +4,10 @@ use tracing::error;
 
 use crate::redis::RedisConnectionHandler;
 
-/// Represents a Redis hash data type with operations for manipulating hash values.
+/// Redis hash operations with pipeline and transaction support.
 ///
-/// This implementation supports:
-/// - Individual commands (hset, hget, hdel, hgetall, etc.)
+/// Operations include:
+/// - Individual commands (hget, hset, etc.)
 /// - Pipelined operations (for efficiency)
 /// - Transactions (for atomicity)
 /// - Lua script execution (for complex operations)

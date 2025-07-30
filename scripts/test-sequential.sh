@@ -76,7 +76,7 @@ if [ "$VERBOSE" = true ]; then
     set -x
 fi
 
-echo "🧪 DBX Sequential Testing"
+echo "DBX Sequential Testing"
 echo "========================="
 echo ""
 
@@ -124,21 +124,20 @@ if [ "$SKIP_TYPESCRIPT" = false ]; then
         exit 1
     fi
 else
-    log_info "⏭️  Skipping TypeScript tests (--skip-typescript flag)"
+    log_info "Skipping TypeScript tests (--skip-typescript flag)"
 fi
 
-echo ""
-log_success "🎉 All tests passed successfully!"
-echo ""
-echo "📊 Test Summary:"
-echo "   ✅ Adapter tests: PASSED"
-echo "   ✅ API tests: PASSED"
-echo "   ✅ Client tests: PASSED"
-if [ "$SKIP_TYPESCRIPT" = false ]; then
-    echo "   ✅ TypeScript tests: PASSED"
+log_success "All tests passed successfully!"
+
+echo "Test Summary:"
+echo "   PASSED: Adapter tests"
+echo "   PASSED: API tests"
+echo "   PASSED: Client tests"
+if [[ "$SKIP_TYPESCRIPT" != "true" ]]; then
+    echo "   PASSED: TypeScript tests"
 else
-    echo "   ⏭️  TypeScript tests: SKIPPED"
+    echo "   SKIPPED: TypeScript tests"
 fi
 
 echo ""
-log_info "Ready for publishing! 🚀" 
+log_info "Ready for publishing!" 
