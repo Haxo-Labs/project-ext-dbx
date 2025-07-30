@@ -25,6 +25,12 @@ pub enum ConnectionError {
 
     #[error("Connection pool exhausted: {0}")]
     PoolExhausted(String),
+
+    #[error("Query execution failed: {0}")]
+    QueryFailed(String),
+
+    #[error("Invalid configuration: {0}")]
+    InvalidConfiguration(String),
 }
 
 /// A generic operation error
