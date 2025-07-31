@@ -91,7 +91,8 @@ async fn test_validate_inheritance_chain_cycle() {
 
     // Set up roles in registry: A -> B
     {
-        let mut registry = rbac.role_registry.write().unwrap();
+        let role_registry = rbac.get_role_registry();
+        let mut registry = role_registry.write().unwrap();
 
         let role_a = Role::new(
             "role_a".to_string(),
@@ -142,7 +143,8 @@ async fn test_validate_inheritance_chain_deep_cycle() {
 
     // Set up deep chain: A -> B -> C -> D
     {
-        let mut registry = rbac.role_registry.write().unwrap();
+        let role_registry = rbac.get_role_registry();
+        let mut registry = role_registry.write().unwrap();
 
         let role_a = Role::new(
             "role_a".to_string(),
@@ -196,7 +198,8 @@ async fn test_validate_inheritance_chain_depth_limit() {
 
     // Set up chain that exceeds depth: A -> B -> C
     {
-        let mut registry = rbac.role_registry.write().unwrap();
+        let role_registry = rbac.get_role_registry();
+        let mut registry = role_registry.write().unwrap();
 
         let role_a = Role::new(
             "role_a".to_string(),
@@ -240,7 +243,8 @@ async fn test_validate_inheritance_chain_multiple_parents() {
 
     // Set up: A -> B, A -> C, C -> D
     {
-        let mut registry = rbac.role_registry.write().unwrap();
+        let role_registry = rbac.get_role_registry();
+        let mut registry = role_registry.write().unwrap();
 
         let role_a = Role::new(
             "role_a".to_string(),
@@ -293,7 +297,8 @@ async fn test_validate_inheritance_chain_valid_cases() {
 
     // Set up valid chain: A -> B -> C
     {
-        let mut registry = rbac.role_registry.write().unwrap();
+        let role_registry = rbac.get_role_registry();
+        let mut registry = role_registry.write().unwrap();
 
         let role_a = Role::new(
             "role_a".to_string(),

@@ -579,7 +579,7 @@ impl RbacService {
     }
 
     /// Validate role inheritance to prevent cycles
-    fn validate_inheritance_chain(
+    pub fn validate_inheritance_chain(
         &self,
         role_name: &str,
         inherits_from: &[String],

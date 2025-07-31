@@ -47,7 +47,7 @@ fn test_server_error_display() {
     ));
 
     // Test Display implementation
-    let db_error = ServerError::DatabaseConnection("Connection failed".to_string());
+    let _db_error = ServerError::DatabaseConnection("Connection failed".to_string());
 
     // Check that error string representation is meaningful
     assert!(config_error.to_string().contains("JWT_SECRET"));
@@ -55,11 +55,11 @@ fn test_server_error_display() {
     let config_error = ServerError::Configuration(ConfigError::InvalidJwtSecret);
 
     // Test Debug implementation
-    let db_error = ServerError::DatabaseConnection("Connection failed".to_string());
+    let _db_error = ServerError::DatabaseConnection("Connection failed".to_string());
 
     // Check that debug representation is meaningful
     format!("{:?}", config_error);
-    format!("{:?}", db_error);
+    format!("{:?}", _db_error);
 }
 
 #[test]
@@ -117,9 +117,9 @@ fn test_error_source() {
     // Test Error trait implementation
 
     // Create ConfigError cases
-    let missing_env = ConfigError::MissingEnvironmentVariable("TEST_VAR".to_string());
+    let _missing_env = ConfigError::MissingEnvironmentVariable("TEST_VAR".to_string());
 
-    let invalid_jwt = ConfigError::InvalidJwtSecret;
+    let _invalid_jwt = ConfigError::InvalidJwtSecret;
 
-    let missing_password = ConfigError::MissingDefaultAdminPassword;
+    let _missing_password = ConfigError::MissingDefaultAdminPassword;
 }

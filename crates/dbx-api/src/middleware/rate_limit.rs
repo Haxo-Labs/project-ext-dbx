@@ -325,7 +325,7 @@ impl SlidingWindowRateLimiter {
 
 /// Bit vector rate limiter
 pub struct BitVectorRateLimiter {
-    backend: Arc<dyn UniversalBackend>,
+    pub backend: Arc<dyn UniversalBackend>,
     bucket_size_seconds: u32, // Size of each time bucket in seconds
 }
 
@@ -333,15 +333,15 @@ pub struct BitVectorRateLimiter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitBitVector {
     /// Bit vector where each bit represents a time bucket
-    bits: Vec<u8>,
+    pub bits: Vec<u8>,
     /// Timestamp of the first bucket (bucket 0)
-    start_timestamp: i64,
+    pub start_timestamp: i64,
     /// Size of each bucket in seconds
-    bucket_size_seconds: u32,
+    pub bucket_size_seconds: u32,
     /// Total number of buckets
-    bucket_count: usize,
+    pub bucket_count: usize,
     /// Request count per bucket (optional, for more accurate counting)
-    bucket_counts: Option<Vec<u16>>, // u16 allows up to 65535 requests per bucket
+    pub bucket_counts: Option<Vec<u16>>, // u16 allows up to 65535 requests per bucket
 }
 
 impl BitVectorRateLimiter {
