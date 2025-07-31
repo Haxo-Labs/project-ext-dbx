@@ -20,7 +20,7 @@ use dbx_core::{
 };
 
 /// PostgreSQL backend with JSONB storage and TTL support
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PostgresBackend {
     pool: Arc<PostgresConnectionPool>,
     backend_name: String,

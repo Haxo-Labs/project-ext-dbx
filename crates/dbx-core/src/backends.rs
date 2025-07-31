@@ -102,7 +102,7 @@ pub enum TransactionSupport {
 }
 
 /// Backend-specific features
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendFeature {
     JsonSupport,

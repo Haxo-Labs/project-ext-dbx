@@ -254,6 +254,11 @@ impl DataResult {
             error: None,
         }
     }
+
+    /// Check if the result represents a successful operation
+    pub fn is_success(&self) -> bool {
+        self.success
+    }
 }
 
 impl QueryResult {

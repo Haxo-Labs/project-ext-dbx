@@ -16,6 +16,15 @@ pub struct RedisConnectionPool {
     url: String,
 }
 
+impl std::fmt::Debug for RedisConnectionPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisConnectionPool")
+            .field("url", &self.url)
+            .field("pool_status", &"<pool>")
+            .finish()
+    }
+}
+
 impl RedisConnectionPool {
     /// Create a new Redis connection pool
     pub fn new(redis_url: &str, _max_connections: usize) -> Result<Self, AdapterError> {

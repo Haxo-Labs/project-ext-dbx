@@ -18,6 +18,7 @@ use dbx_core::{
 };
 
 /// Redis backend implementation for DBX using async connection pool
+#[derive(Debug)]
 pub struct RedisBackend {
     pool: Arc<RedisConnectionPool>,
     backend_name: String,

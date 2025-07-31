@@ -7,6 +7,10 @@ pub mod backend;
 pub mod client;
 pub mod factory;
 
+#[cfg(test)]
+mod tests;
+
 // Re-export key types
 pub use backend::PostgresBackend;
 pub use client::PostgresConnectionPool;
+pub use factory::PostgresBackendFactory;

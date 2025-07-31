@@ -26,6 +26,7 @@ pub mod test_helpers {
 
     /// Mock backend for testing
     #[derive(Clone)]
+    #[derive(Debug)]
     pub struct MockBackend {
         name: String,
         data: Arc<RwLock<HashMap<String, String>>>,
@@ -855,6 +856,10 @@ pub mod test_helpers {
             // Register Redis backend factory for completeness
             let redis_factory = dbx_adapter::redis::factory::RedisBackendFactory::new();
             registry_builder = registry_builder.with_factory("redis", redis_factory);
+
+            // Register PostgreSQL backend factory for completeness
+            let postgres_factory = dbx_adapter::postgres::factory::PostgresBackendFactory::new();
+            registry_builder = registry_builder.with_factory("postgresql", postgres_factory);
 
             // Register mock backend factory with data population control
             let mock_factory = if self.populate_data {

@@ -154,72 +154,6 @@ impl AppState {
         Self::create_app_state_from_configs(app_config, config).await
     }
 
-    /// Create new application state directly from AppConfig and DbxConfig (for testing)
-    pub async fn new_with_config(
-        app_config: AppConfig,
-        dbx_config: DbxConfig,
-    ) -> Result<Self, ServerError> {
-        // Build backend registry
-        let mut registry_builder = dbx_router::registry::BackendRegistryBuilder::new();
-
-        // Register Redis backend factory
-        let redis_factory = dbx_adapter::redis::factory::RedisBackendFactory::new();
-        registry_builder = registry_builder.with_factory("redis", redis_factory);
-
-        // Build the registry
-        let registry = registry_builder.build();
-
-        // Initialize backends from configuration
-        registry
-            .initialize_backends(&dbx_config)
-            .await
-            .map_err(|e| {
-                ServerError::DatabaseConnection(format!("Failed to initialize backends: {}", e))
-            })?;
-
-        // Create backend router
-        let backend_router =
-            dbx_router::BackendRouter::new(registry, &dbx_config).map_err(|e| {
-                ServerError::DatabaseConnection(format!("Failed to create router: {}", e))
-            })?;
-
-        // Get default backend configuration for auth services
-        let default_backend_name = &dbx_config.routing.default_backend;
-        let _default_backend = dbx_config
-            .backends
-            .get(default_backend_name)
-            .ok_or_else(|| {
-                ServerError::Configuration(ConfigError::MissingEnvironmentVariable(format!(
-                    "Default backend '{}' not found in configuration",
-                    default_backend_name
-                )))
-            })?;
-
-        // Get the backend instance from the router for auth services
-        let auth_backend = backend_router
-            .get_backend(default_backend_name)
-            .await
-            .ok_or_else(|| {
-                ServerError::DatabaseConnection(format!(
-                    "Auth backend '{}' not available",
-                    default_backend_name
-                ))
-            })?;
-
-        // Create backend-agnostic auth services using the configured default backend
-        let (user_store, jwt_service, api_key_service, rbac_service, rate_limit_service) =
-            Self::create_auth_services(&app_config, auth_backend).await?;
-
-        Ok(Self {
-            backend_router: Arc::new(backend_router),
-            jwt_service,
-            user_store,
-            api_key_service,
-            rbac_service,
-            rate_limit_service,
-        })
-    }
-
     /// Common method to create AppState from both configs
     async fn create_app_state_from_configs(
         app_config: AppConfig,
@@ -231,6 +165,10 @@ impl AppState {
         // Register Redis backend factory
         let redis_factory = dbx_adapter::redis::factory::RedisBackendFactory::new();
         registry_builder = registry_builder.with_factory("redis", redis_factory);
+
+        // Register PostgreSQL backend factory
+        let postgres_factory = dbx_adapter::postgres::factory::PostgresBackendFactory::new();
+        registry_builder = registry_builder.with_factory("postgresql", postgres_factory);
 
         // Build the registry
         let registry = registry_builder.build();

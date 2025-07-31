@@ -139,6 +139,10 @@ impl TestServer {
         let redis_factory = dbx_adapter::redis::factory::RedisBackendFactory::new();
         registry_builder = registry_builder.with_factory("redis", redis_factory);
 
+        // Register PostgreSQL backend factory
+        let postgres_factory = dbx_adapter::postgres::factory::PostgresBackendFactory::new();
+        registry_builder = registry_builder.with_factory("postgresql", postgres_factory);
+
         // Register mock backend factory for tests
         let mock_factory = dbx_api::test_helpers::MockBackendFactory::new();
         registry_builder = registry_builder.with_factory("mock", mock_factory);

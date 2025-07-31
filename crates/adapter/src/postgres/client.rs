@@ -11,7 +11,7 @@ use tokio_postgres::NoTls;
 pub type ConnectionResult<T> = Result<T, AdapterError>;
 
 /// High-performance PostgreSQL connection pool using deadpool-postgres
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PostgresConnectionPool {
     pool: Pool,
     url: String,

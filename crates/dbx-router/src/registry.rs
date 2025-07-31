@@ -115,6 +115,19 @@ impl BackendRegistry {
             .collect()
     }
 
+    /// Check if a factory is registered for a provider
+    pub fn has_factory(&self, provider: &str) -> bool {
+        self.factories.contains_key(provider)
+    }
+
+    /// Get all registered provider names
+    pub fn get_provider_names(&self) -> Vec<String> {
+        self.factories
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
     /// Get backends that support a specific capability/operation
     pub async fn get_backends_with_capability(&self, operation_type: &str) -> Vec<String> {
         let mut capable_backends = Vec::new();
