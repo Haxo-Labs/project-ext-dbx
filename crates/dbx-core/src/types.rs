@@ -371,4 +371,3 @@ impl Default for DatabaseConfig {
         }
     }
 }
-

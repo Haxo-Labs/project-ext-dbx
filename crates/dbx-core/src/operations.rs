@@ -288,4 +288,3 @@ impl From<Vec<DataValue>> for DataValue {
         DataValue::Array(vec)
     }
 }
-

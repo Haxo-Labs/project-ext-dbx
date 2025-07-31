@@ -307,7 +307,7 @@ pub fn extract_client_ip_info(
 }
 
 /// Validates Host header to prevent injection attacks
-fn validate_host_header(host: &str, config: &SecurityConfig) -> Result<(), &'static str> {
+pub fn validate_host_header(host: &str, config: &SecurityConfig) -> Result<(), &'static str> {
     let host_config = &config.host_validation;
 
     // Skip validation if disabled
@@ -367,7 +367,7 @@ fn validate_host_header(host: &str, config: &SecurityConfig) -> Result<(), &'sta
 }
 
 /// Parse host header into hostname and optional port
-fn parse_host_and_port(host: &str) -> Result<(&str, Option<u16>), &'static str> {
+pub fn parse_host_and_port(host: &str) -> Result<(&str, Option<u16>), &'static str> {
     // Handle IPv6 addresses with brackets
     if host.starts_with('[') {
         if let Some(bracket_end) = host.find(']') {
@@ -808,4 +808,3 @@ pub async fn development_security_middleware(
             .into_response()
     }
 }
-

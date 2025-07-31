@@ -1,7 +1,7 @@
 //! Security middleware tests
 
-use crate::middleware::security::*;
 use crate::config::{CorsConfig, SecurityConfig, SecurityHeadersConfig};
+use crate::middleware::security::*;
 
 fn create_test_security_config() -> SecurityConfig {
     let mut host_config = HostValidationConfig::default();
@@ -307,4 +307,3 @@ fn test_parse_host_and_port() {
     assert!(parse_host_and_port("example.com:abc").is_err()); // Invalid port
     assert!(parse_host_and_port("[invalid::ipv6]").is_err()); // Invalid IPv6
 }
-

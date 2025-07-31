@@ -1,7 +1,7 @@
 //! Backend trait and capability tests
 
-use crate::*;
 use super::utils;
+use crate::*;
 use serde_json;
 
 #[test]
@@ -508,4 +508,3 @@ fn test_backend_stats_without_storage() {
     assert_eq!(deserialized.operations.total_operations, 1000);
     assert_eq!(deserialized.performance.avg_response_time_ms, 10.0);
 }
-

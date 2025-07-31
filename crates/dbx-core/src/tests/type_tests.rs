@@ -1,7 +1,7 @@
 //! Core type tests (DataValue, DataResult, etc.)
 
-use crate::*;
 use super::utils;
+use crate::*;
 use serde_json;
 use std::collections::HashMap;
 
@@ -25,8 +25,7 @@ fn test_data_result_success_with_metadata() {
     let data = DataValue::String("test_value".to_string());
     let metadata = ResultMetadata::new("redis".to_string(), 100);
 
-    let result =
-        DataResult::success_with_metadata(operation_id, data.clone(), metadata.clone());
+    let result = DataResult::success_with_metadata(operation_id, data.clone(), metadata.clone());
 
     assert_eq!(result.operation_id, operation_id);
     assert!(result.success);
@@ -388,4 +387,3 @@ fn test_security_config() {
     assert!(security_config.audit_logging);
     assert!(security_config.rate_limiting.is_some());
 }
-
