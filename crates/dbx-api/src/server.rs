@@ -341,7 +341,7 @@ impl AppState {
 }
 
 /// Health check endpoint
-async fn health_check() -> axum::Json<ApiResponse<String>> {
+pub async fn health_check() -> axum::Json<ApiResponse<String>> {
     axum::Json(ApiResponse::success("Server is running".to_string()))
 }
 
@@ -548,7 +548,7 @@ pub async fn create_app(state: AppState) -> Result<Router, ServerError> {
 
 /// Helper function to create test AppConfig without blocking calls (available in test mode)
 #[cfg(test)]
-fn create_test_app_config() -> AppConfig {
+pub fn create_test_app_config() -> AppConfig {
     AppConfig {
         server: crate::config::ServerConfig {
             host: "127.0.0.1".to_string(),
