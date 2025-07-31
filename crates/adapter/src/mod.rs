@@ -13,12 +13,3 @@ pub mod redis;
 // pub mod mongodb;
 // pub mod dynamodb;
 // pub mod elasticsearch;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_adapter_module_exists() {
-        // Module compilation verification
-        assert!(true);
-    }
-}

@@ -1,13 +1,13 @@
-//! DBX Adapter test modules
-//!
-//! Tests are organized by functionality for maintainability and clarity.
-//! Each module focuses on a specific aspect of the adapter implementation.
+//! Adapter test modules
 
-/// Shared test utilities and helper functions
-pub mod utils;
+/// Library version and basic functionality tests
+mod lib_tests;
 
-/// Redis backend tests
+/// PostgreSQL adapter tests
+mod postgres_tests;
+
+/// Redis adapter tests
 mod redis_tests;
 
-/// PostgreSQL backend tests  
-mod postgres_tests;
+/// Shared test utilities
+mod utils;

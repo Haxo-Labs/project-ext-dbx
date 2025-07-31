@@ -1,29 +1,25 @@
-//! DBX API test modules
-//!
-//! Tests are organized by functionality for maintainability and clarity.
-//! Each module focuses on a specific aspect of the API implementation.
-
-/// Shared test utilities and helper functions
-pub mod utils;
-
-/// Model serialization and validation tests  
-mod model_tests;
-
-/// Configuration and environment tests
-mod config_tests;
+//! Test modules for DBX API
 
 /// Authentication and authorization tests
 mod auth_tests;
+
+/// Configuration tests
+mod config_tests;
+
+/// Main application tests
+mod main_tests;
+
+/// Middleware tests
+mod middleware_tests;
+
+/// Model serialization and validation tests
+mod model_tests;
 
 /// Route handler tests
 mod route_tests;
 
 /// Server initialization and lifecycle tests
-// TODO: Add server tests when extracted from server.rs
-// mod server_tests;
+mod server_tests;
 
-/// Middleware functionality tests
-mod middleware_tests;
-
-/// Main application tests
-mod main_tests;
+/// Shared test utilities
+mod utils;
