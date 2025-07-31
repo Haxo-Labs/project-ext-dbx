@@ -9,7 +9,7 @@ use crate::{
 /// Backend trait that all database implementations must implement
 /// Database-agnostic interface for all operations
 #[async_trait]
-pub trait UniversalBackend: Send + Sync {
+pub trait UniversalBackend: std::fmt::Debug + Send + Sync {
     /// Get the name of this backend
     fn name(&self) -> &str;
 
