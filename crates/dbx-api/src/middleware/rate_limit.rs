@@ -331,7 +331,7 @@ pub struct BitVectorRateLimiter {
 
 /// Bit vector data structure for rate limiting
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RateLimitBitVector {
+pub struct RateLimitBitVector {
     /// Bit vector where each bit represents a time bucket
     bits: Vec<u8>,
     /// Timestamp of the first bucket (bucket 0)
@@ -1462,7 +1462,7 @@ impl PolicyRateLimitService {
     }
 }
 
-fn extract_identifier_from_request(
+pub fn extract_identifier_from_request(
     headers: &HeaderMap,
     connect_info: Option<&std::net::SocketAddr>,
     auth_context: Option<&str>,

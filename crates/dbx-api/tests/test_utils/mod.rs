@@ -144,7 +144,7 @@ impl TestServer {
         registry_builder = registry_builder.with_factory("postgresql", postgres_factory);
 
         // Register mock backend factory for tests
-        let mock_factory = crate::test_helpers::MockBackendFactory::new();
+        let mock_factory = dbx_api::test_helpers::MockBackendFactory::new();
         registry_builder = registry_builder.with_factory("mock", mock_factory);
 
         // Build the registry

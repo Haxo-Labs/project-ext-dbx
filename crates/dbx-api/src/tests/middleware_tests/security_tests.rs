@@ -1,6 +1,6 @@
 //! Security middleware tests
 
-use crate::config::{CorsConfig, SecurityConfig, SecurityHeadersConfig};
+use crate::config::{CorsConfig, HostValidationConfig, SecurityConfig, SecurityHeadersConfig};
 use crate::middleware::security::*;
 
 fn create_test_security_config() -> SecurityConfig {

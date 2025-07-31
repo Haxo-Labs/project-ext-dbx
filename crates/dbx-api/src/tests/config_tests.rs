@@ -1,8 +1,12 @@
+//! Configuration module tests
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+
+    use crate::config::{AppConfig, ConfigError, DatabaseType, JwtConfig};
     use serial_test::serial;
     use std::env;
+    use std::str::FromStr;
 
     fn clear_env_vars() {
         env::remove_var("HOST");

@@ -1,7 +1,7 @@
-//! API key management tests
+//! API key authentication tests
 
 use crate::auth::api_keys::*;
-use crate::models::{ApiKey, UserRole};
+use crate::models::{ApiKeyPermission, ApiKeyUsageStats, CreateApiKeyRequest, UserRole};
 
 #[test]
 fn test_generate_api_key() {

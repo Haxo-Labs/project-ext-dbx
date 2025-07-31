@@ -2,9 +2,9 @@
 
 use crate::auth::permissions::{Permission, PermissionType};
 use crate::auth::rbac::*;
-use crate::models::UserRole;
+use crate::auth::Role;
 use crate::models::{AuditEventType, AuditQueryParams, PermissionCheckContext};
-use crate::test_helpers;
+use dbx_core::UniversalBackend;
 use std::sync::Arc;
 
 fn create_test_rbac_config() -> RbacConfig {

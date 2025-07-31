@@ -1,7 +1,6 @@
 //! Permission system tests
 
 use crate::auth::permissions::*;
-use crate::models::UserRole;
 
 #[test]
 fn test_all_permission_types_completeness() {

@@ -50,3 +50,8 @@ tower = { version = "0.4", features = ["util"] }
 axum-test = "15.4.0"
 reqwest = { workspace = true }
 serial_test = "3.0"
+
+[[test]]
+name = "integration_tests"
+path = "tests/integration_tests.rs"
+required-features = ["test-utils"]

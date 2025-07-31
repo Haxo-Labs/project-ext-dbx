@@ -115,7 +115,6 @@ fn test_config_error_types() {
 #[test]
 fn test_error_source() {
     // Test Error trait implementation
-    use std::error::Error;
 
     // Create ConfigError cases
     let missing_env = ConfigError::MissingEnvironmentVariable("TEST_VAR".to_string());

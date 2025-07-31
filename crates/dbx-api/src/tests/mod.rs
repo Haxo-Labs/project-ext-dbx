@@ -19,7 +19,8 @@ mod auth_tests;
 mod route_tests;
 
 /// Server initialization and lifecycle tests
-mod server_tests;
+// TODO: Add server tests when extracted from server.rs
+// mod server_tests;
 
 /// Middleware functionality tests
 mod middleware_tests;

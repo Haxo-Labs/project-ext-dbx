@@ -7,4 +7,4 @@ mod api_key_tests;
 mod permission_tests;
 
 /// Role-based access control tests
-mod rbac_tests; 
+mod rbac_tests;

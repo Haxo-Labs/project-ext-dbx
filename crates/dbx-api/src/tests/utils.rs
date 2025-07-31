@@ -69,15 +69,3 @@ pub fn create_test_backend_config() -> BackendConfig {
 pub fn create_test_backend_factory() -> MockBackendFactory {
     MockBackendFactory::new()
 }
-
-/// Macro to skip tests if required environment is not available
-macro_rules! skip_if_env_not_set {
-    ($env_var:expr) => {
-        if env::var($env_var).is_err() {
-            eprintln!("Skipping test: {} not set", $env_var);
-            return;
-        }
-    };
-}
-
-pub(crate) use skip_if_env_not_set;
