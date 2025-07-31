@@ -45,21 +45,12 @@ fn test_server_error_display() {
     let config_error = ServerError::Configuration(ConfigError::MissingEnvironmentVariable(
         "JWT_SECRET".to_string(),
     ));
-
-    // Test Display implementation
     let _db_error = ServerError::DatabaseConnection("Connection failed".to_string());
-
-    // Check that error string representation is meaningful
     assert!(config_error.to_string().contains("JWT_SECRET"));
-
     let config_error = ServerError::Configuration(ConfigError::InvalidJwtSecret);
-
-    // Test Debug implementation
     let _db_error = ServerError::DatabaseConnection("Connection failed".to_string());
-
-    // Check that debug representation is meaningful
-    format!("{:?}", config_error);
-    format!("{:?}", _db_error);
+    let _config_debug = format!("{:?}", config_error);
+    let _db_debug = format!("{:?}", _db_error);
 }
 
 #[test]

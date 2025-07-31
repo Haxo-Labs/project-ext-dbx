@@ -1,71 +1,116 @@
-//! Shared test utilities for DBX API tests
+//! Test utilities for DBX API
 
-use std::env;
-use std::sync::Once;
+#[cfg(test)]
+mod test_helpers {
+    use dbx_config::BackendConfig;
+    use dbx_core::UniversalBackend;
+    use dbx_router::error::RouterError;
+    use dbx_router::registry::BackendFactory;
+    use std::sync::Arc;
 
-use crate::test_helpers::{create_mock_backend, create_mock_backend_with_data, MockBackendFactory};
-use dbx_config::BackendConfig;
-use dbx_core::UniversalBackend;
-use std::sync::Arc;
-
-/// Ensures test setup is only done once across all tests
-static INIT: Once = Once::new();
-
-/// Initialize test environment
-pub fn init_test_env() {
-    INIT.call_once(|| {
-        // Set test environment variables
-        env::set_var("JWT_SECRET", "test-jwt-secret-for-testing-only");
-        env::set_var("RUST_LOG", "debug");
-        println!("Test environment initialized");
-    });
-}
-
-/// Utility for testing with environment variables
-pub fn with_env_var<F>(key: &str, value: Option<&str>, test: F)
-where
-    F: FnOnce(),
-{
-    let original = env::var(key).ok();
-
-    match value {
-        Some(val) => env::set_var(key, val),
-        None => env::remove_var(key),
+    /// Mock backend implementation for testing
+    #[derive(Clone, Debug)]
+    pub struct MockBackend {
+        pub name: String,
     }
 
-    test();
+    /// Mock backend factory for testing
+    pub struct MockBackendFactory;
 
-    match original {
-        Some(val) => env::set_var(key, val),
-        None => env::remove_var(key),
+    #[async_trait::async_trait]
+    impl BackendFactory for MockBackendFactory {
+        async fn create_backend(
+            &self,
+            name: &str,
+            _config: &BackendConfig,
+        ) -> Result<Arc<dyn UniversalBackend>, RouterError> {
+            Ok(Arc::new(MockBackend {
+                name: name.to_string(),
+            }))
+        }
+
+        fn provider_name(&self) -> &str {
+            "mock"
+        }
+
+        fn validate_config(&self, _config: &BackendConfig) -> Result<(), RouterError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl UniversalBackend for MockBackend {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn capabilities(&self) -> dbx_core::BackendCapabilities {
+            dbx_core::BackendCapabilities::default()
+        }
+
+        async fn execute_data(
+            &self,
+            _operation: dbx_core::DataOperation,
+        ) -> Result<dbx_core::DataResult, dbx_core::DbxError> {
+            Ok(dbx_core::DataResult::success(
+                uuid::Uuid::new_v4(),
+                dbx_core::DataValue::Bool(true),
+            ))
+        }
+
+        async fn execute_query(
+            &self,
+            _operation: dbx_core::QueryOperation,
+        ) -> Result<dbx_core::QueryResult, dbx_core::DbxError> {
+            Ok(dbx_core::QueryResult::success(uuid::Uuid::new_v4(), vec![]))
+        }
+
+        async fn execute_stream(
+            &self,
+            _operation: dbx_core::StreamOperation,
+        ) -> Result<dbx_core::StreamResult, dbx_core::DbxError> {
+            Ok(dbx_core::StreamResult::Published {
+                channel: "test".to_string(),
+                message_id: "test".to_string(),
+            })
+        }
+
+        async fn health_check(&self) -> Result<dbx_core::BackendHealth, dbx_core::DbxError> {
+            Ok(dbx_core::BackendHealth {
+                status: dbx_core::HealthStatus::Healthy,
+                response_time_ms: Some(1),
+                details: None,
+                last_check: chrono::Utc::now(),
+            })
+        }
+
+        async fn get_stats(&self) -> Result<dbx_core::BackendStats, dbx_core::DbxError> {
+            Ok(dbx_core::BackendStats {
+                connections: dbx_core::ConnectionStats {
+                    active: 1,
+                    idle: 0,
+                    total: 1,
+                    max_pool_size: 1,
+                },
+                operations: dbx_core::OperationStats {
+                    total_operations: 0,
+                    successful_operations: 0,
+                    failed_operations: 0,
+                    operations_per_second: 0.0,
+                },
+                performance: dbx_core::PerformanceStats {
+                    avg_response_time_ms: 0.0,
+                    p95_response_time_ms: 0.0,
+                    p99_response_time_ms: 0.0,
+                },
+                storage: None,
+            })
+        }
+
+        async fn test_connection(&self) -> Result<(), dbx_core::DbxError> {
+            Ok(())
+        }
     }
 }
 
-/// Create a mock backend for testing
-pub fn create_test_backend() -> Arc<dyn UniversalBackend> {
-    create_mock_backend()
-}
-
-/// Create a mock backend with pre-populated test data
-pub async fn create_test_backend_with_data() -> Arc<dyn UniversalBackend> {
-    create_mock_backend_with_data().await
-}
-
-/// Create a test backend configuration
-pub fn create_test_backend_config() -> BackendConfig {
-    BackendConfig {
-        provider: "mock".to_string(),
-        url: "mock://test".to_string(),
-        pool_size: Some(1),
-        timeout_ms: Some(1000),
-        retry_attempts: Some(1),
-        retry_delay_ms: Some(100),
-        capabilities: None,
-        additional_config: std::collections::HashMap::new(),
-    }
-}
-
-/// Create a mock backend factory for testing
-pub fn create_test_backend_factory() -> MockBackendFactory {
-    MockBackendFactory::new()
-}
+pub use test_helpers::{MockBackend, MockBackendFactory};

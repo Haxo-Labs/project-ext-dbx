@@ -8,13 +8,15 @@ fn init() {
     dotenv::dotenv().ok();
 }
 
-/// Get Redis URL from environment variable with fallback to default
+/// Get test Redis URL with fallback to localhost
 pub fn get_test_redis_url() -> String {
-    env::var("REDIS_URL").unwrap_or_else(|_| "redis://default:redispw@localhost:55000".to_string())
+    // Use TEST_REDIS_URL for test-specific configuration
+    env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string())
 }
 
-/// Get PostgreSQL URL from environment variable with fallback to default
+/// Get test PostgreSQL URL with fallback to localhost
 pub fn get_test_postgres_url() -> String {
-    env::var("POSTGRES_URL")
+    // Use TEST_POSTGRES_URL for test-specific configuration
+    env::var("TEST_POSTGRES_URL")
         .unwrap_or_else(|_| "postgresql://postgres:postgres@localhost:5432/dbx_test".to_string())
 }

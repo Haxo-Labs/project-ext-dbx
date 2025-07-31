@@ -1,8 +1,8 @@
-//! Redis factory test modules
+//! Redis factory tests
 
 use crate::redis::factory::RedisBackendFactory;
 use dbx_config::BackendConfig;
-use dbx_core::BackendFactory;
+use dbx_router::registry::BackendFactory;
 
 #[test]
 fn test_redis_factory_provider_name() {

@@ -6,7 +6,7 @@
 use dbx_adapter::postgres::factory::PostgresBackendFactory;
 use dbx_adapter::redis::factory::RedisBackendFactory;
 use dbx_config::BackendConfig;
-use dbx_core::{DataOperation, DataValue, UniversalBackend};
+use dbx_core::{DataOperation, DataValue};
 use dbx_router::registry::{BackendFactory, BackendRegistryBuilder};
 use std::collections::HashMap;
 use std::env;
@@ -43,9 +43,7 @@ async fn is_redis_available() -> bool {
     let url = get_test_redis_url();
     match Client::open(url) {
         Ok(client) => match client.get_connection() {
-            Ok(mut conn) => {
-                redis::cmd("PING").query::<String>(&mut conn).is_ok()
-            }
+            Ok(mut conn) => redis::cmd("PING").query::<String>(&mut conn).is_ok(),
             Err(_) => false,
         },
         Err(_) => false,

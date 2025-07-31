@@ -1,8 +1,8 @@
-//! PostgreSQL factory test modules
+//! PostgreSQL factory tests
 
 use crate::postgres::factory::PostgresBackendFactory;
 use dbx_config::BackendConfig;
-use dbx_core::BackendFactory;
+use dbx_router::registry::BackendFactory;
 
 #[test]
 fn test_factory_creation() {
