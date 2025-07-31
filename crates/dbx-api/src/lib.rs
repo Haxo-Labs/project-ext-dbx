@@ -6,6 +6,9 @@ pub mod models;
 pub mod routes;
 pub mod server;
 
+#[cfg(test)]
+mod tests;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_helpers {
     use dbx_core::{
@@ -25,8 +28,7 @@ pub mod test_helpers {
         Lazy::new(|| Arc::new(RwLock::new(HashMap::new())));
 
     /// Mock backend for testing
-    #[derive(Clone)]
-    #[derive(Debug)]
+    #[derive(Clone, Debug)]
     pub struct MockBackend {
         name: String,
         data: Arc<RwLock<HashMap<String, String>>>,
