@@ -26,7 +26,7 @@ async fn test_backend_capabilities() {
     let backend = utils::create_test_backend().await.unwrap();
     let capabilities = backend.capabilities();
 
-    // Verify comprehensive data operations support
+    // Verify data operations support
     let expected_ops = [
         DataOperationType::Get,
         DataOperationType::Set,

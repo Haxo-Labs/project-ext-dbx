@@ -6,7 +6,7 @@ use std::sync::{Arc, Once};
 
 use tokio_postgres::{connect, NoTls};
 
-use crate::postgres::{PostgresBackend, PostgresBackendFactory, PostgresConnectionPool};
+use crate::postgres::PostgresBackendFactory;
 use dbx_config::BackendConfig;
 use dbx_core::{DataOperation, DataValue, UniversalBackend};
 use dbx_router::registry::BackendFactory;
@@ -127,22 +127,6 @@ pub async fn create_test_backend(
     let config = create_test_config();
     let factory = PostgresBackendFactory::new();
     let backend = factory.create_backend("test_postgres", &config).await?;
-
-    Ok(backend)
-}
-
-/// Create a concrete test backend instance for unit tests
-pub async fn create_concrete_test_backend(
-) -> Result<PostgresBackend, Box<dyn std::error::Error + Send + Sync>> {
-    if !is_postgres_available().await {
-        return Err("PostgreSQL not available for testing".into());
-    }
-
-    init_test_db().await;
-
-    let config = create_test_config();
-    let pool = PostgresConnectionPool::new(&config.url, config.pool_size.unwrap_or(5) as usize)?;
-    let backend = PostgresBackend::new(Arc::new(pool), "test_postgres".to_string());
 
     Ok(backend)
 }

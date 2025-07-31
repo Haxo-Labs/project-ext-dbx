@@ -80,7 +80,10 @@ async fn test_backend_factory_registry() {
     // Verify both factories are registered
     assert!(registry.has_factory("postgresql"));
     assert!(registry.has_factory("redis"));
-    assert_eq!(registry.get_provider_names(), vec!["postgresql", "redis"]);
+
+    let mut provider_names = registry.get_provider_names();
+    provider_names.sort();
+    assert_eq!(provider_names, vec!["postgresql", "redis"]);
 }
 
 #[tokio::test]

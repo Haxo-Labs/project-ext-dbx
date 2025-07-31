@@ -13,10 +13,3 @@ pub fn get_test_redis_url() -> String {
     // Use TEST_REDIS_URL for test-specific configuration
     env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string())
 }
-
-/// Get test PostgreSQL URL with fallback to localhost
-pub fn get_test_postgres_url() -> String {
-    // Use TEST_POSTGRES_URL for test-specific configuration
-    env::var("TEST_POSTGRES_URL")
-        .unwrap_or_else(|_| "postgresql://postgres:postgres@localhost:5432/dbx_test".to_string())
-}

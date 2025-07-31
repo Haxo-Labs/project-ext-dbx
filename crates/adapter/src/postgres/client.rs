@@ -157,7 +157,7 @@ pub struct PoolStatus {
     pub waiting: usize,
 }
 
-/// Comprehensive pool statistics
+/// Pool statistics
 #[derive(Debug, Clone)]
 pub struct PoolStats {
     pub total_connections: usize,
