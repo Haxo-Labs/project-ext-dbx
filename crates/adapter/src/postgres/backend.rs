@@ -292,25 +292,49 @@ impl PostgresBackend {
                 })?;
 
                 let json_value = self.data_value_to_json(value)?;
-                let expires_at =
-                    ttl.map(|t| chrono::Utc::now() + chrono::Duration::seconds(t as i64));
 
-                conn.execute(
-                    r#"
-                    INSERT INTO dbx_data (key, value, expires_at, updated_at) 
-                    VALUES ($1, $2, $3, NOW()) 
-                    ON CONFLICT (key) 
-                    DO UPDATE SET value = $2, expires_at = $3, updated_at = NOW()
-                    "#,
-                    &[&key, &json_value, &expires_at],
-                )
-                .await
-                .map_err(|e| {
-                    DbxError::backend(
-                        self.backend_name.clone(),
-                        format!("Set operation failed: {}", e),
-                    )
-                })?;
+                match ttl {
+                    Some(ttl_seconds) => {
+                        // Set new TTL
+                        let expires_at =
+                            chrono::Utc::now() + chrono::Duration::seconds(*ttl_seconds as i64);
+                        conn.execute(
+                            r#"
+                            INSERT INTO dbx_data (key, value, expires_at, updated_at) 
+                            VALUES ($1, $2, $3, NOW()) 
+                            ON CONFLICT (key) 
+                            DO UPDATE SET value = $2, expires_at = $3, updated_at = NOW()
+                            "#,
+                            &[&key, &json_value, &expires_at],
+                        )
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Set operation failed: {}", e),
+                            )
+                        })?;
+                    }
+                    None => {
+                        // Preserve existing TTL
+                        conn.execute(
+                            r#"
+                            INSERT INTO dbx_data (key, value, expires_at, updated_at) 
+                            VALUES ($1, $2, NULL, NOW()) 
+                            ON CONFLICT (key) 
+                            DO UPDATE SET value = $2, updated_at = NOW()
+                            "#,
+                            &[&key, &json_value],
+                        )
+                        .await
+                        .map_err(|e| {
+                            DbxError::backend(
+                                self.backend_name.clone(),
+                                format!("Set operation failed: {}", e),
+                            )
+                        })?;
+                    }
+                }
 
                 Ok(DataValue::Bool(true))
             }
@@ -359,18 +383,340 @@ impl PostgresBackend {
 
             DataOperation::Batch { operations } => {
                 let mut results = Vec::new();
-                for op in operations {
-                    let future = Box::pin(self.execute_data_operation_internal(op));
+                for operation in operations {
+                    let future = Box::pin(self.execute_data_operation_internal(operation));
                     let result = future.await?;
                     results.push(result);
                 }
                 Ok(DataValue::Array(results))
             }
 
-            _ => Err(DbxError::unsupported_operation(
-                "Operation",
-                &self.backend_name,
-            )),
+            DataOperation::Update { key, fields, ttl } => {
+                let conn = self.pool.get().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                // Get current value
+                let row = conn
+                    .query_opt("SELECT value FROM dbx_data WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())", &[&key])
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Get operation failed: {}", e),
+                        )
+                    })?;
+
+                let mut current_value = match row {
+                    Some(row) => {
+                        let json_value: serde_json::Value = row.get(0);
+                        self.json_to_data_value(&json_value)?
+                    }
+                    None => DataValue::Object(HashMap::new()),
+                };
+
+                // Update fields in the object
+                if let DataValue::Object(ref mut obj) = current_value {
+                    for (field_key, field_value) in fields {
+                        obj.insert(field_key.clone(), field_value.clone());
+                    }
+                } else {
+                    // If not an object, create new object with the fields
+                    let mut new_obj = HashMap::new();
+                    for (field_key, field_value) in fields {
+                        new_obj.insert(field_key.clone(), field_value.clone());
+                    }
+                    current_value = DataValue::Object(new_obj);
+                }
+
+                // Save updated value
+                let json_value = self.data_value_to_json(&current_value)?;
+                let expires_at =
+                    ttl.map(|t| chrono::Utc::now() + chrono::Duration::seconds(t as i64));
+
+                conn.execute(
+                    r#"
+                    INSERT INTO dbx_data (key, value, expires_at, updated_at) 
+                    VALUES ($1, $2, $3, NOW()) 
+                    ON CONFLICT (key) 
+                    DO UPDATE SET value = $2, expires_at = $3, updated_at = NOW()
+                    "#,
+                    &[&key, &json_value, &expires_at],
+                )
+                .await
+                .map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Update operation failed: {}", e),
+                    )
+                })?;
+
+                Ok(DataValue::Bool(true))
+            }
+
+            DataOperation::Increment { key, amount } => {
+                let conn = self.pool.get().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                // Use atomic increment with JSONB
+                let result = conn
+                    .query_one(
+                        r#"
+                        INSERT INTO dbx_data (key, value, updated_at) 
+                        VALUES ($1, to_jsonb($2::bigint), NOW()) 
+                        ON CONFLICT (key) 
+                        DO UPDATE SET 
+                            value = CASE 
+                                WHEN jsonb_typeof(dbx_data.value) = 'number' 
+                                THEN to_jsonb((dbx_data.value #>> '{}')::bigint + $2)
+                                ELSE to_jsonb($2::bigint)
+                            END,
+                            updated_at = NOW()
+                        RETURNING (value #>> '{}')::bigint
+                        "#,
+                        &[&key, &amount],
+                    )
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Increment operation failed: {}", e),
+                        )
+                    })?;
+
+                let new_value: i64 = result.get(0);
+                Ok(DataValue::Int(new_value))
+            }
+
+            DataOperation::Decrement { key, amount } => {
+                let conn = self.pool.get().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                // Use atomic decrement with JSONB
+                let result = conn
+                    .query_one(
+                        r#"
+                        INSERT INTO dbx_data (key, value, updated_at) 
+                        VALUES ($1, to_jsonb((-($2::bigint))::bigint), NOW()) 
+                        ON CONFLICT (key) 
+                        DO UPDATE SET 
+                            value = CASE 
+                                WHEN jsonb_typeof(dbx_data.value) = 'number' 
+                                THEN to_jsonb((dbx_data.value #>> '{}')::bigint - $2)
+                                ELSE to_jsonb((-($2::bigint))::bigint)
+                            END,
+                            updated_at = NOW()
+                        RETURNING (value #>> '{}')::bigint
+                        "#,
+                        &[&key, &amount],
+                    )
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Decrement operation failed: {}", e),
+                        )
+                    })?;
+
+                let new_value: i64 = result.get(0);
+                Ok(DataValue::Int(new_value))
+            }
+
+            DataOperation::Append { key, value } => {
+                let conn = self.pool.get().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                let value_json = serde_json::Value::String(value.clone());
+
+                let result = conn
+                    .query_one(
+                        r#"
+                        INSERT INTO dbx_data (key, value, updated_at) 
+                        VALUES ($1, $2, NOW()) 
+                        ON CONFLICT (key) 
+                        DO UPDATE SET 
+                            value = CASE 
+                                WHEN jsonb_typeof(dbx_data.value) = 'string' 
+                                THEN to_jsonb((dbx_data.value #>> '{}') || ($2 #>> '{}'))
+                                ELSE $2
+                            END,
+                            updated_at = NOW()
+                        RETURNING char_length(value #>> '{}')
+                        "#,
+                        &[&key, &value_json],
+                    )
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Append operation failed: {}", e),
+                        )
+                    })?;
+
+                let new_length: i32 = result.get(0);
+                Ok(DataValue::Int(new_length as i64))
+            }
+
+            DataOperation::Length { key } => {
+                let conn = self.pool.get().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                let row = conn
+                    .query_opt(
+                        "SELECT char_length(value #>> '{}') FROM dbx_data WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())",
+                        &[&key],
+                    )
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("Length operation failed: {}", e),
+                        )
+                    })?;
+
+                match row {
+                    Some(row) => {
+                        let length: Option<i32> = row.get(0);
+                        Ok(DataValue::Int(length.unwrap_or(0) as i64))
+                    }
+                    None => Ok(DataValue::Int(0)),
+                }
+            }
+
+            DataOperation::GetTtl { key } => {
+                let conn = self.pool.get().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                let row = conn
+                    .query_opt(
+                        "SELECT EXTRACT(EPOCH FROM (expires_at - NOW()))::bigint FROM dbx_data WHERE key = $1",
+                        &[&key],
+                    )
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("GetTtl operation failed: {}", e),
+                        )
+                    })?;
+
+                match row {
+                    Some(row) => {
+                        let ttl: Option<i64> = row.get(0);
+                        Ok(DataValue::Int(ttl.unwrap_or(-1)))
+                    }
+                    None => Ok(DataValue::Int(-2)), // Key doesn't exist
+                }
+            }
+
+            DataOperation::SetTtl { key, ttl } => {
+                let conn = self.pool.get().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                let expires_at = if *ttl > 0 {
+                    Some(chrono::Utc::now() + chrono::Duration::seconds(*ttl as i64))
+                } else {
+                    None
+                };
+
+                let rows_affected = conn
+                    .execute(
+                        "UPDATE dbx_data SET expires_at = $2, updated_at = NOW() WHERE key = $1",
+                        &[&key, &expires_at],
+                    )
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("SetTtl operation failed: {}", e),
+                        )
+                    })?;
+
+                Ok(DataValue::Bool(rows_affected > 0))
+            }
+
+            DataOperation::CompareAndSwap {
+                key,
+                expected_value,
+                new_value,
+                ttl,
+            } => {
+                let conn = self.pool.get().await.map_err(|e| {
+                    DbxError::backend(
+                        self.backend_name.clone(),
+                        format!("Connection failed: {}", e),
+                    )
+                })?;
+
+                let expires_at =
+                    ttl.map(|t| chrono::Utc::now() + chrono::Duration::seconds(t as i64));
+                let new_json = self.data_value_to_json(&DataValue::String(new_value.clone()))?;
+
+                let rows_affected = if expected_value.is_empty() {
+                    // Expected empty/null - insert only if key doesn't exist
+                    conn.execute(
+                        r#"
+                        INSERT INTO dbx_data (key, value, expires_at, updated_at) 
+                        VALUES ($1, $2, $3, NOW())
+                        ON CONFLICT (key) DO NOTHING
+                        "#,
+                        &[&key, &new_json, &expires_at],
+                    )
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("CompareAndSwap operation failed: {}", e),
+                        )
+                    })?
+                } else {
+                    // Compare current value with expected
+                    conn.execute(
+                        r#"
+                        UPDATE dbx_data 
+                        SET value = $3, expires_at = $4, updated_at = NOW() 
+                        WHERE key = $1 AND (value #>> '{}') = $2
+                        "#,
+                        &[&key, &expected_value, &new_json, &expires_at],
+                    )
+                    .await
+                    .map_err(|e| {
+                        DbxError::backend(
+                            self.backend_name.clone(),
+                            format!("CompareAndSwap operation failed: {}", e),
+                        )
+                    })?
+                };
+
+                Ok(DataValue::Bool(rows_affected > 0))
+            }
         }
     }
 

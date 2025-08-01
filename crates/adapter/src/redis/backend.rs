@@ -95,21 +95,25 @@ impl RedisBackend {
     /// Convert DataValue to Redis value
     fn data_value_to_redis_value(&self, value: &DataValue) -> Result<String, DbxError> {
         match value {
-            DataValue::Null => Ok("".to_string()),
-            DataValue::Bool(b) => Ok(if *b { "1".to_string() } else { "0".to_string() }),
-            DataValue::Int(i) => Ok(i.to_string()),
-            DataValue::Float(f) => Ok(f.to_string()),
-            DataValue::String(s) => Ok(s.clone()),
-            DataValue::Bytes(b) => Ok(base64::prelude::BASE64_STANDARD.encode(b)),
+            DataValue::Null => Ok("null:".to_string()),
+            DataValue::Bool(b) => Ok(format!("bool:{}", if *b { "true" } else { "false" })),
+            DataValue::Int(i) => Ok(format!("int:{}", i)),
+            DataValue::Float(f) => Ok(format!("float:{}", f)),
+            DataValue::String(s) => Ok(format!("string:{}", s)),
+            DataValue::Bytes(b) => Ok(format!(
+                "bytes:{}",
+                base64::prelude::BASE64_STANDARD.encode(b)
+            )),
             DataValue::Array(arr) => {
                 let json_value = serde_json::Value::Array(
                     arr.iter()
                         .map(|v| self.data_value_to_json(v))
                         .collect::<Result<Vec<_>, _>>()?,
                 );
-                serde_json::to_string(&json_value).map_err(|e| {
+                let json_string = serde_json::to_string(&json_value).map_err(|e| {
                     DbxError::serialization(format!("Failed to serialize array: {}", e))
-                })
+                })?;
+                Ok(format!("array:{}", json_string))
             }
             DataValue::Object(obj) => {
                 let json_obj: HashMap<String, serde_json::Value> = obj
@@ -118,9 +122,11 @@ impl RedisBackend {
                     .collect::<Result<HashMap<String, serde_json::Value>, DbxError>>()?;
                 let json_map: serde_json::Map<String, serde_json::Value> =
                     json_obj.into_iter().collect();
-                serde_json::to_string(&serde_json::Value::Object(json_map)).map_err(|e| {
-                    DbxError::serialization(format!("Failed to serialize object: {}", e))
-                })
+                let json_string = serde_json::to_string(&serde_json::Value::Object(json_map))
+                    .map_err(|e| {
+                        DbxError::serialization(format!("Failed to serialize object: {}", e))
+                    })?;
+                Ok(format!("object:{}", json_string))
             }
         }
     }
@@ -161,32 +167,76 @@ impl RedisBackend {
         match value {
             None => Ok(DataValue::Null),
             Some(s) => {
-                // Empty strings should be preserved as empty strings, not converted to null
                 if s.is_empty() {
                     return Ok(DataValue::String(s));
                 }
 
-                // Try JSON first (for complex types)
-                if s.starts_with('{') || s.starts_with('[') {
-                    if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&s) {
-                        return self.json_to_data_value(&json_value);
+                // Parse type-prefixed values
+                if let Some(colon_pos) = s.find(':') {
+                    let type_prefix = &s[..colon_pos];
+                    let value_part = &s[colon_pos + 1..];
+
+                    match type_prefix {
+                        "null" => Ok(DataValue::Null),
+                        "bool" => match value_part {
+                            "true" => Ok(DataValue::Bool(true)),
+                            "false" => Ok(DataValue::Bool(false)),
+                            _ => Err(DbxError::serialization(format!(
+                                "Invalid boolean value: {}",
+                                value_part
+                            ))),
+                        },
+                        "int" => value_part.parse::<i64>().map(DataValue::Int).map_err(|e| {
+                            DbxError::serialization(format!("Invalid integer: {}", e))
+                        }),
+                        "float" => value_part
+                            .parse::<f64>()
+                            .map(DataValue::Float)
+                            .map_err(|e| DbxError::serialization(format!("Invalid float: {}", e))),
+                        "string" => Ok(DataValue::String(value_part.to_string())),
+                        "bytes" => base64::prelude::BASE64_STANDARD
+                            .decode(value_part)
+                            .map(DataValue::Bytes)
+                            .map_err(|e| DbxError::serialization(format!("Invalid base64: {}", e))),
+                        "array" => {
+                            let json_value: serde_json::Value = serde_json::from_str(value_part)
+                                .map_err(|e| {
+                                    DbxError::serialization(format!("Invalid array JSON: {}", e))
+                                })?;
+                            self.json_to_data_value(&json_value)
+                        }
+                        "object" => {
+                            let json_value: serde_json::Value = serde_json::from_str(value_part)
+                                .map_err(|e| {
+                                    DbxError::serialization(format!("Invalid object JSON: {}", e))
+                                })?;
+                            self.json_to_data_value(&json_value)
+                        }
+                        _ => Ok(DataValue::String(s)),
                     }
-                }
+                } else {
+                    // Handle legacy values without type prefix
+                    if s.starts_with('{') || s.starts_with('[') {
+                        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&s) {
+                            return self.json_to_data_value(&json_value);
+                        }
+                    }
 
-                // Try parsing as number
-                if let Ok(int_val) = s.parse::<i64>() {
-                    return Ok(DataValue::Int(int_val));
-                }
+                    match s.as_str() {
+                        "true" => return Ok(DataValue::Bool(true)),
+                        "false" => return Ok(DataValue::Bool(false)),
+                        _ => {}
+                    }
 
-                if let Ok(float_val) = s.parse::<f64>() {
-                    return Ok(DataValue::Float(float_val));
-                }
+                    if let Ok(int_val) = s.parse::<i64>() {
+                        return Ok(DataValue::Int(int_val));
+                    }
 
-                // Try parsing as boolean
-                match s.as_str() {
-                    "true" | "1" => Ok(DataValue::Bool(true)),
-                    "false" | "0" => Ok(DataValue::Bool(false)),
-                    _ => Ok(DataValue::String(s)),
+                    if let Ok(float_val) = s.parse::<f64>() {
+                        return Ok(DataValue::Float(float_val));
+                    }
+
+                    Ok(DataValue::String(s))
                 }
             }
         }
@@ -227,15 +277,7 @@ impl RedisBackend {
                     Err(DbxError::serialization("Invalid number format".to_string()))
                 }
             }
-            serde_json::Value::String(s) => {
-                // Check if it's base64 encoded bytes
-                if let Ok(bytes) = base64::prelude::BASE64_STANDARD.decode(s) {
-                    if String::from_utf8(bytes.clone()).is_err() {
-                        return Ok(DataValue::Bytes(bytes));
-                    }
-                }
-                Ok(DataValue::String(s.clone()))
-            }
+            serde_json::Value::String(s) => Ok(DataValue::String(s.clone())),
             serde_json::Value::Array(arr) => {
                 let data_arr: Result<Vec<DataValue>, DbxError> =
                     arr.iter().map(|v| self.json_to_data_value(v)).collect();

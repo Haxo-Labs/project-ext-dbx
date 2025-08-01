@@ -121,8 +121,8 @@ async fn test_backend_stream_capabilities() {
     let backend = utils::create_test_backend().await.unwrap();
     let capabilities = backend.capabilities();
 
-    // PostgreSQL should support streaming features
-    assert!(capabilities.stream_capabilities.pub_sub);
-    assert!(capabilities.stream_capabilities.streams);
-    assert!(capabilities.stream_capabilities.persistent_streams);
+    // PostgreSQL does not support streaming features
+    assert!(!capabilities.stream_capabilities.pub_sub);
+    assert!(!capabilities.stream_capabilities.streams);
+    assert!(!capabilities.stream_capabilities.persistent_streams);
 }
